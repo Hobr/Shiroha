@@ -1,3 +1,3 @@
 # Shiroha
 
-> Rust的分布式方案
+> Distributed WebAssembly Microservice Framework

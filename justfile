@@ -1,6 +1,8 @@
 run_cmd := "cargo run"
 build_cmd := "cargo build"
 
+wasm_target := "--target wasm32-wasip2"
+
 fmt:
     cargo fmt
     pre-commit run --all-files

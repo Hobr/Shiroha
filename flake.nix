@@ -38,6 +38,9 @@
                     "clippy"
                     "cargo"
                   ];
+                  targets = [
+                    "wasm32-wasip2"
+                  ];
                 };
           })
         ];
