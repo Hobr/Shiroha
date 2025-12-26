@@ -58,13 +58,6 @@
               cargo-binstall
               pre-commit
               just
-
-              libiconv
-              glib
-              gtk3
-              libsoup_3
-              webkitgtk_4_1
-              xdotool
             ];
 
             env = {
