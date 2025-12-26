@@ -1,5 +1,21 @@
 [workspace]
 members = [
+    "apps/shirohad",
+    "apps/sctl",
+
+    "crates/shiroha-ir",
+    "crates/shiroha-orchestrator",
+
+    "crates/shiroha-engine",
+    "crates/shiroha-runtime",
+
+    "crates/shiroha-error",
+    "crates/shiroha-config",
+    "crates/shiroha-logger",
+    "crates/shiroha-storage",
+    "crates/shiroha-network",
+
+    "plugins/shiroha-sdk-rs",
 ]
 resolver = "3"
 
@@ -11,13 +27,38 @@ license = "GPL-3.0"
 repository = "https://github.com/Hobr/Shiroha"
 
 [workspace.dependencies]
+# Core
 tokio = { version = "1.48", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
+apalis = "1.0.0-rc.1"
+async-trait = "0.1"
 
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.19", features = ["v4", "serde"] }
+
+# Error
 anyhow = "1.0"
 thiserror = "2.0"
 
-shadow-rs = { version = "1.5", features = ["metadata"] }
+# Version
+shadow-rs = { version = "1.5", default-features = false }
+
+# Workspace
+shiroha-ir = { path = "crates/shiroha-ir" }
+shiroha-orchestrator = { path = "crates/shiroha-orchestrator" }
+
+shiroha-engine = { path = "crates/shiroha-engine" }
+shiroha-runtime = { path = "crates/shiroha-runtime" }
+
+shiroha-error = { path = "crates/shiroha-error" }
+shiroha-config = { path = "crates/shiroha-config" }
+shiroha-logger = { path = "crates/shiroha-logger" }
+shiroha-storage = { path = "crates/shiroha-storage" }
+shiroha-network = { path = "crates/shiroha-network" }
+
+shiroha-sdk-rs = { path = "plugins/shiroha-sdk-rs" }
 
 [profile.release]
 debug = false
