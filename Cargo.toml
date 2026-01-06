@@ -9,10 +9,10 @@ members = [
     "crates/shiroha-engine",
     "crates/shiroha-runtime",
 
-    "crates/shiroha-error",
-    "crates/shiroha-logger",
     "crates/shiroha-storage",
     "crates/shiroha-network",
+    "crates/shiroha-error",
+    "crates/shiroha-logger",
 
     "plugins/shiroha-sdk-rs",
 ]
@@ -51,10 +51,10 @@ shiroha-orchestrator = { path = "crates/shiroha-orchestrator" }
 shiroha-engine = { path = "crates/shiroha-engine" }
 shiroha-runtime = { path = "crates/shiroha-runtime" }
 
-shiroha-error = { path = "crates/shiroha-error" }
-shiroha-logger = { path = "crates/shiroha-logger" }
 shiroha-storage = { path = "crates/shiroha-storage" }
 shiroha-network = { path = "crates/shiroha-network" }
+shiroha-error = { path = "crates/shiroha-error" }
+shiroha-logger = { path = "crates/shiroha-logger" }
 
 shiroha-sdk-rs = { path = "plugins/shiroha-sdk-rs" }
 
