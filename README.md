@@ -36,7 +36,6 @@
     - [ ] container 容器
 
   - [ ] shiroha-error 错误处理
-  - [ ] shiroha-config 配置
   - [ ] shiroha-logger 日志
   - [ ] shiroha-metrics 指标
   - [ ] shiroha-tracing 追踪
