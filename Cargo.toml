@@ -1,7 +1,5 @@
 [workspace]
 members = [
-    "apps/shirohad",
-    "apps/sctl",
 
     "crates/shiroha-ir",
     "crates/shiroha-orchestrator",
@@ -15,6 +13,8 @@ members = [
     "crates/shiroha-logger",
 
     "plugins/shiroha-sdk-rs",
+    "app/sctl",
+    "app/shirohad",
 ]
 resolver = "3"
 
