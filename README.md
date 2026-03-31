@@ -1,157 +1,75 @@
 # Shiroha
 
-> 由WebAssembly驱动的分布式状态机任务编排框架
+> 由 WebAssembly 驱动的分布式状态机任务编排框架
 
-## 核心概念
+目前处于早期设计与开发阶段。
 
-### 架构层级
+## 简介
 
-- **Controller** (可选的协调点)
-  - 负责全局 Flow 管理
-  - 负责 Job 调度和生命周期
-  - 可选：可以有多个 Controller/无 Controller
-  - 用于中央协调/监控和管理
+Shiroha 关注一件事: 用可恢复、可重放的状态机驱动任务编排，并把带副作用的执行单元安全地分发到其他节点上运行。
 
-- **Executor** (分布式执行组件)
-  - 负责 Execution 的实际执行
-  - 可以执行 Guard/Action/Work
-  - 无状态或轻量级状态
-  - 支持多种执行模式(WASM/容器/HTTP等)
+项目的核心思路是:
 
-### 流程和执行
+- 用状态机负责确定性的状态推进
+- 用 `Activity` 承载非确定性逻辑和外部副作用
+- 用 Wasm + WIT 作为用户逻辑与宿主能力之间的边界
+- 用统一主程序 `shirohad` 承载主控、节点或混合部署角色
 
-- **Flow** (静态状态机定义)
-  - 由 WASM 模块初始化时定义
-  - 包含：States/Transitions/DispatchPolicies
-  - 不可在运行时修改(除了 DynamicState)
-  - 可验证/可视化/可缓存
+## 核心组成
 
-- **Job** (Flow 的执行实例)
-  - 代表一个具体的工作流执行
-  - 有当前状态/执行历史/上下文数据
-  - 可以暂停/恢复/重试
-  - 支持子 Job(SubFlow)
+| 组件 | 说明 |
+| --- | --- |
+| `shirohad` | 统一守护进程, 可运行在 `controller`、`executor` 或 `hybrid` 模式 |
+| `sctl` | 命令行工具, 用于注册、启动、查询、取消和调试工作流 |
+| `Controller` | 控制面, 负责状态推进、任务调度、恢复和元数据维护 |
+| `Executor` | 执行面, 负责运行 Activity 并回传结果 |
+| `Workflow Definition` | 用户定义的状态机与 Activity 声明, 编译为 Wasm 制品 |
+| `Activity` | 带副作用的执行单元, 可本地执行也可远程分发执行 |
 
-- **Execution** (最小执行单元)
-  - 可以是：Guard 评估/Action 执行/Work 执行
-  - 有分发策略(DispatchPolicy)
-  - 可以本地执行或分布式执行
-  - 可以复制(Replicated)/分片(Sharded)/或自定义
+## 设计文档
 
-### 分布式编排
+- [架构总览](docs/architecture.md)
+- [执行模型](docs/execution-model.md)
+- [运行时与制品](docs/runtime-and-artifacts.md)
+- [接口设计](docs/interfaces.md)
 
-- **Guard** (状态转移条件)
-  - 在转移前执行，决定是否允许转移
-  - 返回 bool
-  - 可以有 DispatchPolicy(通常 singleton 或 replicated)
-  - 由 WASM 提供
+`README` 只保留项目入口信息，详细执行语义、故障恢复、版本生命周期和调度模型统一放在设计文档中。
 
-- **Action** (转移时的副作用)
-  - 在转移时自动执行
-  - 可以修改 context
-  - 可以有 DispatchPolicy(通常 singleton)
-  - 用于日志/统计/通知等
+## 路线图
 
-- **Work** (实际业务操作)
-  - Flow 中的节点(状态)
-  - 由 Executor 执行
-  - 支持多种执行模式(WASM/容器/HTTP)
-  - 必须有 DispatchPolicy(决定如何分布式执行)
+### v0.1
 
-### 容器和组合
+- 单机闭环: 事件历史、状态快照、状态机执行引擎
+- 确定性决策边界与 Activity 执行语义
+- Wasmtime + 最小 WIT 接口
+- 本地 `Admin API` 与 `sctl`
 
-- **Loop** (循环容器)
-  - 在单个状态内迭代
-  - 迭代次数由 Guard 动态决定
-  - 轻量级/高效
+### v0.2
 
-- **Parallel** (并行容器)
-  - 在单个状态内并行分支
-  - 分支数由 Guard 动态决定
-  - 自动聚合结果
+- 单主控多节点执行
+- 持久化任务队列、租约、心跳与回执
+- gRPC 节点通信
+- Wasm 制品分发、节点能力匹配与本地编译缓存
 
-- **SubFlow** (子流程)
-  - 在状态中调用另一个 Flow
-  - 创建独立的子 Job
-  - 支持参数映射和结果聚合
-  - 支持递归
+### v0.3
 
-- **DynamicState** (完全动态状态)
-  - 图灵完整
-  - WASM 驱动的动态状态创建
-  - 用于极端场景
+- PostgreSQL 存储（v0.1–v0.2 使用 SQLite，不承诺数据自动迁移；生产使用建议从 v0.3 开始）
+- tracing / metrics / 审计
+- Signal / Query
+- secret 管理、认证授权、Web 管理界面
 
-### 分布式策略
+### v0.4
 
-可应用于 Guard/Action/Work
+- 嵌套状态机
+- 更完整的 WIT Host 扩展
+- 更完善的 SDK 与开发工具链
+- 多租户能力
 
-- 模式：
-  - **Singleton**:  1 个 Executor 执行
-  - **Replicated**: N 个 Executor 投票决定(容错)
-  - **Sharded**: M 个 Executor 分片处理(扩展)
-  - **Custom**:  WASM 决定(灵活)
+### v0.5
 
-### 执行模式
-
-- **ExecutionMode** (Work 的执行方式)
-  - WASM:  执行 WASM 代码
-  - Container: 运行容器(Docker/K8s)
-  - HTTP: 调用外部 HTTP 服务
-  - 其他：可扩展(基于原生代码/WASM 插件)
-
-## 框架
-
-- apps
-  - [ ] shirohad 单一服务应用
-    - [ ] controller 控制端
-    - [ ] executor 执行端
-
-  - [ ] sctl 命令行工具
-  - [ ] shiroha-web Web界面
-  - [ ] shiroha-desktop 桌面客户端
-  - [ ] shiroha-mobile 移动客户端
-
-- crates
-  - [ ] shiroha-ir 中间表示, 所有数据结构的定义
-    - [ ] Flow
-    - [ ] Job
-    - [ ] Execution
-    - [ ] Guard
-    - [ ] State
-    - [ ] ExecutionMode
-    - [ ] DispatchPolicy
-
-  - [ ] shiroha-orchestrator 编排层, 负责 Flow 和 Job 的管理和执行
-    - [ ] scheduler 调度器
-    - [ ] dispatcher 分发器
-    - [ ] FlowExecutor Flow 执行器
-    - [ ] JobManager Job 管理器
-    - [ ] DistributedExecution 分布式执行
-
-  - [ ] shiroha-engine 执行层, 处理 Guard/Action/Work 的具体执行
-    - [ ] guard 守卫执行
-    - [ ] action 动作执行
-    - [ ] work 工作执行
-    - [ ] execution-handler 执行处理器
-
-  - [ ] shiroha-runtime 运行时, 执行环境的运行时支持
-    - [ ] wasm WASM
-    - [ ] container 容器
-    - [ ] HTTP 网络
-
-  - [ ] shiroha-storage 存储, 数据持久化
-  - [ ] shiroha-network 网络, 分布式通信
-  - [ ] shiroha-error 错误处理, 统一的错误定义
-  - [ ] shiroha-logger 日志
-  - [ ] shiroha-metrics 指标
-  - [ ] shiroha-tracing 追踪
-  - [ ] shiroha-auth 认证
-
-- plugins
-  - [ ] wit WIT接口
-  - [ ] shiroha-sdk-rs RustSDK
-  - [ ] example 示例
-  - preset 预置
+- 多主控 / Raft
+- 插件系统
+- 可选节点通信后端扩展
 
 ## 开发
 
@@ -159,8 +77,11 @@
 git clone https://github.com/Hobr/Shiroha.git
 cd Shiroha
 
-# 环境
-apt install rustup just cargo-binstall
+# 安装 Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# 安装工具链
+cargo install just cargo-binstall
 
 # 构建
 just build

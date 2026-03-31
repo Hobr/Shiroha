@@ -1,62 +1,61 @@
 [workspace]
 members = [
-
-    "crates/shiroha-ir",
-    "crates/shiroha-orchestrator",
-
-    "crates/shiroha-engine",
-    "crates/shiroha-runtime",
-
-    "crates/shiroha-storage",
-    "crates/shiroha-network",
-    "crates/shiroha-error",
-    "crates/shiroha-logger",
-
-    "plugins/shiroha-sdk-rs",
     "app/sctl",
     "app/shirohad",
+
+    "crate/shiroha-core",
+    "crate/shiroha-engine",
+    "crate/shiroha-runtime",
+    "crate/shiroha-sdk",
+    "crate/shiroha-store-sqlite",
+    "crate/shiroha-testkit",
 ]
 resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.93.0"
+rust-version = "1.94.1"
 license = "GPL-3.0"
 repository = "https://github.com/Hobr/Shiroha"
 
 [workspace.dependencies]
-# Core
-tokio = { version = "1.48", features = ["full"] }
-apalis = "1.0.0-rc.1"
-async-trait = "0.1"
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
 
-# Serialization
+# WASM 运行时
+wasmtime = { version = "43.0", features = ["trace-log"] }
+wasmtime-wasi = { version = "43.0", features = ["p3"] }
+
+# 序列化
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.19", features = ["v4", "serde"] }
 
-# Error
+# 日志与监控
+log = "0.4"
+env_logger = "0.11"
+
+# CLI
+clap = { version = "4.6", features = ["derive", "env", "string", "unicode"] }
+promkit = { version = "0.12", features = ["all"] }
+indicatif = "0.18"
+
+# HTTP 客户端
+reqwest = { version = "0.13", features = ["json"] }
+
+# gRPC
+tonic = { version = "0.14", features = ["gzip", "deflate", "zstd"] }
+
+# 配置管理
+config = "0.15"
+
+# 错误处理
+thiserror = "2"
 anyhow = "1.0"
-thiserror = "2.0"
 
-# Version
-shadow-rs = { version = "1.5", default-features = false }
-
-# Workspace
-shiroha-ir = { path = "crates/shiroha-ir" }
-shiroha-orchestrator = { path = "crates/shiroha-orchestrator" }
-
-shiroha-engine = { path = "crates/shiroha-engine" }
-shiroha-runtime = { path = "crates/shiroha-runtime" }
-
-shiroha-storage = { path = "crates/shiroha-storage" }
-shiroha-network = { path = "crates/shiroha-network" }
-shiroha-error = { path = "crates/shiroha-error" }
-shiroha-logger = { path = "crates/shiroha-logger" }
-
-shiroha-sdk-rs = { path = "plugins/shiroha-sdk-rs" }
+# 信息
+shadow-rs = { version = "1.7", features = ["cargo_metadata"] }
+uuid = { version = "1.23", features = ["v7", "serde", "rng-rand"] }
 
 [profile.release]
 debug = false
