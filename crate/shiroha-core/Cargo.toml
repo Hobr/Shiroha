@@ -1,5 +1,5 @@
 [package]
-name = "shiroha-logger"
+name = "shiroha-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
