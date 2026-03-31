@@ -6,27 +6,27 @@ package-shirohad := "-p shirohad"
 
 target-plugin := "--target wasm32-wasip2"
 
-[working-directory: "apps/sctl"]
+[working-directory: "app/sctl"]
 sctl:
     {{run_cmd}} {{package-stctl}}
 
-[working-directory: "apps/sctl"]
+[working-directory: "app/sctl"]
 build-sctl:
     {{build_cmd}} {{package-stctl}}
 
-[working-directory: "apps/sctl"]
+[working-directory: "app/sctl"]
 release-sctl:
     {{build_cmd}} {{package-stctl}} --release
 
-[working-directory: "apps/shirohad"]
+[working-directory: "app/shirohad"]
 shirohad:
     {{run_cmd}} {{package-shirohad}}
 
-[working-directory: "apps/shirohad"]
+[working-directory: "app/shirohad"]
 build-shirohad:
     {{build_cmd}} {{package-shirohad}}
 
-[working-directory: "apps/shirohad"]
+[working-directory: "app/shirohad"]
 release-shirohad:
     {{build_cmd}} {{package-shirohad}} --release
 
