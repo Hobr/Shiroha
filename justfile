@@ -30,6 +30,9 @@ build-shirohad:
 release-shirohad:
     {{build_cmd}} {{package-shirohad}} --release
 
+build: build-sctl build-shirohad
+release: release-sctl release-shirohad
+
 install-dev:
     cargo binstall cargo-deny cargo-nextest cargo-update wasmtime-cli -y --force
     cargo deny fetch
