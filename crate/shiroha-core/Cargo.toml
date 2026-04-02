@@ -1,6 +1,6 @@
 [package]
 name = "shiroha-core"
-description = "Shiroha 核心类型与 trait 定义"
+description = "Shiroha Type Core "
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

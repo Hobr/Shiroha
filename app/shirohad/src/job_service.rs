@@ -1,3 +1,8 @@
+//! gRPC JobService 实现
+//!
+//! 处理 Job 的创建、状态查询、事件触发、生命周期管理（暂停/恢复/取消）。
+//! trigger_event 是核心路径：查找转移 → 更新状态 → 检查终态 → 注册新定时器。
+
 use std::sync::Arc;
 
 use shiroha_proto::shiroha_api::job_service_server::JobService;
@@ -29,6 +34,7 @@ fn parse_uuid(s: &str) -> Result<Uuid, Status> {
 
 #[tonic::async_trait]
 impl JobService for JobServiceImpl {
+    /// 创建 Job：查找 Flow → 创建运行实例 → 注册初始状态的定时器
     async fn create_job(
         &self,
         request: Request<CreateJobRequest>,
@@ -51,7 +57,7 @@ impl JobService for JobServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        // Register timers for initial state transitions
+        // 为初始状态的所有出边注册超时定时器
         let initial_state = &flow.manifest.initial_state;
         for t in &flow.manifest.transitions {
             if t.from == *initial_state
@@ -117,6 +123,9 @@ impl JobService for JobServiceImpl {
         Ok(Response::new(ListJobsResponse { jobs: resp }))
     }
 
+    /// 触发事件：核心状态转移路径
+    ///
+    /// 流程：查找转移 → 更新 Job 状态 → 若到达终态则完成 → 否则为新状态注册定时器
     async fn trigger_event(
         &self,
         request: Request<TriggerEventRequest>,
@@ -132,6 +141,7 @@ impl JobService for JobServiceImpl {
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| Status::not_found("job not found"))?;
 
+        // 通过状态机引擎查找匹配的转移
         let engines = self.state.engines.lock().await;
         let engine = engines
             .get(&job.flow_id)
@@ -141,15 +151,15 @@ impl JobService for JobServiceImpl {
             .process_event(&job.current_state, &req.event)
             .map_err(|e| Status::failed_precondition(e.to_string()))?;
 
-        // Perform the transition
+        // 执行状态转移
         self.state
             .job_manager
             .transition_job(job_id, &req.event, &result.from, &result.to, result.action)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        // Check if new state is terminal
         if engine.is_terminal(&result.to) {
+            // 到达终态：完成 Job，清除所有定时器
             self.state
                 .job_manager
                 .complete_job(job_id, &result.to)
@@ -157,7 +167,7 @@ impl JobService for JobServiceImpl {
                 .map_err(|e| Status::internal(e.to_string()))?;
             self.state.timer_wheel.cancel_all_job_timers(job_id).await;
         } else {
-            // Register timers for new state transitions
+            // 为新状态的出边注册超时定时器
             for t in &engine.manifest().transitions {
                 if t.from == result.to
                     && let Some(ref timeout) = t.timeout
@@ -217,6 +227,7 @@ impl JobService for JobServiceImpl {
         Ok(Response::new(CancelJobResponse {}))
     }
 
+    /// 查询 Job 的事件溯源日志
     async fn get_job_events(
         &self,
         request: Request<GetJobEventsRequest>,

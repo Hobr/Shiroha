@@ -1,3 +1,5 @@
+//! 服务器核心：初始化共享状态，启动 gRPC 服务
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,11 +15,14 @@ use tokio::sync::Mutex;
 use crate::flow_service::FlowServiceImpl;
 use crate::job_service::JobServiceImpl;
 
+/// 全局共享状态，所有 gRPC handler 共享
 pub struct ShirohaState {
     pub storage: Arc<RedbStorage>,
     pub wasm_runtime: Arc<WasmRuntime>,
     pub module_cache: Arc<ModuleCache>,
+    /// 内存中的 Flow 注册表（flow_id → FlowRegistration）
     pub flows: Arc<Mutex<HashMap<String, FlowRegistration>>>,
+    /// 每个 Flow 对应的状态机引擎（flow_id → Engine）
     pub engines: Arc<Mutex<HashMap<String, StateMachineEngine>>>,
     pub job_manager: Arc<JobManager<RedbStorage>>,
     pub timer_wheel: Arc<TimerWheel>,
@@ -25,10 +30,12 @@ pub struct ShirohaState {
 
 pub struct ShirohaServer {
     state: Arc<ShirohaState>,
+    /// 定时器事件接收端（TODO: Phase 1 后续接入 Job event inbox）
     _timer_rx: tokio::sync::mpsc::Receiver<shiroha_engine::timer::TimerEvent>,
 }
 
 impl ShirohaServer {
+    /// 初始化所有组件：存储、WASM 运行时、定时器轮
     pub fn new(data_dir: &str) -> anyhow::Result<Self> {
         std::fs::create_dir_all(data_dir)?;
         let db_path = format!("{data_dir}/shiroha.redb");
@@ -55,6 +62,7 @@ impl ShirohaServer {
         })
     }
 
+    /// 启动 gRPC 服务器
     pub async fn start(self, listen_addr: &str) -> anyhow::Result<()> {
         let addr = listen_addr.parse()?;
 

@@ -1,6 +1,6 @@
 [package]
 name = "shiroha-engine"
-description = "Shiroha 状态机引擎"
+description = "Shiroha State Machine Engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

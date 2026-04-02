@@ -1,12 +1,24 @@
+//! Job 运行实例与执行结果类型
+//!
+//! Job 是 Flow 的运行实例，绑定特定版本的 WASM 模块。
+//! 此模块还定义了 Action 执行结果、Node 结果和聚合决策。
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Job 生命周期状态
+///
+/// 状态转移：Running ↔ Paused, Running/Paused → Cancelled, Running → Completed
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
+    /// 正常运行，响应事件和定时器
     Running,
+    /// 暂停，事件入队但不处理，定时器暂停
     Paused,
+    /// 强制终止
     Cancelled,
+    /// 到达终态，正常结束
     Completed,
 }
 
@@ -21,17 +33,22 @@ impl std::fmt::Display for JobState {
     }
 }
 
+/// Job 运行实例
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
     pub id: Uuid,
     pub flow_id: String,
+    /// 创建时绑定的 Flow 版本，新版 Flow 部署后旧 Job 继续用旧版
     pub flow_version: Uuid,
     pub state: JobState,
+    /// 当前所处的状态机节点名
     pub current_state: String,
+    /// 用户自定义上下文数据
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<Vec<u8>>,
 }
 
+/// Action 执行状态
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionStatus {
@@ -40,6 +57,7 @@ pub enum ExecutionStatus {
     Timeout,
 }
 
+/// 单次 Action 执行结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionResult {
     pub status: ExecutionStatus,
@@ -47,6 +65,7 @@ pub struct ActionResult {
     pub output: Option<Vec<u8>>,
 }
 
+/// 单个 Node 的执行结果（用于 fan-out 聚合）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeResult {
     pub node_id: String,
@@ -55,9 +74,12 @@ pub struct NodeResult {
     pub output: Option<Vec<u8>>,
 }
 
+/// 聚合决策：fan-out 多 Node 结果聚合后，决定触发哪个事件
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AggregateDecision {
+    /// 聚合后要触发的事件名，驱动状态机转移
     pub event: String,
+    /// 可选的上下文补丁，合并到 Job context
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_patch: Option<Vec<u8>>,
 }

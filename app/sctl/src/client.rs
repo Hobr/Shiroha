@@ -1,14 +1,20 @@
+//! gRPC 客户端封装
+//!
+//! 封装 FlowServiceClient 和 JobServiceClient，为每个 CLI 子命令提供对应方法。
+
 use shiroha_proto::shiroha_api::flow_service_client::FlowServiceClient;
 use shiroha_proto::shiroha_api::job_service_client::JobServiceClient;
 use shiroha_proto::shiroha_api::*;
 use tonic::transport::Channel;
 
+/// shirohad gRPC 客户端
 pub struct ShirohaClient {
     flow: FlowServiceClient<Channel>,
     job: JobServiceClient<Channel>,
 }
 
 impl ShirohaClient {
+    /// 连接到 shirohad gRPC 服务
     pub async fn connect(addr: &str) -> anyhow::Result<Self> {
         let channel = Channel::from_shared(addr.to_string())?.connect().await?;
         Ok(Self {
@@ -17,6 +23,7 @@ impl ShirohaClient {
         })
     }
 
+    /// 部署 Flow：读取本地 WASM 文件并上传
     pub async fn deploy(&mut self, flow_id: &str, file: &str) -> anyhow::Result<()> {
         let wasm_bytes = std::fs::read(file)?;
         let resp = self

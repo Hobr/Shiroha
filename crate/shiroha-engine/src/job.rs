@@ -1,3 +1,11 @@
+//! Job 生命周期管理
+//!
+//! [`JobManager`] 负责 Job 的创建、状态流转、事件溯源写入。
+//! 所有状态变更同时追加事件记录，保证可审计。
+//!
+//! 并发控制由上层（shirohad）通过 Job 级别的 event inbox 保证串行化，
+//! JobManager 本身不做并发控制。
+
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -7,10 +15,14 @@ use shiroha_core::job::{Job, JobState};
 use shiroha_core::storage::Storage;
 use uuid::Uuid;
 
+/// Job 生命周期管理器
+///
+/// 泛型参数 `S` 允许注入不同的存储后端（MemoryStorage / RedbStorage）。
 pub struct JobManager<S: Storage> {
     storage: Arc<S>,
 }
 
+/// 当前时间戳（毫秒）
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -18,6 +30,7 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// 构造事件记录（自动生成 UUIDv7 和时间戳）
 fn make_event(job_id: Uuid, kind: EventKind) -> EventRecord {
     EventRecord {
         id: Uuid::now_v7(),
@@ -32,6 +45,7 @@ impl<S: Storage> JobManager<S> {
         Self { storage }
     }
 
+    /// 创建新 Job，初始状态为 Running
     pub async fn create_job(
         &self,
         flow_id: &str,
@@ -73,6 +87,7 @@ impl<S: Storage> JobManager<S> {
         self.storage.get_events(job_id).await
     }
 
+    /// 暂停 Job（Running → Paused）
     pub async fn pause_job(&self, job_id: Uuid) -> Result<()> {
         let mut job = self.load_job(job_id).await?;
         if job.state != JobState::Running {
@@ -88,6 +103,7 @@ impl<S: Storage> JobManager<S> {
             .await
     }
 
+    /// 恢复 Job（Paused → Running）
     pub async fn resume_job(&self, job_id: Uuid) -> Result<()> {
         let mut job = self.load_job(job_id).await?;
         if job.state != JobState::Paused {
@@ -103,6 +119,7 @@ impl<S: Storage> JobManager<S> {
             .await
     }
 
+    /// 取消 Job（Running/Paused → Cancelled）
     pub async fn cancel_job(&self, job_id: Uuid) -> Result<()> {
         let mut job = self.load_job(job_id).await?;
         if job.state == JobState::Cancelled || job.state == JobState::Completed {
@@ -118,6 +135,7 @@ impl<S: Storage> JobManager<S> {
             .await
     }
 
+    /// 完成 Job（→ Completed）
     pub async fn complete_job(&self, job_id: Uuid, final_state: &str) -> Result<()> {
         let mut job = self.load_job(job_id).await?;
         job.state = JobState::Completed;
@@ -133,6 +151,7 @@ impl<S: Storage> JobManager<S> {
             .await
     }
 
+    /// 执行状态转移：更新 current_state 并记录 Transition 事件
     pub async fn transition_job(
         &self,
         job_id: Uuid,
@@ -163,6 +182,7 @@ impl<S: Storage> JobManager<S> {
             .await
     }
 
+    /// 从存储加载 Job，不存在时返回 JobNotFound
     async fn load_job(&self, job_id: Uuid) -> Result<Job> {
         self.storage
             .get_job(job_id)

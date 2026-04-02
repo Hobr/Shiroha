@@ -1,8 +1,18 @@
+//! Flow 静态验证器
+//!
+//! 在 Flow 部署时对 manifest 进行静态检查，尽早发现配置错误：
+//! - 初始状态是否存在
+//! - 转移引用的状态是否存在
+//! - 不可达状态检测（BFS）
+//! - 终态不应有出边
+//! - Action/Guard 引用是否在 actions 列表中声明
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 use shiroha_core::flow::FlowManifest;
 
+/// 验证警告
 #[derive(Debug)]
 pub enum ValidationWarning {
     InvalidInitialState(String),
@@ -20,7 +30,9 @@ impl fmt::Display for ValidationWarning {
             Self::MissingState { field, state } => {
                 write!(f, "transition {field} references missing state `{state}`")
             }
-            Self::UnreachableState(s) => write!(f, "state `{s}` is unreachable from initial state"),
+            Self::UnreachableState(s) => {
+                write!(f, "state `{s}` is unreachable from initial state")
+            }
             Self::TerminalWithOutgoing(s) => {
                 write!(f, "terminal state `{s}` has outgoing transitions")
             }
@@ -37,6 +49,7 @@ impl fmt::Display for ValidationWarning {
 pub struct FlowValidator;
 
 impl FlowValidator {
+    /// 验证 FlowManifest，返回所有发现的警告
     pub fn validate(manifest: &FlowManifest) -> Vec<ValidationWarning> {
         let mut warnings = Vec::new();
 
@@ -44,14 +57,14 @@ impl FlowValidator {
         let action_names: HashSet<&str> =
             manifest.actions.iter().map(|a| a.name.as_str()).collect();
 
-        // Check initial state exists
+        // 初始状态必须存在
         if !state_names.contains(manifest.initial_state.as_str()) {
             warnings.push(ValidationWarning::InvalidInitialState(
                 manifest.initial_state.clone(),
             ));
         }
 
-        // Check transition references
+        // 检查转移引用的状态和函数
         for t in &manifest.transitions {
             if !state_names.contains(t.from.as_str()) {
                 warnings.push(ValidationWarning::MissingState {
@@ -77,7 +90,7 @@ impl FlowValidator {
             }
         }
 
-        // Check terminal states have no outgoing transitions
+        // 终态不应有出边
         for state in &manifest.states {
             if state.kind == shiroha_core::flow::StateKind::Terminal {
                 let has_outgoing = manifest.transitions.iter().any(|t| t.from == state.name);
@@ -87,7 +100,7 @@ impl FlowValidator {
             }
         }
 
-        // BFS reachability from initial state
+        // BFS 可达性分析：从初始状态出发，检测不可达的状态
         let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
         for t in &manifest.transitions {
             adj.entry(t.from.as_str()).or_default().push(t.to.as_str());

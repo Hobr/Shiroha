@@ -1,6 +1,6 @@
 [package]
 name = "shiroha-store-redb"
-description = "Shiroha Redb 存储后端"
+description = "Shiroha Redb Store Backend"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
