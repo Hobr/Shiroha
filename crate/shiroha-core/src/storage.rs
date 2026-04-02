@@ -29,6 +29,16 @@ pub trait Storage: Send + Sync {
     fn delete_flow(&self, flow_id: &str) -> impl Future<Output = Result<()>> + Send;
 
     fn save_job(&self, job: &Job) -> impl Future<Output = Result<()>> + Send;
+    fn save_job_with_event(
+        &self,
+        job: &Job,
+        event: &EventRecord,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async move {
+            self.save_job(job).await?;
+            self.append_event(event).await
+        }
+    }
     fn get_job(&self, job_id: Uuid) -> impl Future<Output = Result<Option<Job>>> + Send;
     fn list_jobs(&self, flow_id: &str) -> impl Future<Output = Result<Vec<Job>>> + Send;
 
