@@ -1,5 +1,6 @@
 [package]
 name = "sctl"
+description = "Shiroha Control CLI"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
