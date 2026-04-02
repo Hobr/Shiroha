@@ -150,3 +150,84 @@ impl FlowService for FlowServiceImpl {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
+
+    #[tokio::test]
+    async fn deploy_list_and_get_flow_round_trip() {
+        let harness = TestHarness::new("flow-service").await;
+        let service = FlowServiceImpl::new(harness.state.clone());
+        let manifest = approval_manifest("demo-flow", Some("allow"));
+
+        let deploy = service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "demo-flow".into(),
+                wasm_bytes: wasm_for_manifest(&manifest),
+            }))
+            .await
+            .expect("deploy flow")
+            .into_inner();
+
+        assert_eq!(deploy.flow_id, "demo-flow");
+        assert!(deploy.version.parse::<Uuid>().is_ok());
+
+        let listed = service
+            .list_flows(Request::new(ListFlowsRequest {}))
+            .await
+            .expect("list flows")
+            .into_inner();
+        assert_eq!(listed.flows.len(), 1);
+        assert_eq!(listed.flows[0].flow_id, "demo-flow");
+        assert_eq!(listed.flows[0].initial_state, "idle");
+        assert_eq!(listed.flows[0].state_count, 2);
+
+        let fetched = service
+            .get_flow(Request::new(GetFlowRequest {
+                flow_id: "demo-flow".into(),
+            }))
+            .await
+            .expect("get flow")
+            .into_inner();
+
+        assert_eq!(fetched.flow_id, "demo-flow");
+        let fetched_manifest: shiroha_core::flow::FlowManifest =
+            serde_json::from_str(&fetched.manifest_json).expect("manifest json");
+        assert_eq!(fetched_manifest.initial_state, "idle");
+        assert_eq!(fetched_manifest.transitions.len(), 1);
+        assert!(
+            harness
+                .state
+                .module_cache
+                .get(
+                    &harness
+                        .state
+                        .storage
+                        .get_flow("demo-flow")
+                        .await
+                        .expect("stored flow")
+                        .expect("flow exists")
+                        .wasm_hash
+                )
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn deploy_flow_rejects_invalid_wasm_contract() {
+        let harness = TestHarness::new("flow-invalid").await;
+        let service = FlowServiceImpl::new(harness.state.clone());
+
+        let error = service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "broken".into(),
+                wasm_bytes: b"(module)".to_vec(),
+            }))
+            .await
+            .expect_err("missing exports should fail");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+}

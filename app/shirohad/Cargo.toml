@@ -31,3 +31,8 @@ shadow-rs = { workspace = true }
 
 [build-dependencies]
 shadow-rs = { workspace = true }
+
+[dev-dependencies]
+tokio-stream = { workspace = true }
+tower = { workspace = true }
+hyper-util = { workspace = true }

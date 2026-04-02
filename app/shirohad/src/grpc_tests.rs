@@ -1,0 +1,207 @@
+use tokio::time::{Duration, sleep, timeout};
+
+use crate::test_support::{LiveGrpcServer, approval_manifest, timeout_manifest, wasm_for_manifest};
+use shiroha_core::event::EventKind;
+use shiroha_proto::shiroha_api::flow_service_client::FlowServiceClient;
+use shiroha_proto::shiroha_api::job_service_client::JobServiceClient;
+use shiroha_proto::shiroha_api::{
+    CreateJobRequest, DeployFlowRequest, GetFlowRequest, GetJobEventsRequest, GetJobRequest,
+    ListFlowsRequest, PauseJobRequest, ResumeJobRequest, TriggerEventRequest,
+};
+use tonic::transport::Channel;
+
+async fn wait_for_job(
+    client: &mut JobServiceClient<Channel>,
+    job_id: &str,
+    expected_state: &str,
+    expected_current_state: &str,
+) {
+    timeout(Duration::from_millis(500), async {
+        loop {
+            let job = client
+                .get_job(GetJobRequest {
+                    job_id: job_id.to_string(),
+                })
+                .await
+                .expect("get job")
+                .into_inner();
+            if job.state == expected_state && job.current_state == expected_current_state {
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("job should reach expected state");
+}
+
+async fn deploy_manifest(
+    client: &mut FlowServiceClient<Channel>,
+    flow_id: &str,
+    manifest: &shiroha_core::flow::FlowManifest,
+) {
+    client
+        .deploy_flow(DeployFlowRequest {
+            flow_id: flow_id.to_string(),
+            wasm_bytes: wasm_for_manifest(manifest),
+        })
+        .await
+        .expect("deploy flow");
+}
+
+#[tokio::test]
+async fn grpc_round_trip_flow_and_job_execution() {
+    let server = LiveGrpcServer::start("grpc-roundtrip").await;
+    let mut flow = server.flow_client().await;
+    let mut job = server.job_client().await;
+    let manifest = approval_manifest("grpc-approval", Some("allow"));
+
+    deploy_manifest(&mut flow, "grpc-approval", &manifest).await;
+
+    let listed = flow
+        .list_flows(ListFlowsRequest {})
+        .await
+        .expect("list flows")
+        .into_inner();
+    assert_eq!(listed.flows.len(), 1);
+    assert_eq!(listed.flows[0].flow_id, "grpc-approval");
+
+    let fetched = flow
+        .get_flow(GetFlowRequest {
+            flow_id: "grpc-approval".into(),
+        })
+        .await
+        .expect("get flow")
+        .into_inner();
+    assert_eq!(fetched.flow_id, "grpc-approval");
+
+    let created = job
+        .create_job(CreateJobRequest {
+            flow_id: "grpc-approval".into(),
+            context: Some(vec![1, 2, 3]),
+        })
+        .await
+        .expect("create job")
+        .into_inner();
+
+    job.trigger_event(TriggerEventRequest {
+        job_id: created.job_id.clone(),
+        event: "approve".into(),
+        payload: Some(vec![9]),
+    })
+    .await
+    .expect("trigger event");
+
+    wait_for_job(&mut job, &created.job_id, "completed", "done").await;
+
+    let events = job
+        .get_job_events(GetJobEventsRequest {
+            job_id: created.job_id,
+        })
+        .await
+        .expect("get events")
+        .into_inner();
+    let kinds: Vec<EventKind> = events
+        .events
+        .into_iter()
+        .map(|event| serde_json::from_str(&event.kind_json).expect("event json"))
+        .collect();
+
+    assert_eq!(kinds.len(), 4);
+    assert!(matches!(kinds[0], EventKind::Created { .. }));
+    assert!(matches!(kinds[1], EventKind::Transition { .. }));
+    assert!(matches!(kinds[2], EventKind::ActionComplete { .. }));
+    assert!(matches!(kinds[3], EventKind::Completed { .. }));
+}
+
+#[tokio::test]
+async fn grpc_pause_resume_processes_queued_event() {
+    let server = LiveGrpcServer::start("grpc-pause-resume").await;
+    let mut flow = server.flow_client().await;
+    let mut job = server.job_client().await;
+
+    deploy_manifest(
+        &mut flow,
+        "grpc-approval",
+        &approval_manifest("grpc-approval", Some("allow")),
+    )
+    .await;
+
+    let created = job
+        .create_job(CreateJobRequest {
+            flow_id: "grpc-approval".into(),
+            context: None,
+        })
+        .await
+        .expect("create job")
+        .into_inner();
+
+    job.pause_job(PauseJobRequest {
+        job_id: created.job_id.clone(),
+    })
+    .await
+    .expect("pause job");
+
+    job.trigger_event(TriggerEventRequest {
+        job_id: created.job_id.clone(),
+        event: "approve".into(),
+        payload: None,
+    })
+    .await
+    .expect("trigger queued event");
+
+    let paused = job
+        .get_job(GetJobRequest {
+            job_id: created.job_id.clone(),
+        })
+        .await
+        .expect("get paused job")
+        .into_inner();
+    assert_eq!(paused.state, "paused");
+    assert_eq!(paused.current_state, "idle");
+
+    job.resume_job(ResumeJobRequest {
+        job_id: created.job_id.clone(),
+    })
+    .await
+    .expect("resume job");
+
+    wait_for_job(&mut job, &created.job_id, "completed", "done").await;
+}
+
+#[tokio::test]
+async fn grpc_timer_event_completes_job() {
+    let server = LiveGrpcServer::start("grpc-timer").await;
+    let mut flow = server.flow_client().await;
+    let mut job = server.job_client().await;
+
+    deploy_manifest(&mut flow, "grpc-timer", &timeout_manifest("grpc-timer")).await;
+
+    let created = job
+        .create_job(CreateJobRequest {
+            flow_id: "grpc-timer".into(),
+            context: None,
+        })
+        .await
+        .expect("create job")
+        .into_inner();
+
+    wait_for_job(&mut job, &created.job_id, "completed", "timed_out").await;
+
+    let events = job
+        .get_job_events(GetJobEventsRequest {
+            job_id: created.job_id,
+        })
+        .await
+        .expect("get events")
+        .into_inner();
+    let kinds: Vec<EventKind> = events
+        .events
+        .into_iter()
+        .map(|event| serde_json::from_str(&event.kind_json).expect("event json"))
+        .collect();
+
+    assert!(kinds.iter().any(
+        |kind| matches!(kind, EventKind::Completed { final_state } if final_state == "timed_out")
+    ));
+}

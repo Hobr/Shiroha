@@ -526,3 +526,321 @@ impl JobService for JobServiceImpl {
         Ok(Response::new(GetJobEventsResponse { events: records }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use tokio::time::{Duration, sleep, timeout};
+
+    use super::*;
+    use crate::flow_service::FlowServiceImpl;
+    use crate::test_support::{
+        TestHarness, approval_manifest, timeout_manifest, wasm_for_manifest,
+    };
+    use shiroha_core::event::EventKind;
+    use shiroha_proto::shiroha_api::flow_service_server::FlowService;
+
+    async fn deploy_flow(
+        state: Arc<ShirohaState>,
+        flow_id: &str,
+        manifest: &shiroha_core::flow::FlowManifest,
+    ) {
+        let flow_service = FlowServiceImpl::new(state);
+        flow_service
+            .deploy_flow(Request::new(
+                shiroha_proto::shiroha_api::DeployFlowRequest {
+                    flow_id: flow_id.to_string(),
+                    wasm_bytes: wasm_for_manifest(manifest),
+                },
+            ))
+            .await
+            .expect("deploy flow");
+    }
+
+    async fn wait_for_job(
+        service: &JobServiceImpl,
+        job_id: &str,
+        expected_state: &str,
+        expected_current_state: &str,
+    ) -> GetJobResponse {
+        timeout(Duration::from_millis(400), async {
+            loop {
+                let job = service
+                    .get_job(Request::new(GetJobRequest {
+                        job_id: job_id.to_string(),
+                    }))
+                    .await
+                    .expect("get job")
+                    .into_inner();
+                if job.state == expected_state && job.current_state == expected_current_state {
+                    break job;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("job should reach expected state")
+    }
+
+    #[tokio::test]
+    async fn create_trigger_and_query_job_lifecycle() {
+        let harness = TestHarness::new("job-service-complete").await;
+        deploy_flow(
+            harness.state.clone(),
+            "approval",
+            &approval_manifest("approval", Some("allow")),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: Some(vec![1, 2]),
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        let initial = service
+            .get_job(Request::new(GetJobRequest {
+                job_id: created.job_id.clone(),
+            }))
+            .await
+            .expect("get job")
+            .into_inner();
+        assert_eq!(initial.state, "running");
+        assert_eq!(initial.current_state, "idle");
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "approve".into(),
+                payload: Some(vec![9]),
+            }))
+            .await
+            .expect("trigger event");
+
+        let final_job = service
+            .get_job(Request::new(GetJobRequest {
+                job_id: created.job_id.clone(),
+            }))
+            .await
+            .expect("get final job")
+            .into_inner();
+        assert_eq!(final_job.state, "completed");
+        assert_eq!(final_job.current_state, "done");
+
+        let listed = service
+            .list_jobs(Request::new(ListJobsRequest {
+                flow_id: "approval".into(),
+            }))
+            .await
+            .expect("list jobs")
+            .into_inner();
+        assert_eq!(listed.jobs.len(), 1);
+
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id.clone(),
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        let kinds: Vec<EventKind> = events
+            .events
+            .into_iter()
+            .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
+            .collect();
+
+        assert_eq!(kinds.len(), 4);
+        assert!(matches!(kinds[0], EventKind::Created { .. }));
+        assert!(matches!(kinds[1], EventKind::Transition { .. }));
+        assert!(matches!(kinds[2], EventKind::ActionComplete { .. }));
+        assert!(matches!(kinds[3], EventKind::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn paused_job_queues_events_until_resume() {
+        let harness = TestHarness::new("job-service-pause").await;
+        deploy_flow(
+            harness.state.clone(),
+            "approval",
+            &approval_manifest("approval", Some("allow")),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+        let job_id = created.job_id.clone();
+        let job_uuid = job_id.parse::<Uuid>().expect("uuid");
+
+        service
+            .pause_job(Request::new(PauseJobRequest {
+                job_id: job_id.clone(),
+            }))
+            .await
+            .expect("pause job");
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: job_id.clone(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect("queue paused event");
+
+        let paused = service
+            .get_job(Request::new(GetJobRequest {
+                job_id: job_id.clone(),
+            }))
+            .await
+            .expect("get paused job")
+            .into_inner();
+        assert_eq!(paused.state, "paused");
+        assert_eq!(paused.current_state, "idle");
+        assert_eq!(
+            harness
+                .state
+                .pending_events
+                .lock()
+                .await
+                .get(&job_uuid)
+                .map(std::collections::VecDeque::len),
+            Some(1)
+        );
+
+        service
+            .resume_job(Request::new(ResumeJobRequest {
+                job_id: job_id.clone(),
+            }))
+            .await
+            .expect("resume job");
+
+        let resumed = service
+            .get_job(Request::new(GetJobRequest { job_id }))
+            .await
+            .expect("get resumed job")
+            .into_inner();
+        assert_eq!(resumed.state, "completed");
+        assert_eq!(resumed.current_state, "done");
+        assert!(
+            harness
+                .state
+                .pending_events
+                .lock()
+                .await
+                .get(&job_uuid)
+                .is_none()
+        );
+
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: resumed.job_id.clone(),
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        let kinds: Vec<EventKind> = events
+            .events
+            .into_iter()
+            .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
+            .collect();
+        assert!(matches!(kinds[1], EventKind::Paused));
+        assert!(matches!(kinds[2], EventKind::Resumed));
+    }
+
+    #[tokio::test]
+    async fn trigger_event_rejects_guard_without_transition() {
+        let harness = TestHarness::new("job-service-guard").await;
+        deploy_flow(
+            harness.state.clone(),
+            "guarded",
+            &approval_manifest("guarded", Some("deny")),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "guarded".into(),
+                context: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        let error = service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect_err("guard should reject");
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+
+        let job = service
+            .get_job(Request::new(GetJobRequest {
+                job_id: created.job_id.clone(),
+            }))
+            .await
+            .expect("get job")
+            .into_inner();
+        assert_eq!(job.state, "running");
+        assert_eq!(job.current_state, "idle");
+
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id,
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        assert_eq!(events.events.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn timer_forwarder_delivers_timeout_event() {
+        let harness = TestHarness::with_timer_forwarder("job-service-timer").await;
+        deploy_flow(
+            harness.state.clone(),
+            "timer-flow",
+            &timeout_manifest("timer-flow"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "timer-flow".into(),
+                context: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        let timed_out = wait_for_job(&service, &created.job_id, "completed", "timed_out").await;
+        assert_eq!(timed_out.job_id, created.job_id);
+
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id,
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        let kinds: Vec<EventKind> = events
+            .events
+            .into_iter()
+            .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
+            .collect();
+        assert!(kinds.iter().any(|kind| matches!(kind, EventKind::Completed { final_state } if final_state == "timed_out")));
+    }
+}
