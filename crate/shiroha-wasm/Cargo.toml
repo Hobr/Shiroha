@@ -1,6 +1,6 @@
 [package]
 name = "shiroha-wasm"
-description = "Shiroha WASM 运行时"
+description = "Shiroha WASM Runtime"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

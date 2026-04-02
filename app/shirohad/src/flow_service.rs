@@ -1,3 +1,8 @@
+//! gRPC FlowService 实现
+//!
+//! 处理 Flow 的部署、查询操作。
+//! 部署时：加载 WASM → 提取 manifest → 静态验证 → 持久化 → 缓存引擎。
+
 use std::sync::Arc;
 
 use shiroha_core::flow::FlowRegistration;
@@ -27,6 +32,7 @@ impl FlowServiceImpl {
 
 #[tonic::async_trait]
 impl FlowService for FlowServiceImpl {
+    /// 部署 Flow：接收 WASM 字节码，编译、验证、注册
     async fn deploy_flow(
         &self,
         request: Request<DeployFlowRequest>,
@@ -35,7 +41,7 @@ impl FlowService for FlowServiceImpl {
         let flow_id = req.flow_id;
         let wasm_bytes = req.wasm_bytes;
 
-        // Load WASM module
+        // 编译 WASM 模块
         let module = self
             .state
             .wasm_runtime
@@ -44,7 +50,7 @@ impl FlowService for FlowServiceImpl {
 
         let wasm_module = Arc::new(WasmModule::new(module, &wasm_bytes));
 
-        // Try to get manifest from WASM, fall back to error for now
+        // 尝试从 WASM 提取 manifest（MVP 阶段尚未实现 host-guest 协议）
         let mut host = shiroha_wasm::host::WasmHost::new(
             self.state.wasm_runtime.engine(),
             wasm_module.module(),
@@ -60,7 +66,7 @@ impl FlowService for FlowServiceImpl {
             }
         };
 
-        // Validate
+        // 静态验证
         let warnings = FlowValidator::validate(&manifest);
         if !warnings.is_empty() {
             let msgs: Vec<String> = warnings.iter().map(|w| w.to_string()).collect();
@@ -75,7 +81,7 @@ impl FlowService for FlowServiceImpl {
             wasm_hash: wasm_module.hash().to_string(),
         };
 
-        // Store
+        // 持久化 + 缓存
         self.state
             .storage
             .save_flow(&registration)

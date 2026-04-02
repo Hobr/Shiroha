@@ -1,3 +1,7 @@
+//! sctl — Shiroha CLI 管理工具
+//!
+//! 通过 gRPC 连接 shirohad，提供 Flow 部署和 Job 管理的命令行操作。
+
 mod client;
 
 use clap::Parser;
@@ -18,7 +22,7 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Commands {
-    /// 部署 Flow
+    /// 部署 Flow（上传 WASM 文件）
     Deploy {
         #[arg(short, long)]
         file: String,
@@ -32,7 +36,7 @@ enum Commands {
         #[arg(short = 'i', long)]
         flow_id: String,
     },
-    /// 查询 Job
+    /// 查询 Job 详情
     Get {
         #[arg(short = 'i', long)]
         job_id: String,

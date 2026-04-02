@@ -1,3 +1,9 @@
+//! 存储层抽象
+//!
+//! 定义 [`Storage`] trait 作为持久化后端的统一接口。
+//! 内置 [`MemoryStorage`] 用于开发和测试。
+//! 生产环境使用 `shiroha-store-redb` 等具体实现。
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -9,6 +15,10 @@ use crate::event::EventRecord;
 use crate::flow::FlowRegistration;
 use crate::job::Job;
 
+/// 存储后端 trait
+///
+/// 所有方法均为异步，实现方必须保证 Send + Sync。
+/// Flow、Job、Event 三类数据分别存储。
 pub trait Storage: Send + Sync {
     fn save_flow(&self, flow: &FlowRegistration) -> impl Future<Output = Result<()>> + Send;
     fn get_flow(
@@ -26,6 +36,9 @@ pub trait Storage: Send + Sync {
     fn get_events(&self, job_id: Uuid) -> impl Future<Output = Result<Vec<EventRecord>>> + Send;
 }
 
+/// 基于内存的存储实现（开发/测试用）
+///
+/// 数据仅存活于进程生命周期内，不做持久化。
 #[derive(Debug, Default, Clone)]
 pub struct MemoryStorage {
     flows: Arc<RwLock<HashMap<String, FlowRegistration>>>,

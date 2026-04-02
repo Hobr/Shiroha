@@ -1,3 +1,5 @@
+//! WASM 层错误类型
+
 use shiroha_core::error::ShirohaError;
 use thiserror::Error;
 

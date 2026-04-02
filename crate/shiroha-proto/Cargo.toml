@@ -1,6 +1,6 @@
 [package]
 name = "shiroha-proto"
-description = "Shiroha gRPC API 定义"
+description = "Shiroha gRPC API"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

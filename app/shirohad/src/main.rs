@@ -1,3 +1,8 @@
+//! shirohad — Shiroha 分布式状态机守护进程
+//!
+//! Phase 1 仅支持 standalone 模式（Controller + Node 同进程）。
+//! 启动后通过 gRPC 对外提供 FlowService 和 JobService。
+
 mod flow_service;
 mod job_service;
 mod server;
@@ -10,7 +15,7 @@ shadow_rs::shadow!(build);
 #[derive(Parser)]
 #[command(name = "shirohad", version = build::CLAP_LONG_VERSION, about = "Shiroha 分布式状态机守护进程")]
 struct Cli {
-    /// 运行模式
+    /// 运行模式：standalone / controller / node
     #[arg(short, long, default_value = "standalone")]
     mode: String,
 
@@ -18,7 +23,7 @@ struct Cli {
     #[arg(long, default_value = "[::1]:50051")]
     listen: String,
 
-    /// 数据目录
+    /// 数据目录（存放 redb 数据库文件）
     #[arg(long, default_value = "./data")]
     data_dir: String,
 }
