@@ -45,9 +45,11 @@ impl FlowService for FlowServiceImpl {
         let wasm_module = Arc::new(WasmModule::new(module, &wasm_bytes));
 
         // Try to get manifest from WASM, fall back to error for now
-        let mut host =
-            shiroha_wasm::host::WasmHost::new(self.state.wasm_runtime.engine(), wasm_module.module())
-                .map_err(|e| Status::internal(e.to_string()))?;
+        let mut host = shiroha_wasm::host::WasmHost::new(
+            self.state.wasm_runtime.engine(),
+            wasm_module.module(),
+        )
+        .map_err(|e| Status::internal(e.to_string()))?;
 
         let manifest = match host.get_manifest() {
             Ok(m) => m,
@@ -81,7 +83,11 @@ impl FlowService for FlowServiceImpl {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         self.state.module_cache.insert(wasm_module);
-        self.state.flows.lock().await.insert(flow_id.clone(), registration);
+        self.state
+            .flows
+            .lock()
+            .await
+            .insert(flow_id.clone(), registration);
         self.state
             .engines
             .lock()

@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use shiroha_proto::shiroha_api::job_service_server::JobService;
 use shiroha_proto::shiroha_api::{
-    CancelJobRequest, CancelJobResponse, CreateJobRequest, CreateJobResponse,
-    GetJobEventsRequest, GetJobEventsResponse, GetJobRequest, GetJobResponse,
-    ListJobsRequest, ListJobsResponse, PauseJobRequest, PauseJobResponse,
-    ResumeJobRequest, ResumeJobResponse, TriggerEventRequest, TriggerEventResponse,
+    CancelJobRequest, CancelJobResponse, CreateJobRequest, CreateJobResponse, GetJobEventsRequest,
+    GetJobEventsResponse, GetJobRequest, GetJobResponse, ListJobsRequest, ListJobsResponse,
+    PauseJobRequest, PauseJobResponse, ResumeJobRequest, ResumeJobResponse, TriggerEventRequest,
+    TriggerEventResponse,
 };
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -23,7 +23,8 @@ impl JobServiceImpl {
 }
 
 fn parse_uuid(s: &str) -> Result<Uuid, Status> {
-    s.parse::<Uuid>().map_err(|_| Status::invalid_argument(format!("invalid UUID: {s}")))
+    s.parse::<Uuid>()
+        .map_err(|_| Status::invalid_argument(format!("invalid UUID: {s}")))
 }
 
 #[tonic::async_trait]
@@ -53,14 +54,14 @@ impl JobService for JobServiceImpl {
         // Register timers for initial state transitions
         let initial_state = &flow.manifest.initial_state;
         for t in &flow.manifest.transitions {
-            if t.from == *initial_state {
-                if let Some(ref timeout) = t.timeout {
-                    self.state.timer_wheel.register(
-                        job.id,
-                        timeout.timeout_event.clone(),
-                        std::time::Duration::from_millis(timeout.duration_ms),
-                    );
-                }
+            if t.from == *initial_state
+                && let Some(ref timeout) = t.timeout
+            {
+                self.state.timer_wheel.register(
+                    job.id,
+                    timeout.timeout_event.clone(),
+                    std::time::Duration::from_millis(timeout.duration_ms),
+                );
             }
         }
 
@@ -158,14 +159,14 @@ impl JobService for JobServiceImpl {
         } else {
             // Register timers for new state transitions
             for t in &engine.manifest().transitions {
-                if t.from == result.to {
-                    if let Some(ref timeout) = t.timeout {
-                        self.state.timer_wheel.register(
-                            job_id,
-                            timeout.timeout_event.clone(),
-                            std::time::Duration::from_millis(timeout.duration_ms),
-                        );
-                    }
+                if t.from == result.to
+                    && let Some(ref timeout) = t.timeout
+                {
+                    self.state.timer_wheel.register(
+                        job_id,
+                        timeout.timeout_event.clone(),
+                        std::time::Duration::from_millis(timeout.duration_ms),
+                    );
                 }
             }
         }

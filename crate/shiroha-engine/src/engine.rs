@@ -23,11 +23,13 @@ impl StateMachineEngine {
 
     pub fn process_event(&self, current_state: &str, event: &str) -> Result<TransitionResult> {
         let transitions = self.find_transitions(current_state, event);
-        let t = transitions.first().ok_or_else(|| ShirohaError::InvalidTransition {
-            from: current_state.to_string(),
-            to: String::new(),
-            event: event.to_string(),
-        })?;
+        let t = transitions
+            .first()
+            .ok_or_else(|| ShirohaError::InvalidTransition {
+                from: current_state.to_string(),
+                to: String::new(),
+                event: event.to_string(),
+            })?;
         Ok(TransitionResult {
             from: t.from.clone(),
             to: t.to.clone(),

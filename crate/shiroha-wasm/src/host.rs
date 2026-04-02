@@ -44,7 +44,11 @@ impl WasmHost {
 
     /// Invoke an action in the WASM module.
     /// TODO: Write ctx as JSON to WASM memory, call invoke_action export, read result.
-    pub fn invoke_action(&mut self, _name: &str, _ctx: ActionContext) -> Result<ActionResult, WasmError> {
+    pub fn invoke_action(
+        &mut self,
+        _name: &str,
+        _ctx: ActionContext,
+    ) -> Result<ActionResult, WasmError> {
         Err(WasmError::Execution(
             "WASM action invocation not yet implemented".into(),
         ))

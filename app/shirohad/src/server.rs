@@ -34,8 +34,7 @@ impl ShirohaServer {
         let db_path = format!("{data_dir}/shiroha.redb");
 
         let storage = Arc::new(RedbStorage::new(&db_path).map_err(|e| anyhow::anyhow!("{e}"))?);
-        let wasm_runtime =
-            Arc::new(WasmRuntime::new().map_err(|e| anyhow::anyhow!("{e}"))?);
+        let wasm_runtime = Arc::new(WasmRuntime::new().map_err(|e| anyhow::anyhow!("{e}"))?);
         let module_cache = Arc::new(ModuleCache::new());
         let job_manager = Arc::new(JobManager::new(storage.clone()));
         let (timer_wheel, timer_rx) = TimerWheel::new();

@@ -17,11 +17,19 @@ impl fmt::Display for ValidationWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidInitialState(s) => write!(f, "initial state `{s}` not found in states"),
-            Self::MissingState { field, state } => write!(f, "transition {field} references missing state `{state}`"),
+            Self::MissingState { field, state } => {
+                write!(f, "transition {field} references missing state `{state}`")
+            }
             Self::UnreachableState(s) => write!(f, "state `{s}` is unreachable from initial state"),
-            Self::TerminalWithOutgoing(s) => write!(f, "terminal state `{s}` has outgoing transitions"),
-            Self::MissingAction(s) => write!(f, "action `{s}` referenced in transitions but not declared"),
-            Self::MissingGuard(s) => write!(f, "guard `{s}` referenced in transitions but not declared"),
+            Self::TerminalWithOutgoing(s) => {
+                write!(f, "terminal state `{s}` has outgoing transitions")
+            }
+            Self::MissingAction(s) => {
+                write!(f, "action `{s}` referenced in transitions but not declared")
+            }
+            Self::MissingGuard(s) => {
+                write!(f, "guard `{s}` referenced in transitions but not declared")
+            }
         }
     }
 }
@@ -33,7 +41,8 @@ impl FlowValidator {
         let mut warnings = Vec::new();
 
         let state_names: HashSet<&str> = manifest.states.iter().map(|s| s.name.as_str()).collect();
-        let action_names: HashSet<&str> = manifest.actions.iter().map(|a| a.name.as_str()).collect();
+        let action_names: HashSet<&str> =
+            manifest.actions.iter().map(|a| a.name.as_str()).collect();
 
         // Check initial state exists
         if !state_names.contains(manifest.initial_state.as_str()) {
@@ -56,15 +65,15 @@ impl FlowValidator {
                     state: t.to.clone(),
                 });
             }
-            if let Some(ref action) = t.action {
-                if !action_names.contains(action.as_str()) {
-                    warnings.push(ValidationWarning::MissingAction(action.clone()));
-                }
+            if let Some(ref action) = t.action
+                && !action_names.contains(action.as_str())
+            {
+                warnings.push(ValidationWarning::MissingAction(action.clone()));
             }
-            if let Some(ref guard) = t.guard {
-                if !action_names.contains(guard.as_str()) {
-                    warnings.push(ValidationWarning::MissingGuard(guard.clone()));
-                }
+            if let Some(ref guard) = t.guard
+                && !action_names.contains(guard.as_str())
+            {
+                warnings.push(ValidationWarning::MissingGuard(guard.clone()));
             }
         }
 
