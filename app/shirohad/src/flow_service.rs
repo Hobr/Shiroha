@@ -42,18 +42,18 @@ impl FlowService for FlowServiceImpl {
         let wasm_bytes = req.wasm_bytes;
 
         // 编译 WASM 模块
-        let module = self
+        let component = self
             .state
             .wasm_runtime
-            .load_module(&wasm_bytes)
+            .load_component(&wasm_bytes)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let wasm_module = Arc::new(WasmModule::new(module, &wasm_bytes));
+        let wasm_module = Arc::new(WasmModule::new(component, &wasm_bytes));
 
         // 从 WASM 提取 manifest
         let mut host = shiroha_wasm::host::WasmHost::new(
             self.state.wasm_runtime.engine(),
-            wasm_module.module(),
+            wasm_module.component(),
         )
         .map_err(|e| Status::internal(e.to_string()))?;
 

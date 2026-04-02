@@ -78,18 +78,14 @@ WASM 模块导出以下执行接口供框架调用：
 
 聚合决策返回一个事件名，Controller 用该事件驱动状态机转移。
 
-### Phase 1 ABI
+### Component / wasip2 ABI
 
-Phase 1 先使用 core module ABI，而不是 component model。当前约定：
+当前实现仅支持 component model 路线：
 
-- guest 必须导出 `memory`
-- guest 必须导出 `alloc(len: i32) -> i32`，供 host 写入入参
-- `get-manifest()` 返回一个 `i64`，编码方式为 `(ptr << 32) | len`
-- `invoke-action(name_ptr, name_len, ctx_ptr, ctx_len) -> i64`
-- `invoke-guard(name_ptr, name_len, ctx_ptr, ctx_len) -> i32`
-- `aggregate(name_ptr, name_len, results_ptr, results_len) -> i64`
-
-其中 `context`、`results` 和返回值都使用 JSON 序列化，通过 guest 线性内存传递。host 读取 `ptr/len` 后反序列化为 `FlowManifest`、`ActionResult`、`bool` 或 `AggregateDecision`。
+- guest 实现 `crate/shiroha-wasm/wit/flow.wit` 中定义的 `world flow`
+- host 使用 `wasmtime::component` typed exports 调用 `get-manifest` / `invoke-action` / `invoke-guard` / `aggregate`
+- component 实例化时接入 `wasmtime_wasi::p2`，因此 guest 应编译为 `wasm32-wasip2`
+- 上传的二进制必须是合法 component；core module 已不再接受
 
 ### 执行流程
 

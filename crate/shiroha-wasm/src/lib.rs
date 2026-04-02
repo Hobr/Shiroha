@@ -1,7 +1,7 @@
 //! Shiroha WASM 运行时
 //!
 //! 基于 wasmtime 的 WASM 模块加载、缓存和执行层。
-//! 提供 host-guest 桥接接口，用于调用 Flow WASM 模块导出的函数。
+//! 提供基于 component model 的 host-guest 桥接接口，用于调用 Flow WASM component 导出的函数。
 
 // WASM 层错误类型
 pub mod error;
