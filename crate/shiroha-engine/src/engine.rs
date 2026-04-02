@@ -72,3 +72,121 @@ impl StateMachineEngine {
             .is_some_and(|s| s.kind == StateKind::Terminal)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use shiroha_core::error::ShirohaError;
+    use shiroha_core::flow::{ActionDef, DispatchMode};
+
+    use super::*;
+
+    fn sample_manifest() -> FlowManifest {
+        FlowManifest {
+            id: "demo".into(),
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "working".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![
+                TransitionDef {
+                    from: "idle".into(),
+                    to: "working".into(),
+                    event: "start".into(),
+                    guard: Some("allow".into()),
+                    action: Some("ship".into()),
+                    timeout: None,
+                },
+                TransitionDef {
+                    from: "idle".into(),
+                    to: "done".into(),
+                    event: "start".into(),
+                    guard: None,
+                    action: Some("fallback".into()),
+                    timeout: None,
+                },
+                TransitionDef {
+                    from: "working".into(),
+                    to: "done".into(),
+                    event: "finish".into(),
+                    guard: None,
+                    action: None,
+                    timeout: None,
+                },
+            ],
+            initial_state: "idle".into(),
+            actions: vec![
+                ActionDef {
+                    name: "ship".into(),
+                    dispatch: DispatchMode::Local,
+                },
+                ActionDef {
+                    name: "fallback".into(),
+                    dispatch: DispatchMode::Local,
+                },
+                ActionDef {
+                    name: "allow".into(),
+                    dispatch: DispatchMode::Local,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn process_event_prefers_first_matching_transition() {
+        let engine = StateMachineEngine::new(sample_manifest());
+
+        let result = engine.process_event("idle", "start").expect("transition");
+
+        assert_eq!(result.from, "idle");
+        assert_eq!(result.to, "working");
+        assert_eq!(result.action.as_deref(), Some("ship"));
+        assert_eq!(result.guard.as_deref(), Some("allow"));
+    }
+
+    #[test]
+    fn process_event_returns_invalid_transition_for_unknown_event() {
+        let engine = StateMachineEngine::new(sample_manifest());
+
+        let error = match engine.process_event("idle", "missing") {
+            Ok(_) => panic!("should reject unknown event"),
+            Err(error) => error,
+        };
+
+        match error {
+            ShirohaError::InvalidTransition { from, to, event } => {
+                assert_eq!(from, "idle");
+                assert!(to.is_empty());
+                assert_eq!(event, "missing");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn terminal_detection_follows_state_kind() {
+        let engine = StateMachineEngine::new(sample_manifest());
+
+        assert!(!engine.is_terminal("idle"));
+        assert!(engine.is_terminal("done"));
+        assert!(!engine.is_terminal("missing"));
+    }
+}
