@@ -7,8 +7,8 @@ package-shirohad := "-p shirohad"
 target-plugin := "--target wasm32-wasip2"
 
 [working-directory: "app/sctl"]
-sctl:
-    {{run_cmd}} {{package-stctl}}
+sctl *params:
+    {{run_cmd}} {{package-stctl}} {{params}}
 
 [working-directory: "app/sctl"]
 build-sctl:
