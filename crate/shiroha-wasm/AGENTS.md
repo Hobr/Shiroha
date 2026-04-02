@@ -5,25 +5,25 @@
 
 ## Purpose
 
-基于 wasmtime 43.x 的 WASM 运行时层。负责模块编译/缓存和 host-guest 桥接。Phase 1 使用 core module ABI，通过线性内存交换 JSON 并调用导出函数。
+基于 wasmtime 43.x 的 WASM 运行时层。负责 component 编译/缓存和 host-guest 桥接。当前仅支持 component/wasip2 typed export 路线。
 
 ## Key Files
 
 | File | Description |
 | ---- | ----------- |
-| `src/runtime.rs` | `WasmRuntime`：封装 wasmtime Engine，提供模块编译入口，开启 fuel 限制 |
-| `src/module_cache.rs` | `WasmModule`（模块+哈希）+ `ModuleCache`（按哈希缓存已编译模块） |
-| `src/host.rs` | `WasmHost`：host-guest 桥接层，定义 ActionContext/GuardContext，按 Phase 1 ABI 调用 WASM 导出函数 |
+| `src/runtime.rs` | `WasmRuntime`：封装 wasmtime Engine，提供 component 编译入口，开启 fuel 并启用 component model |
+| `src/module_cache.rs` | `WasmModule`（component + 哈希）+ `ModuleCache`（按哈希缓存已编译 component） |
+| `src/host.rs` | `WasmHost`：host-guest 桥接层，通过 component typed exports 调用 guest |
 | `src/error.rs` | `WasmError` 错误类型 + 到 `ShirohaError` 的转换 |
+| `wit/flow.wit` | component guest 的规范 world，定义 manifest / action / guard / aggregate 的 WIT 结构 |
 
 ## For AI Agents
 
 ### Working In This Directory
 
-- Phase 1 ABI：guest 需导出 `memory`、`alloc`、`get-manifest` / `invoke-action` / `invoke-guard` / `aggregate`
-- host 与 guest 通过线性内存交换 JSON，`i64` 返回值编码为 `(ptr << 32) | len`
+- component guest 需按 `wit/flow.wit` 导出同名 typed functions；host 通过 `wasmtime::component::Instance::get_typed_func` 调用
 - `WasmModule::compute_hash` 当前使用简易哈希（长度+首尾字节），生产应替换为 SHA-256
-- wasmtime 43.x 支持 component model，但 Phase 1 使用 core module API
+- component guest 实例化时使用 `wasmtime_wasi::p2::add_to_linker_sync` 提供 WASI imports
 
 ### Testing Requirements
 

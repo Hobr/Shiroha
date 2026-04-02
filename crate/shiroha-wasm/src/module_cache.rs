@@ -1,30 +1,29 @@
-//! WASM 模块缓存
+//! WASM component 缓存
 //!
-//! [`WasmModule`] 封装编译后的 wasmtime Module 并关联内容哈希。
-//! [`ModuleCache`] 按哈希缓存模块，避免重复编译。
-//! Node 端根据 Controller 下发的模块 ID 查询缓存。
+//! [`WasmModule`] 封装编译后的 wasmtime component 并关联内容哈希。
+//! [`ModuleCache`] 按哈希缓存已编译 component，避免重复编译。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-/// 编译后的 WASM 模块，附带内容哈希用于缓存索引
+/// 编译后的 WASM component，附带内容哈希用于缓存索引
 pub struct WasmModule {
-    module: wasmtime::Module,
+    component: wasmtime::component::Component,
     hash: String,
 }
 
 impl WasmModule {
-    pub fn new(module: wasmtime::Module, wasm_bytes: &[u8]) -> Self {
+    pub fn new(component: wasmtime::component::Component, wasm_bytes: &[u8]) -> Self {
         let hash = Self::compute_hash(wasm_bytes);
-        Self { module, hash }
+        Self { component, hash }
     }
 
     pub fn hash(&self) -> &str {
         &self.hash
     }
 
-    pub fn module(&self) -> &wasmtime::Module {
-        &self.module
+    pub fn component(&self) -> &wasmtime::component::Component {
+        &self.component
     }
 
     /// 简易哈希（MVP）：长度 + 首尾各16字节的十六进制

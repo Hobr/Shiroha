@@ -278,7 +278,7 @@ impl JobServiceImpl {
                 ))
             })?;
 
-        WasmHost::new(self.state.wasm_runtime.engine(), module.module())
+        WasmHost::new(self.state.wasm_runtime.engine(), module.component())
             .map_err(|e| Status::internal(e.to_string()))
     }
 

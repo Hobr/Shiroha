@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::{Mutex as StdMutex, OnceLock};
+use std::{fs, process::Command};
 
 use hyper_util::rt::TokioIo;
 use shiroha_core::flow::{
@@ -16,9 +18,6 @@ use tower::service_fn;
 use uuid::Uuid;
 
 use crate::server::{ShirohaServer, ShirohaState, spawn_timer_forwarder};
-
-const ACTION_RESULT_JSON: &str = r#"{"status":"success","output":[79,75]}"#;
-const AGGREGATE_RESULT_JSON: &str = r#"{"event":"done"}"#;
 
 pub(crate) struct TestHarness {
     pub(crate) state: Arc<ShirohaState>,
@@ -224,85 +223,60 @@ pub(crate) fn timeout_manifest(flow_id: &str) -> FlowManifest {
 
 pub(crate) fn wasm_for_manifest(manifest: &FlowManifest) -> Vec<u8> {
     let manifest_json = serde_json::to_string(manifest).expect("serialize manifest");
-    let manifest_data = wat_bytes_literal(manifest_json.as_bytes());
-    let action_data = wat_bytes_literal(ACTION_RESULT_JSON.as_bytes());
-    let aggregate_data = wat_bytes_literal(AGGREGATE_RESULT_JSON.as_bytes());
-    let manifest_len = manifest_json.len();
-    let action_len = ACTION_RESULT_JSON.len();
-    let aggregate_len = AGGREGATE_RESULT_JSON.len();
+    let build_key = compute_hash(manifest_json.as_bytes());
+    let build_root = std::env::temp_dir()
+        .join("shiroha-component-fixtures")
+        .join(&build_key);
+    let target_dir = build_root.join("target");
+    let wasm_path = target_dir.join("wasm32-wasip2/release/flow_component_fixture.wasm");
 
-    format!(
-        r#"(module
-          (memory (export "memory") 1)
-          (global $heap (mut i32) (i32.const 4096))
+    if wasm_path.exists() {
+        return fs::read(&wasm_path).expect("read cached component fixture");
+    }
 
-          (data (i32.const 0) "{manifest_data}")
-          (data (i32.const 2048) "{action_data}")
-          (data (i32.const 3072) "{aggregate_data}")
+    static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    let _guard = BUILD_LOCK
+        .get_or_init(|| StdMutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-          (func (export "alloc") (param $len i32) (result i32)
-            (local $ptr i32)
-            global.get $heap
-            local.tee $ptr
-            local.get $len
-            i32.add
-            global.set $heap
-            local.get $ptr)
+    if wasm_path.exists() {
+        return fs::read(&wasm_path).expect("read cached component fixture");
+    }
 
-          (func $pack (param $ptr i32) (param $len i32) (result i64)
-            local.get $ptr
-            i64.extend_i32_u
-            i64.const 32
-            i64.shl
-            local.get $len
-            i64.extend_i32_u
-            i64.or)
+    fs::create_dir_all(&build_root).expect("create fixture build dir");
+    let fixture_manifest =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/flow-component/Cargo.toml");
+    let status = Command::new("cargo")
+        .arg("build")
+        .arg("--offline")
+        .arg("--manifest-path")
+        .arg(&fixture_manifest)
+        .arg("--target")
+        .arg("wasm32-wasip2")
+        .arg("--release")
+        .env("SHIROHA_MANIFEST_JSON", &manifest_json)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .status()
+        .expect("run cargo build for component fixture");
 
-          (func (export "get-manifest") (result i64)
-            i32.const 0
-            i32.const {manifest_len}
-            call $pack)
-
-          (func (export "invoke-action") (param $name_ptr i32) (param $name_len i32) (param $ctx_ptr i32) (param $ctx_len i32) (result i64)
-            local.get $name_ptr
-            i32.load8_u
-            drop
-            local.get $ctx_ptr
-            i32.load8_u
-            drop
-            i32.const 2048
-            i32.const {action_len}
-            call $pack)
-
-          (func (export "invoke-guard") (param $name_ptr i32) (param $name_len i32) (param $ctx_ptr i32) (param $ctx_len i32) (result i32)
-            local.get $ctx_ptr
-            i32.load8_u
-            drop
-            local.get $name_ptr
-            i32.load8_u
-            i32.const 97
-            i32.eq)
-
-          (func (export "aggregate") (param $name_ptr i32) (param $name_len i32) (param $results_ptr i32) (param $results_len i32) (result i64)
-            local.get $name_ptr
-            i32.load8_u
-            drop
-            local.get $results_ptr
-            i32.load8_u
-            drop
-            i32.const 3072
-            i32.const {aggregate_len}
-            call $pack))"#
-    )
-    .into_bytes()
-}
-
-fn wat_bytes_literal(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!(r"\{byte:02x}")).collect()
+    assert!(status.success(), "component fixture build failed");
+    fs::read(&wasm_path).expect("read built component fixture")
 }
 
 fn temp_data_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("shiroha-{prefix}-{}", Uuid::now_v7()))
+}
+
+fn compute_hash(bytes: &[u8]) -> String {
+    let len = bytes.len();
+    let head: Vec<u8> = bytes.iter().take(16).copied().collect();
+    let tail: Vec<u8> = bytes.iter().rev().take(16).copied().collect();
+    format!("{len:016x}-{}-{}", hex(&head), hex(&tail))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 async fn connect_channel(socket_path: &std::path::Path) -> Channel {
