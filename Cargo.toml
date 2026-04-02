@@ -2,6 +2,12 @@
 members = [
     "app/sctl",
     "app/shirohad",
+
+    "crate/shiroha-core",
+    "crate/shiroha-engine",
+    "crate/shiroha-proto",
+    "crate/shiroha-store-redb",
+    "crate/shiroha-wasm",
 ]
 resolver = "3"
 
@@ -13,8 +19,16 @@ license = "GPL-3.0"
 repository = "https://github.com/Hobr/Shiroha"
 
 [workspace.dependencies]
+# 内部
+shiroha-core = { path = "crate/shiroha-core" }
+shiroha-engine = { path = "crate/shiroha-engine" }
+shiroha-proto = { path = "crate/shiroha-proto" }
+shiroha-store-redb = { path = "crate/shiroha-store-redb" }
+shiroha-wasm = { path = "crate/shiroha-wasm" }
+
 # 异步运行时
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["time"] }
 
 # WASM 运行时
 wasmtime = { version = "43.0", features = ["trace-log"] }
@@ -23,6 +37,10 @@ wasmtime-wasi = { version = "43.0", features = ["p3"] }
 # 序列化
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# 日志与追踪
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # CLI
 clap = { version = "4.6", features = ["derive", "env", "string", "unicode"] }
@@ -40,7 +58,7 @@ redb = "3.1"
 config = "0.15"
 
 # 错误处理
-thiserror = "2"
+thiserror = "2.0"
 anyhow = "1.0"
 
 # 信息
