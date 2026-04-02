@@ -9,7 +9,11 @@ use tracing_subscriber::EnvFilter;
 pub mod job_service;
 
 mod flow_service;
+#[cfg(test)]
+mod grpc_tests;
 mod server;
+#[cfg(test)]
+mod test_support;
 shadow_rs::shadow!(build);
 
 #[derive(Parser)]

@@ -1,6 +1,8 @@
 //! 服务器核心：初始化共享状态，启动 gRPC 服务
 
 use std::collections::{HashMap, VecDeque};
+#[cfg(test)]
+use std::future::Future;
 use std::sync::Arc;
 
 use shiroha_core::flow::FlowRegistration;
@@ -12,6 +14,9 @@ use shiroha_store_redb::store::RedbStorage;
 use shiroha_wasm::module_cache::ModuleCache;
 use shiroha_wasm::runtime::WasmRuntime;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+#[cfg(test)]
+use tokio_stream::wrappers::UnixListenerStream;
 
 use crate::flow_service::FlowServiceImpl;
 use crate::job_service::JobServiceImpl;
@@ -38,6 +43,29 @@ pub struct ShirohaServer {
     state: Arc<ShirohaState>,
     /// 定时器事件接收端
     timer_rx: tokio::sync::mpsc::Receiver<shiroha_engine::timer::TimerEvent>,
+}
+
+pub(crate) fn spawn_timer_forwarder(
+    state: Arc<ShirohaState>,
+    mut timer_rx: tokio::sync::mpsc::Receiver<shiroha_engine::timer::TimerEvent>,
+) -> JoinHandle<()> {
+    let timer_job_svc = JobServiceImpl::new(state);
+    tokio::spawn(async move {
+        while let Some(timer_event) = timer_rx.recv().await {
+            let event_name = timer_event.event.clone();
+            if let Err(error) = timer_job_svc
+                .enqueue_event(timer_event.job_id, timer_event.event, None)
+                .await
+            {
+                tracing::error!(
+                    job_id = %timer_event.job_id,
+                    event = event_name,
+                    error = %error,
+                    "failed to process timer event"
+                );
+            }
+        }
+    })
 }
 
 impl ShirohaServer {
@@ -94,25 +122,9 @@ impl ShirohaServer {
 
         let flow_svc = FlowServiceImpl::new(self.state.clone());
         let job_svc = JobServiceImpl::new(self.state.clone());
-        let timer_job_svc = JobServiceImpl::new(self.state.clone());
 
-        let mut timer_rx = std::mem::replace(&mut self.timer_rx, tokio::sync::mpsc::channel(1).1);
-        tokio::spawn(async move {
-            while let Some(timer_event) = timer_rx.recv().await {
-                let event_name = timer_event.event.clone();
-                if let Err(error) = timer_job_svc
-                    .enqueue_event(timer_event.job_id, timer_event.event, None)
-                    .await
-                {
-                    tracing::error!(
-                        job_id = %timer_event.job_id,
-                        event = event_name,
-                        error = %error,
-                        "failed to process timer event"
-                    );
-                }
-            }
-        });
+        let timer_rx = std::mem::replace(&mut self.timer_rx, tokio::sync::mpsc::channel(1).1);
+        let _timer_forwarder = spawn_timer_forwarder(self.state.clone(), timer_rx);
 
         tracing::info!(%addr, "gRPC server listening");
 
@@ -127,5 +139,85 @@ impl ShirohaServer {
             .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl ShirohaServer {
+    pub(crate) async fn start_with_unix_listener<F>(
+        mut self,
+        listener: tokio::net::UnixListener,
+        shutdown: F,
+    ) -> anyhow::Result<()>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let flow_svc = FlowServiceImpl::new(self.state.clone());
+        let job_svc = JobServiceImpl::new(self.state.clone());
+        let timer_rx = std::mem::replace(&mut self.timer_rx, tokio::sync::mpsc::channel(1).1);
+        let _timer_forwarder = spawn_timer_forwarder(self.state.clone(), timer_rx);
+
+        tonic::transport::Server::builder()
+            .add_service(
+                shiroha_proto::shiroha_api::flow_service_server::FlowServiceServer::new(flow_svc),
+            )
+            .add_service(
+                shiroha_proto::shiroha_api::job_service_server::JobServiceServer::new(job_svc),
+            )
+            .serve_with_incoming_shutdown(UnixListenerStream::new(listener), shutdown)
+            .await?;
+
+        Ok(())
+    }
+
+    pub(crate) fn into_test_parts(
+        self,
+    ) -> (
+        Arc<ShirohaState>,
+        tokio::sync::mpsc::Receiver<shiroha_engine::timer::TimerEvent>,
+    ) {
+        (self.state, self.timer_rx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow_service::FlowServiceImpl;
+    use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
+    use shiroha_proto::shiroha_api::DeployFlowRequest;
+    use shiroha_proto::shiroha_api::flow_service_server::FlowService;
+    use tonic::Request;
+
+    #[tokio::test]
+    async fn new_server_loads_persisted_flows_into_memory_registry() {
+        let harness = TestHarness::new("server-reload").await;
+        let data_dir = harness.data_dir.clone();
+        let flow_service = FlowServiceImpl::new(harness.state.clone());
+
+        flow_service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "persisted".into(),
+                wasm_bytes: wasm_for_manifest(&approval_manifest("persisted", Some("allow"))),
+            }))
+            .await
+            .expect("deploy flow");
+
+        drop(flow_service);
+        drop(harness);
+
+        let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
+            .await
+            .expect("reload server");
+
+        assert!(reloaded.state.flows.lock().await.contains_key("persisted"));
+        assert!(
+            reloaded
+                .state
+                .engines
+                .lock()
+                .await
+                .contains_key("persisted")
+        );
     }
 }
