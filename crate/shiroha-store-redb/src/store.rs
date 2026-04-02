@@ -118,6 +118,26 @@ impl Storage for RedbStorage {
         Ok(())
     }
 
+    async fn save_job_with_event(&self, job: &Job, event: &EventRecord) -> Result<()> {
+        let job_data = serde_json::to_vec(job).map_err(s)?;
+        let event_data = serde_json::to_vec(event).map_err(s)?;
+        let event_key = Self::event_key(event.job_id, event.id);
+        let txn = self.db.begin_write().map_err(s)?;
+        {
+            let mut jobs = txn.open_table(JOBS_TABLE).map_err(s)?;
+            jobs.insert(job.id.as_bytes().as_slice(), job_data.as_slice())
+                .map_err(s)?;
+        }
+        {
+            let mut events = txn.open_table(EVENTS_TABLE).map_err(s)?;
+            events
+                .insert(event_key.as_slice(), event_data.as_slice())
+                .map_err(s)?;
+        }
+        txn.commit().map_err(s)?;
+        Ok(())
+    }
+
     async fn get_job(&self, job_id: Uuid) -> Result<Option<Job>> {
         let txn = self.db.begin_read().map_err(s)?;
         let table = txn.open_table(JOBS_TABLE).map_err(s)?;

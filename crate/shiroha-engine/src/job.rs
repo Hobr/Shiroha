@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use shiroha_core::error::{Result, ShirohaError};
 use shiroha_core::event::{EventKind, EventRecord};
-use shiroha_core::job::{Job, JobState};
+use shiroha_core::job::{ExecutionStatus, Job, JobState};
 use shiroha_core::storage::Storage;
 use uuid::Uuid;
 
@@ -61,17 +61,15 @@ impl<S: Storage> JobManager<S> {
             current_state: initial_state.to_string(),
             context,
         };
-        self.storage.save_job(&job).await?;
-        self.storage
-            .append_event(&make_event(
-                job.id,
-                EventKind::Created {
-                    flow_id: flow_id.to_string(),
-                    flow_version,
-                    initial_state: initial_state.to_string(),
-                },
-            ))
-            .await?;
+        let event = make_event(
+            job.id,
+            EventKind::Created {
+                flow_id: flow_id.to_string(),
+                flow_version,
+                initial_state: initial_state.to_string(),
+            },
+        );
+        self.storage.save_job_with_event(&job, &event).await?;
         Ok(job)
     }
 
@@ -97,10 +95,8 @@ impl<S: Storage> JobManager<S> {
             });
         }
         job.state = JobState::Paused;
-        self.storage.save_job(&job).await?;
-        self.storage
-            .append_event(&make_event(job_id, EventKind::Paused))
-            .await
+        let event = make_event(job_id, EventKind::Paused);
+        self.storage.save_job_with_event(&job, &event).await
     }
 
     /// 恢复 Job（Paused → Running）
@@ -113,10 +109,8 @@ impl<S: Storage> JobManager<S> {
             });
         }
         job.state = JobState::Running;
-        self.storage.save_job(&job).await?;
-        self.storage
-            .append_event(&make_event(job_id, EventKind::Resumed))
-            .await
+        let event = make_event(job_id, EventKind::Resumed);
+        self.storage.save_job_with_event(&job, &event).await
     }
 
     /// 取消 Job（Running/Paused → Cancelled）
@@ -129,10 +123,8 @@ impl<S: Storage> JobManager<S> {
             });
         }
         job.state = JobState::Cancelled;
-        self.storage.save_job(&job).await?;
-        self.storage
-            .append_event(&make_event(job_id, EventKind::Cancelled))
-            .await
+        let event = make_event(job_id, EventKind::Cancelled);
+        self.storage.save_job_with_event(&job, &event).await
     }
 
     /// 完成 Job（→ Completed）
@@ -140,15 +132,13 @@ impl<S: Storage> JobManager<S> {
         let mut job = self.load_job(job_id).await?;
         job.state = JobState::Completed;
         job.current_state = final_state.to_string();
-        self.storage.save_job(&job).await?;
-        self.storage
-            .append_event(&make_event(
-                job_id,
-                EventKind::Completed {
-                    final_state: final_state.to_string(),
-                },
-            ))
-            .await
+        let event = make_event(
+            job_id,
+            EventKind::Completed {
+                final_state: final_state.to_string(),
+            },
+        );
+        self.storage.save_job_with_event(&job, &event).await
     }
 
     /// 执行状态转移：更新 current_state 并记录 Transition 事件
@@ -168,15 +158,33 @@ impl<S: Storage> JobManager<S> {
             });
         }
         job.current_state = to.to_string();
-        self.storage.save_job(&job).await?;
+        let event = make_event(
+            job_id,
+            EventKind::Transition {
+                event: event.to_string(),
+                from: from.to_string(),
+                to: to.to_string(),
+                action,
+            },
+        );
+        self.storage.save_job_with_event(&job, &event).await
+    }
+
+    /// 记录 Action 执行完成事件，不修改 Job 状态。
+    pub async fn record_action_result(
+        &self,
+        job_id: Uuid,
+        action: &str,
+        node_id: Option<String>,
+        status: ExecutionStatus,
+    ) -> Result<()> {
         self.storage
             .append_event(&make_event(
                 job_id,
-                EventKind::Transition {
-                    event: event.to_string(),
-                    from: from.to_string(),
-                    to: to.to_string(),
-                    action,
+                EventKind::ActionComplete {
+                    action: action.to_string(),
+                    node_id,
+                    status,
                 },
             ))
             .await

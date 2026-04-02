@@ -3,13 +3,13 @@
 //! Phase 1 仅支持 standalone 模式（Controller + Node 同进程）。
 //! 启动后通过 gRPC 对外提供 FlowService 和 JobService。
 
-mod flow_service;
-mod job_service;
-mod server;
-
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
+pub mod job_service;
+
+mod flow_service;
+mod server;
 shadow_rs::shadow!(build);
 
 #[derive(Parser)]
@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
         "starting shirohad"
     );
 
-    let srv = server::ShirohaServer::new(&cli.data_dir)?;
+    let srv = server::ShirohaServer::new(&cli.data_dir).await?;
     srv.start(&cli.listen).await?;
 
     Ok(())

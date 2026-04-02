@@ -50,21 +50,16 @@ impl FlowService for FlowServiceImpl {
 
         let wasm_module = Arc::new(WasmModule::new(module, &wasm_bytes));
 
-        // 尝试从 WASM 提取 manifest（MVP 阶段尚未实现 host-guest 协议）
+        // 从 WASM 提取 manifest
         let mut host = shiroha_wasm::host::WasmHost::new(
             self.state.wasm_runtime.engine(),
             wasm_module.module(),
         )
         .map_err(|e| Status::internal(e.to_string()))?;
 
-        let manifest = match host.get_manifest() {
-            Ok(m) => m,
-            Err(_) => {
-                return Err(Status::unimplemented(
-                    "WASM manifest extraction not yet implemented. Deploy with JSON manifest endpoint in future.",
-                ));
-            }
-        };
+        let manifest = host
+            .get_manifest()
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         // 静态验证
         let warnings = FlowValidator::validate(&manifest);

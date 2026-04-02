@@ -78,6 +78,19 @@ WASM 模块导出以下执行接口供框架调用：
 
 聚合决策返回一个事件名，Controller 用该事件驱动状态机转移。
 
+### Phase 1 ABI
+
+Phase 1 先使用 core module ABI，而不是 component model。当前约定：
+
+- guest 必须导出 `memory`
+- guest 必须导出 `alloc(len: i32) -> i32`，供 host 写入入参
+- `get-manifest()` 返回一个 `i64`，编码方式为 `(ptr << 32) | len`
+- `invoke-action(name_ptr, name_len, ctx_ptr, ctx_len) -> i64`
+- `invoke-guard(name_ptr, name_len, ctx_ptr, ctx_len) -> i32`
+- `aggregate(name_ptr, name_len, results_ptr, results_len) -> i64`
+
+其中 `context`、`results` 和返回值都使用 JSON 序列化，通过 guest 线性内存传递。host 读取 `ptr/len` 后反序列化为 `FlowManifest`、`ActionResult`、`bool` 或 `AggregateDecision`。
+
 ### 执行流程
 
 **普通 Action（local / remote）：**
