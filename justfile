@@ -30,7 +30,22 @@ build-shirohad:
 release-shirohad:
     {{build_cmd}} {{package-shirohad}} --release
 
-build: build-sctl build-shirohad
+[working-directory: "example/simple"]
+build-example-plugin-simple:
+    {{build_cmd}} {{target-plugin}}
+
+[working-directory: "example/advanced"]
+build-example-plugin-advanced:
+    {{build_cmd}} {{target-plugin}}
+
+[working-directory: "example/sub"]
+build-example-plugin-sub:
+    {{build_cmd}} {{target-plugin}} --manifest-path ../sub/child/Cargo.toml
+    {{build_cmd}} {{target-plugin}} --manifest-path ../sub/parent/Cargo.toml
+
+build-example: build-example-plugin-simple build-example-plugin-advanced build-example-plugin-sub
+
+build: build-sctl build-shirohad build-example
 release: release-sctl release-shirohad
 
 install-dev:
