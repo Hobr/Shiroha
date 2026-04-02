@@ -10,7 +10,9 @@ use uuid::Uuid;
 /// 状态机拓扑清单，由 WASM 模块的 `get-manifest` 导出返回
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlowManifest {
+    /// guest 自描述的 flow 标识；部署时平台侧也会额外维护自己的注册键。
     pub id: String,
+    /// 完整状态集合，和 `transitions` 一起构成静态拓扑快照。
     pub states: Vec<StateDef>,
     pub transitions: Vec<TransitionDef>,
     /// 状态机的起始状态名，必须存在于 `states` 中
@@ -24,10 +26,10 @@ pub struct FlowManifest {
 pub struct StateDef {
     pub name: String,
     pub kind: StateKind,
-    /// 进入此状态时自动执行的 action
+    /// 声明式进入钩子；具体何时触发由控制面执行链路决定。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_enter: Option<String>,
-    /// 离开此状态时自动执行的 action
+    /// 声明式离开钩子；通常与转移动作分开建模。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_exit: Option<String>,
     /// 子流程配置，仅在 `kind = Subprocess` 时有效
@@ -98,7 +100,7 @@ pub struct ActionDef {
 pub enum DispatchMode {
     /// Controller 本地执行
     Local,
-    /// 分发到单个 Node 执行
+    /// 分发到单个 Node 执行；standalone 模式下通常退化为本地调用。
     Remote,
     /// 分发到多个 Node 并行执行，聚合结果后决定状态转移
     FanOut(FanOutConfig),
@@ -136,6 +138,7 @@ pub struct FlowRegistration {
     pub flow_id: String,
     /// 部署版本号（UUIDv7），每次部署递增
     pub version: Uuid,
+    /// 部署时冻结下来的 manifest 快照，保证旧 Job 可以继续按旧版拓扑运行。
     pub manifest: FlowManifest,
     /// WASM 模块的内容哈希，用于 Node 端缓存
     pub wasm_hash: String,

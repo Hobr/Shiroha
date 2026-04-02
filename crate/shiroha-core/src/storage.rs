@@ -29,6 +29,10 @@ pub trait Storage: Send + Sync {
     fn delete_flow(&self, flow_id: &str) -> impl Future<Output = Result<()>> + Send;
 
     fn save_job(&self, job: &Job) -> impl Future<Output = Result<()>> + Send;
+    /// 同时写入 Job 快照和事件记录。
+    ///
+    /// 默认实现按顺序调用 `save_job` 和 `append_event`。
+    /// 只有后端覆写该方法时，才能把两次写入合并为单个原子提交。
     fn save_job_with_event(
         &self,
         job: &Job,
@@ -53,6 +57,7 @@ pub trait Storage: Send + Sync {
 pub struct MemoryStorage {
     flows: Arc<RwLock<HashMap<String, FlowRegistration>>>,
     jobs: Arc<RwLock<HashMap<Uuid, Job>>>,
+    /// 事件按追加顺序保存在内存中，测试可以直接断言生命周期顺序。
     events: Arc<RwLock<Vec<EventRecord>>>,
 }
 

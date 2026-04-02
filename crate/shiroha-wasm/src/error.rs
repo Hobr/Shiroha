@@ -19,12 +19,14 @@ pub enum WasmError {
 
 impl From<wasmtime::Error> for WasmError {
     fn from(e: wasmtime::Error) -> Self {
+        // 大多数 wasmtime 运行期错误最终都在调用阶段暴露，统一归到 Execution。
         Self::Execution(e.to_string())
     }
 }
 
 impl From<WasmError> for ShirohaError {
     fn from(e: WasmError) -> Self {
+        // 向 core 层收敛后不再暴露 wasmtime 细节，只保留文本描述。
         ShirohaError::Wasm(e.to_string())
     }
 }

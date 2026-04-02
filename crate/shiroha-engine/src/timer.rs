@@ -107,6 +107,7 @@ impl TimerWheel {
             if entry.job_id == job_id && !entry.paused {
                 entry.abort_handle.abort();
                 let elapsed = entry.registered_at.elapsed();
+                // 暂停时把“原始持续时间 - 已流逝时间”记下来，恢复时继续倒计时。
                 entry.remaining = Some(entry.duration.saturating_sub(elapsed));
                 entry.paused = true;
             }
@@ -143,6 +144,7 @@ impl TimerWheel {
 
                 entry.abort_handle = handle;
                 entry.registered_at = Instant::now();
+                // 恢复后新的“完整 duration”就是剩余时间，支持多次 pause/resume 叠加。
                 entry.duration = remaining;
                 entry.paused = false;
                 entry.remaining = None;

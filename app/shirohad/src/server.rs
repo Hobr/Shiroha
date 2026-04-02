@@ -26,9 +26,11 @@ pub struct ShirohaState {
     pub storage: Arc<RedbStorage>,
     pub wasm_runtime: Arc<WasmRuntime>,
     pub module_cache: Arc<ModuleCache>,
-    /// 内存中的 Flow 注册表（flow_id → FlowRegistration）
+    /// 内存中的 Flow 注册表（flow_id → FlowRegistration）。
+    /// 部署后会落盘到 storage，这里保留一份热路径缓存，避免每次请求都查数据库。
     pub flows: Arc<Mutex<HashMap<String, FlowRegistration>>>,
-    /// 每个 Flow 对应的状态机引擎（flow_id → Engine）
+    /// 每个 Flow 对应的状态机引擎（flow_id → Engine）。
+    /// Engine 是只读拓扑索引，常驻内存后事件处理只需要查 HashMap。
     pub engines: Arc<Mutex<HashMap<String, StateMachineEngine>>>,
     /// Job 级串行化锁，保证同一 Job 任一时刻只处理一个事件/生命周期操作
     pub(crate) job_locks: Arc<Mutex<HashMap<uuid::Uuid, Arc<Mutex<()>>>>>,
@@ -53,6 +55,8 @@ pub(crate) fn spawn_timer_forwarder(
     tokio::spawn(async move {
         while let Some(timer_event) = timer_rx.recv().await {
             let event_name = timer_event.event.clone();
+            // 定时器事件和外部 trigger-event 共用同一条 enqueue 路径，
+            // 这样串行化、暂停队列和审计行为都保持一致。
             if let Err(error) = timer_job_svc
                 .enqueue_event(timer_event.job_id, timer_event.event, None)
                 .await
@@ -100,6 +104,8 @@ impl ShirohaServer {
         if !persisted_flows.is_empty() {
             let mut flows = state.flows.lock().await;
             let mut engines = state.engines.lock().await;
+            // 重启后恢复的是 Flow 拓扑和编译入口，不包括运行中的 timer 状态；
+            // timer 会在后续 Job 创建或状态迁移时重新注册。
             for registration in persisted_flows {
                 engines.insert(
                     registration.flow_id.clone(),
@@ -123,6 +129,7 @@ impl ShirohaServer {
         let flow_svc = FlowServiceImpl::new(self.state.clone());
         let job_svc = JobServiceImpl::new(self.state.clone());
 
+        // Receiver 只能被一个 forwarder 持有一次，因此先把真实的 timer_rx 移走。
         let timer_rx = std::mem::replace(&mut self.timer_rx, tokio::sync::mpsc::channel(1).1);
         let _timer_forwarder = spawn_timer_forwarder(self.state.clone(), timer_rx);
 

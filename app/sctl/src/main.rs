@@ -82,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    // 整个 CLI 生命周期只建立一次 channel，然后把子命令分派给薄封装客户端。
     let mut c = client::ShirohaClient::connect(&cli.server).await?;
 
     match cli.command {

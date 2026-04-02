@@ -38,6 +38,7 @@ impl Scheduler for RoundRobinScheduler {
         if nodes.is_empty() {
             return None;
         }
+        // 这里只追求低开销的“尽量轮询”，不需要跨线程的强顺序保证。
         let idx = self.counter.fetch_add(1, Ordering::Relaxed) % nodes.len();
         Some(nodes[idx].id.clone())
     }

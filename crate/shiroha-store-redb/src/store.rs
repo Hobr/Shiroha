@@ -123,6 +123,7 @@ impl Storage for RedbStorage {
         let event_data = serde_json::to_vec(event).map_err(s)?;
         let event_key = Self::event_key(event.job_id, event.id);
         let txn = self.db.begin_write().map_err(s)?;
+        // Job 快照与事件日志放进同一个 redb 写事务，避免只更新其中一份。
         {
             let mut jobs = txn.open_table(JOBS_TABLE).map_err(s)?;
             jobs.insert(job.id.as_bytes().as_slice(), job_data.as_slice())
@@ -182,8 +183,8 @@ impl Storage for RedbStorage {
         let table = txn.open_table(EVENTS_TABLE).map_err(s)?;
         let prefix = job_id.as_bytes();
         let mut events = Vec::new();
-        // 全表扫描，按 job_id 前缀过滤
-        // UUIDv7 的 job_id 保证同一 Job 的事件键前16字节相同
+        // 当前实现没有额外的 job_id 二级索引，因此直接扫描 events 表，
+        // 再利用复合键前 16 字节等于 job_id 的特性做过滤。
         for entry in table.iter().map_err(s)? {
             let (k, v) = entry.map_err(s)?;
             let key_bytes: &[u8] = k.value();
@@ -192,6 +193,7 @@ impl Storage for RedbStorage {
                 events.push(event);
             }
         }
+        // 对外统一按事件发生时间返回，避免上层依赖底层 B-tree 迭代顺序。
         events.sort_by_key(|e: &EventRecord| e.timestamp_ms);
         Ok(events)
     }

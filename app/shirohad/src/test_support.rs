@@ -1,3 +1,8 @@
+//! 测试辅助工具。
+//!
+//! 这里集中放 server harness、临时数据目录、WASM fixture 构造和
+//! UDS gRPC 连接逻辑，避免各测试文件重复搭基础设施。
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::{Mutex as StdMutex, OnceLock};
@@ -22,9 +27,14 @@ use crate::server::{ShirohaServer, ShirohaState, spawn_timer_forwarder};
 pub(crate) struct TestHarness {
     pub(crate) state: Arc<ShirohaState>,
     pub(crate) data_dir: PathBuf,
+    /// 只有需要真实 timer -> job 转发链路的测试才会启动这个任务。
     timer_forwarder: Option<tokio::task::JoinHandle<()>>,
 }
 
+/// 启动真实 gRPC server 的集成测试夹具。
+///
+/// 与 `TestHarness` 不同，它通过 Unix Domain Socket 暴露网络接口，
+/// 适合覆盖 tonic client/server 往返链路。
 pub(crate) struct LiveGrpcServer {
     pub(crate) data_dir: PathBuf,
     socket_path: PathBuf,
@@ -48,6 +58,8 @@ impl TestHarness {
     }
 
     pub(crate) async fn with_timer_forwarder(prefix: &str) -> Self {
+        // 某些测试会直接操作 `JobServiceImpl`，这时需要手动补上 timer forwarder
+        // 才能让 TimerWheel 事件真正进入 enqueue 路径。
         let data_dir = temp_data_dir(prefix);
         let server = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await
@@ -113,6 +125,7 @@ impl LiveGrpcServer {
         for _ in 0..40 {
             if let Ok(channel) = try_connect_channel(&self.socket_path).await {
                 let mut client = FlowServiceClient::new(channel);
+                // 选择最轻量的 RPC 探针，确认 server 已经完成 accept + service 注册。
                 match client.list_flows(ListFlowsRequest {}).await {
                     Ok(_) => return,
                     Err(status) if status.code() != tonic::Code::Unavailable => return,
@@ -142,6 +155,7 @@ impl Drop for LiveGrpcServer {
 }
 
 pub(crate) fn approval_manifest(flow_id: &str, guard: Option<&str>) -> FlowManifest {
+    // 最小 happy-path flow：一次 approve 事件驱动一次转移和一次 action。
     FlowManifest {
         id: flow_id.to_string(),
         states: vec![
@@ -187,6 +201,7 @@ pub(crate) fn approval_manifest(flow_id: &str, guard: Option<&str>) -> FlowManif
 }
 
 pub(crate) fn timeout_manifest(flow_id: &str) -> FlowManifest {
+    // 专门用于覆盖 timeout -> enqueue_event -> terminal transition 这条链路。
     FlowManifest {
         id: flow_id.to_string(),
         states: vec![
@@ -223,6 +238,7 @@ pub(crate) fn timeout_manifest(flow_id: &str) -> FlowManifest {
 
 pub(crate) fn wasm_for_manifest(manifest: &FlowManifest) -> Vec<u8> {
     let manifest_json = serde_json::to_string(manifest).expect("serialize manifest");
+    // 生成结果按 manifest 内容缓存，避免每个测试都重新编译同一个 component fixture。
     let build_key = compute_hash(manifest_json.as_bytes());
     let build_root = std::env::temp_dir()
         .join("shiroha-component-fixtures")
@@ -235,6 +251,7 @@ pub(crate) fn wasm_for_manifest(manifest: &FlowManifest) -> Vec<u8> {
     }
 
     static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    // cargo build 会写同一个 target 目录；串行化能避免并发测试互相踩缓存。
     let _guard = BUILD_LOCK
         .get_or_init(|| StdMutex::new(()))
         .lock()
@@ -289,6 +306,7 @@ async fn try_connect_channel(
     socket_path: &std::path::Path,
 ) -> Result<Channel, tonic::transport::Error> {
     let socket_path = socket_path.to_path_buf();
+    // tonic 仍要求一个 HTTP endpoint，这里只借用其配置对象，真正连接走 UDS connector。
     Endpoint::try_from("http://[::]:50051")
         .expect("valid endpoint")
         .connect_with_connector(service_fn(move |_| {

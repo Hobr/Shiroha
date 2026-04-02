@@ -56,6 +56,7 @@ impl FlowValidator {
         let state_names: HashSet<&str> = manifest.states.iter().map(|s| s.name.as_str()).collect();
         let action_names: HashSet<&str> =
             manifest.actions.iter().map(|a| a.name.as_str()).collect();
+        // 当前 manifest 没有单独的 guard 注册表，因此 guard/action 都从 actions 列表校验。
 
         // 初始状态必须存在
         if !state_names.contains(manifest.initial_state.as_str()) {
@@ -93,6 +94,7 @@ impl FlowValidator {
         // 终态不应有出边
         for state in &manifest.states {
             if state.kind == shiroha_core::flow::StateKind::Terminal {
+                // 这里给 warning 而不是 error，让部署流程可以决定是否容忍这类“可疑但不致命”的拓扑。
                 let has_outgoing = manifest.transitions.iter().any(|t| t.from == state.name);
                 if has_outgoing {
                     warnings.push(ValidationWarning::TerminalWithOutgoing(state.name.clone()));
@@ -100,7 +102,7 @@ impl FlowValidator {
             }
         }
 
-        // BFS 可达性分析：从初始状态出发，检测不可达的状态
+        // BFS 可达性分析：只看静态拓扑，不考虑 guard 是否可能在运行时拒绝某条边。
         let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
         for t in &manifest.transitions {
             adj.entry(t.from.as_str()).or_default().push(t.to.as_str());

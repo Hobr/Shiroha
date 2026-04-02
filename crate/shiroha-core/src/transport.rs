@@ -23,12 +23,14 @@ pub struct NodeInfo {
 /// 节点间传输消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+    /// Transport 层只搬运不解释 payload，编码格式由上层协议决定。
     pub payload: Vec<u8>,
 }
 
 /// 节点间传输响应
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
+    /// 与 `Message::payload` 一样保持 opaque bytes，便于替换底层协议。
     pub payload: Vec<u8>,
 }
 
@@ -56,12 +58,14 @@ impl InProcessTransport {
 
 impl Transport for InProcessTransport {
     async fn send(&self, _target: &str, msg: Message) -> Result<Response> {
+        // standalone 模式不真正路由到节点，只保留“请求 -> 响应”接口形状。
         Ok(Response {
             payload: msg.payload,
         })
     }
 
     async fn broadcast(&self, msg: Message) -> Result<Vec<Response>> {
+        // 当前进程内只有一个执行端，因此 broadcast 退化成单响应。
         Ok(vec![Response {
             payload: msg.payload,
         }])

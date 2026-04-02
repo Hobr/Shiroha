@@ -34,6 +34,7 @@ impl ShirohaClient {
             })
             .await?
             .into_inner();
+        // CLI 只做轻量展示，不缓存服务端状态；想看详情需要再次调用查询命令。
         println!("deployed flow_id={} version={}", resp.flow_id, resp.version);
         Ok(())
     }
@@ -48,6 +49,7 @@ impl ShirohaClient {
             println!("no flows");
             return Ok(());
         }
+        // 保持纯文本表格输出，避免给 shell 管道增加额外格式依赖。
         println!(
             "{:<20} {:<38} {:<15} STATES",
             "FLOW_ID", "VERSION", "INITIAL"
@@ -116,6 +118,7 @@ impl ShirohaClient {
             .trigger_event(TriggerEventRequest {
                 job_id: job_id.to_string(),
                 event: event.to_string(),
+                // 当前 CLI 不支持直接传二进制 payload，需要更复杂输入时可后续扩展。
                 payload: None,
             })
             .await?;
@@ -165,6 +168,7 @@ impl ShirohaClient {
             println!("no events");
             return Ok(());
         }
+        // 直接输出服务端返回的 kind_json，便于调试序列化后的事件内容。
         println!("{:<38} {:<16} KIND", "ID", "TIMESTAMP_MS");
         for e in &resp.events {
             println!("{:<38} {:<16} {}", e.id, e.timestamp_ms, e.kind_json);
