@@ -198,3 +198,134 @@ impl<S: Storage> JobManager<S> {
             .ok_or_else(|| ShirohaError::JobNotFound(job_id.to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use shiroha_core::event::EventKind;
+    use shiroha_core::job::ExecutionStatus;
+    use shiroha_core::storage::{MemoryStorage, Storage};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn create_job_persists_job_and_created_event() {
+        let storage = Arc::new(MemoryStorage::new());
+        let manager = JobManager::new(storage.clone());
+        let flow_version = Uuid::now_v7();
+
+        let job = manager
+            .create_job("demo", flow_version, "idle", Some(vec![1, 2, 3]))
+            .await
+            .expect("job created");
+
+        let stored = storage
+            .get_job(job.id)
+            .await
+            .expect("read job")
+            .expect("job exists");
+        assert_eq!(stored.flow_id, "demo");
+        assert_eq!(stored.current_state, "idle");
+        assert_eq!(stored.state, JobState::Running);
+        assert_eq!(stored.context, Some(vec![1, 2, 3]));
+
+        let events = manager.get_events(job.id).await.expect("events");
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0].kind,
+            EventKind::Created {
+                flow_id,
+                flow_version: version,
+                initial_state,
+            } if flow_id == "demo" && *version == flow_version && initial_state == "idle"
+        ));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_transitions_and_action_results_are_recorded() {
+        let storage = Arc::new(MemoryStorage::new());
+        let manager = JobManager::new(storage);
+        let job = manager
+            .create_job("demo", Uuid::now_v7(), "idle", None)
+            .await
+            .expect("job created");
+
+        manager.pause_job(job.id).await.expect("pause");
+        manager.resume_job(job.id).await.expect("resume");
+        manager
+            .transition_job(job.id, "finish", "idle", "done", Some("ship".into()))
+            .await
+            .expect("transition");
+        manager
+            .record_action_result(
+                job.id,
+                "ship",
+                Some("standalone".into()),
+                ExecutionStatus::Success,
+            )
+            .await
+            .expect("action result");
+        manager
+            .complete_job(job.id, "done")
+            .await
+            .expect("complete");
+
+        let final_job = manager
+            .get_job(job.id)
+            .await
+            .expect("read job")
+            .expect("job exists");
+        assert_eq!(final_job.state, JobState::Completed);
+        assert_eq!(final_job.current_state, "done");
+
+        let events = manager.get_events(job.id).await.expect("events");
+        assert_eq!(events.len(), 6);
+        assert!(matches!(events[0].kind, EventKind::Created { .. }));
+        assert!(matches!(events[1].kind, EventKind::Paused));
+        assert!(matches!(events[2].kind, EventKind::Resumed));
+        assert!(matches!(
+            &events[3].kind,
+            EventKind::Transition {
+                event,
+                from,
+                to,
+                action,
+            } if event == "finish" && from == "idle" && to == "done" && action.as_deref() == Some("ship")
+        ));
+        assert!(matches!(
+            &events[4].kind,
+            EventKind::ActionComplete {
+                action,
+                node_id,
+                status,
+            } if action == "ship" && node_id.as_deref() == Some("standalone") && *status == ExecutionStatus::Success
+        ));
+        assert!(matches!(
+            &events[5].kind,
+            EventKind::Completed { final_state } if final_state == "done"
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_lifecycle_transition_returns_error() {
+        let storage = Arc::new(MemoryStorage::new());
+        let manager = JobManager::new(storage);
+        let job = manager
+            .create_job("demo", Uuid::now_v7(), "idle", None)
+            .await
+            .expect("job created");
+
+        manager.pause_job(job.id).await.expect("pause");
+        let error = manager
+            .pause_job(job.id)
+            .await
+            .expect_err("second pause fails");
+
+        match error {
+            ShirohaError::InvalidJobState { expected, actual } => {
+                assert_eq!(expected, "running");
+                assert_eq!(actual, "paused");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+}

@@ -165,3 +165,70 @@ impl TimerWheel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use tokio::task::yield_now;
+    use tokio::time::{Duration, sleep, timeout};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn registered_timer_emits_event() {
+        let (wheel, mut receiver) = TimerWheel::new();
+        let job_id = Uuid::now_v7();
+
+        wheel.register(job_id, "timeout".into(), Duration::from_millis(20));
+
+        let event = timeout(Duration::from_millis(200), receiver.recv())
+            .await
+            .expect("timer should fire")
+            .expect("channel should yield event");
+
+        assert_eq!(event.job_id, job_id);
+        assert_eq!(event.event, "timeout");
+    }
+
+    #[tokio::test]
+    async fn paused_timer_only_fires_after_resume() {
+        let (wheel, mut receiver) = TimerWheel::new();
+        let job_id = Uuid::now_v7();
+
+        wheel.register(job_id, "timeout".into(), Duration::from_millis(80));
+        yield_now().await;
+
+        sleep(Duration::from_millis(30)).await;
+        wheel.pause_job_timers(job_id).await;
+
+        assert!(
+            timeout(Duration::from_millis(100), receiver.recv())
+                .await
+                .is_err()
+        );
+
+        wheel.resume_job_timers(job_id).await;
+        let event = timeout(Duration::from_millis(200), receiver.recv())
+            .await
+            .expect("resumed timer should fire")
+            .expect("channel should yield event");
+
+        assert_eq!(event.job_id, job_id);
+        assert_eq!(event.event, "timeout");
+    }
+
+    #[tokio::test]
+    async fn cancelling_job_timers_prevents_delivery() {
+        let (wheel, mut receiver) = TimerWheel::new();
+        let job_id = Uuid::now_v7();
+
+        wheel.register(job_id, "timeout".into(), Duration::from_millis(40));
+        yield_now().await;
+        wheel.cancel_all_job_timers(job_id).await;
+
+        assert!(
+            timeout(Duration::from_millis(120), receiver.recv())
+                .await
+                .is_err()
+        );
+    }
+}

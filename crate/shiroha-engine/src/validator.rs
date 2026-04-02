@@ -131,3 +131,113 @@ impl FlowValidator {
         warnings
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use shiroha_core::flow::{ActionDef, DispatchMode, StateDef, StateKind, TransitionDef};
+
+    use super::*;
+
+    fn valid_manifest() -> FlowManifest {
+        FlowManifest {
+            id: "valid".into(),
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![TransitionDef {
+                from: "idle".into(),
+                to: "done".into(),
+                event: "finish".into(),
+                guard: Some("allow".into()),
+                action: Some("ship".into()),
+                timeout: None,
+            }],
+            initial_state: "idle".into(),
+            actions: vec![
+                ActionDef {
+                    name: "ship".into(),
+                    dispatch: DispatchMode::Local,
+                },
+                ActionDef {
+                    name: "allow".into(),
+                    dispatch: DispatchMode::Local,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn valid_manifest_produces_no_warnings() {
+        let warnings = FlowValidator::validate(&valid_manifest());
+
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn invalid_manifest_reports_expected_warnings() {
+        let mut manifest = valid_manifest();
+        manifest.initial_state = "ghost".into();
+        manifest.states.push(StateDef {
+            name: "orphan".into(),
+            kind: StateKind::Normal,
+            on_enter: None,
+            on_exit: None,
+            subprocess: None,
+        });
+        manifest.actions.clear();
+        manifest.transitions = vec![
+            TransitionDef {
+                from: "idle".into(),
+                to: "missing".into(),
+                event: "finish".into(),
+                guard: Some("allow".into()),
+                action: Some("ship".into()),
+                timeout: None,
+            },
+            TransitionDef {
+                from: "done".into(),
+                to: "idle".into(),
+                event: "rewind".into(),
+                guard: None,
+                action: None,
+                timeout: None,
+            },
+        ];
+
+        let warnings = FlowValidator::validate(&manifest);
+
+        assert!(warnings.iter().any(
+            |warning| matches!(warning, ValidationWarning::InvalidInitialState(state) if state == "ghost")
+        ));
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            ValidationWarning::MissingState { field, state } if field == "to" && state == "missing"
+        )));
+        assert!(warnings.iter().any(
+            |warning| matches!(warning, ValidationWarning::MissingAction(name) if name == "ship")
+        ));
+        assert!(warnings.iter().any(
+            |warning| matches!(warning, ValidationWarning::MissingGuard(name) if name == "allow")
+        ));
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            ValidationWarning::TerminalWithOutgoing(state) if state == "done"
+        )));
+        assert!(warnings.iter().any(
+            |warning| matches!(warning, ValidationWarning::UnreachableState(state) if state == "orphan")
+        ));
+    }
+}

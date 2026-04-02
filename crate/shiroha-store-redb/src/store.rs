@@ -196,3 +196,169 @@ impl Storage for RedbStorage {
         Ok(events)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use shiroha_core::event::{EventKind, EventRecord};
+    use shiroha_core::flow::{
+        ActionDef, DispatchMode, FlowManifest, FlowRegistration, StateDef, StateKind, TransitionDef,
+    };
+    use shiroha_core::job::{Job, JobState};
+    use shiroha_core::storage::Storage;
+
+    use super::*;
+
+    fn temp_db_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("shiroha-{name}-{}.redb", Uuid::now_v7()))
+    }
+
+    fn sample_flow_registration() -> FlowRegistration {
+        FlowRegistration {
+            flow_id: "demo".into(),
+            version: Uuid::now_v7(),
+            manifest: FlowManifest {
+                id: "demo".into(),
+                states: vec![
+                    StateDef {
+                        name: "idle".into(),
+                        kind: StateKind::Normal,
+                        on_enter: None,
+                        on_exit: None,
+                        subprocess: None,
+                    },
+                    StateDef {
+                        name: "done".into(),
+                        kind: StateKind::Terminal,
+                        on_enter: None,
+                        on_exit: None,
+                        subprocess: None,
+                    },
+                ],
+                transitions: vec![TransitionDef {
+                    from: "idle".into(),
+                    to: "done".into(),
+                    event: "finish".into(),
+                    guard: None,
+                    action: Some("ship".into()),
+                    timeout: None,
+                }],
+                initial_state: "idle".into(),
+                actions: vec![ActionDef {
+                    name: "ship".into(),
+                    dispatch: DispatchMode::Local,
+                }],
+            },
+            wasm_hash: "hash-demo".into(),
+        }
+    }
+
+    fn sample_job(flow: &FlowRegistration) -> Job {
+        Job {
+            id: Uuid::now_v7(),
+            flow_id: flow.flow_id.clone(),
+            flow_version: flow.version,
+            state: JobState::Running,
+            current_state: flow.manifest.initial_state.clone(),
+            context: Some(vec![1, 2, 3]),
+        }
+    }
+
+    #[tokio::test]
+    async fn persists_flow_job_and_event_across_reopen() {
+        let path = temp_db_path("persist");
+        let flow = sample_flow_registration();
+        let job = sample_job(&flow);
+        let event = EventRecord {
+            id: Uuid::now_v7(),
+            job_id: job.id,
+            timestamp_ms: 100,
+            kind: EventKind::Created {
+                flow_id: flow.flow_id.clone(),
+                flow_version: flow.version,
+                initial_state: flow.manifest.initial_state.clone(),
+            },
+        };
+
+        {
+            let storage = RedbStorage::new(&path).expect("open db");
+            storage.save_flow(&flow).await.expect("save flow");
+            storage
+                .save_job_with_event(&job, &event)
+                .await
+                .expect("save job with event");
+        }
+
+        let reopened = RedbStorage::new(&path).expect("reopen db");
+        let stored_flow = reopened
+            .get_flow(&flow.flow_id)
+            .await
+            .expect("get flow")
+            .expect("flow exists");
+        let stored_job = reopened
+            .get_job(job.id)
+            .await
+            .expect("get job")
+            .expect("job exists");
+        let events = reopened.get_events(job.id).await.expect("events");
+        let jobs = reopened.list_jobs(&flow.flow_id).await.expect("jobs");
+        let flows = reopened.list_flows().await.expect("flows");
+
+        assert_eq!(stored_flow.flow_id, flow.flow_id);
+        assert_eq!(stored_flow.wasm_hash, "hash-demo");
+        assert_eq!(stored_job.current_state, "idle");
+        assert_eq!(stored_job.context, Some(vec![1, 2, 3]));
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].kind, EventKind::Created { .. }));
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(flows.len(), 1);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn get_events_returns_timestamp_sorted_records() {
+        let path = temp_db_path("event-order");
+        let flow = sample_flow_registration();
+        let job = sample_job(&flow);
+        let storage = RedbStorage::new(&path).expect("open db");
+
+        storage.save_job(&job).await.expect("save job");
+        storage
+            .append_event(&EventRecord {
+                id: Uuid::now_v7(),
+                job_id: job.id,
+                timestamp_ms: 200,
+                kind: EventKind::Completed {
+                    final_state: "done".into(),
+                },
+            })
+            .await
+            .expect("append newer event");
+        storage
+            .append_event(&EventRecord {
+                id: Uuid::now_v7(),
+                job_id: job.id,
+                timestamp_ms: 100,
+                kind: EventKind::Transition {
+                    event: "finish".into(),
+                    from: "idle".into(),
+                    to: "done".into(),
+                    action: Some("ship".into()),
+                },
+            })
+            .await
+            .expect("append older event");
+
+        let events = storage.get_events(job.id).await.expect("events");
+
+        assert_eq!(events.len(), 2);
+        assert!(events[0].timestamp_ms < events[1].timestamp_ms);
+        assert!(matches!(events[0].kind, EventKind::Transition { .. }));
+        assert!(matches!(events[1].kind, EventKind::Completed { .. }));
+
+        drop(storage);
+        let _ = std::fs::remove_file(path);
+    }
+}
