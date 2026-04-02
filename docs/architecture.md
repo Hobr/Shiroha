@@ -1,108 +1,72 @@
-# Shiroha Architecture
+# Shiroha 架构设计
 
-> 架构总览
+> 由 WebAssembly 驱动的分布式状态机任务编排框架
 
-## Status
+## 概述
 
-- 状态：Draft
-- 目标版本：v0.1-v0.2
-- 当前实现：仓库目前仍以 workspace 骨架为主，本文描述的是目标架构，而不是现有功能列表
-- 阅读约定：`必须` / `不能` 表示目标实现应满足的约束；`建议` / `候选` / `评估` 表示仍可调整
+Shiroha 提供一种能力：将状态机的 Action/Callback 等计算密集或 I/O 密集的部分分发到集群中的其他节点执行，减轻单机压力。
 
-## 文档索引
+核心设计原则：
 
-- [执行模型](execution-model.md)
-- [运行时与制品](runtime-and-artifacts.md)
-- [接口设计](interfaces.md)
+- **All-in-One WASM**：状态机拓扑 + 业务逻辑封装在同一个 WASM 模块中
+- **Controller 有状态，Node 无状态**：Controller 维护状态机状态，Node 只负责执行
+- **可插拔后端**：Storage / Transport 通过 Rust trait 抽象，用户按需选择
+- **WASM 插件体系**：框架级逻辑（调度、聚合、中间件）也可通过 WASM 插件替换
+- **安全沙箱**：基于 WIT world 的分层权限控制
 
-`architecture.md` 只描述系统总览、组件关系和角色形态。执行语义、故障恢复、Wasm 制品和 WIT 兼容等细节已拆分到专题文档中。
+## 系统架构
 
-## 设计原则
-
-- 状态迁移与副作用分离: 状态机只负责确定性推进, 外部 I/O 统一建模为 `Activity`
-- 可恢复、可重放优先: `Event History` 是恢复与审计的权威来源
-- 默认 `at-least-once`: 允许重复投递, 依赖幂等 Activity 保证正确性
-- 单实例串行推进: 同一 `Workflow Instance` 在任意时刻只能有一个有效推进者
-- 单一主程序、多种角色: 统一由 `shirohad` 承载控制面与执行面
-- 先收敛执行模型, 再扩展分布式能力: 单机闭环稳定前不提前做多主控
-- 版本绑定优先: 实例创建后锁定 Wasm 制品版本, 运行中不热切换
-
-## 核心组成
-
-| 组件 | 说明 |
-| --- | --- |
-| `Controller` | 控制面组件, 负责状态推进、调度、恢复和元数据维护 |
-| `Executor` | 执行面组件, 负责运行 `Activity` 并回传结果 |
-| `Workflow Definition` | 版本化工作流定义, 描述状态机行为和可调用 Activity |
-| `Workflow Instance` | 某个工作流定义的一次实际运行 |
-| `Artifact` | 可分发、缓存和校验的 Wasm 制品 |
-| `WIT Interface` | 宿主暴露给 Wasm 的能力边界定义 |
-
-## 整体模型
-
-```text
-┌─ Wasm (用户逻辑) ──────────────────────────────────┐
-│  Workflow Definition                                │
-│  ├─ 状态声明与转换规则                               │
-│  ├─ 决策函数                                         │
-│  └─ Activity 声明与实现                              │
-└─────────────────────────────────────────────────────┘
-             ↕ WIT Interface
-┌─ Host (基础设施) ───────────────────────────────────┐
-│  Controller                                          │
-│  ├─ 事件落盘 / 状态推进 / 恢复                       │
-│  ├─ TaskQueue / Timer / ArtifactRegistry            │
-│  └─ Admin API                                        │
-│                                                      │
-│  Executor                                            │
-│  ├─ 加载 Wasm Artifact                               │
-│  ├─ 注入 Host Capability                             │
-│  └─ 执行 Activity 并回传结果                         │
-└─────────────────────────────────────────────────────┘
+```
+┌──────────────────────────────────────────────────────────┐
+│                      客户端层                             │
+│              sctl (CLI)  /  shiroha-web                   │
+├──────────────────────────────────────────────────────────┤
+│                      接口层                               │
+│                gRPC API / REST API                        │
+├────────────────────────┬─────────────────────────────────┤
+│     Controller         │           Node                  │
+│  ┌──────────────────┐  │  ┌───────────────────────────┐  │
+│  │  状态机引擎       │  │  │  WASM 执行器              │  │
+│  │  任务调度器       │  │  │  模块缓存                 │  │
+│  │  Flow 注册表      │  │  │  心跳上报                 │  │
+│  │  WASM Plugin Host │  │  └───────────────────────────┘  │
+│  └──────────────────┘  │                                  │
+├────────────────────────┴─────────────────────────────────┤
+│                    WASM Plugin 层                         │
+│        调度算法 / 聚合策略 / 路由规则 / 中间件            │
+│       （纯逻辑，无 I/O，内置默认 + 用户可覆盖）           │
+├──────────────────────────────────────────────────────────┤
+│                    Native Trait 层                        │
+│          Storage / Transport / WASM Runtime               │
+│         （涉及系统 I/O，Rust trait 插拔）                 │
+├──────────────────────────────────────────────────────────┤
+│                    Core Engine                            │
+│          状态机驱动 / 任务队列 / 生命周期管理              │
+│                    （不可替换）                            │
+└──────────────────────────────────────────────────────────┘
 ```
 
-Host 与 Wasm 的交互分两类:
+## 节点模式
 
-1. `Decision`: 基于确定性上下文做状态推进, 输出 `Command`
-2. `Activity`: 执行带副作用的逻辑, 结果回写为历史事件
+统一二进制 `shirohad`，通过启动参数选择模式：
 
-详细执行语义见 [执行模型](execution-model.md)。
+| 模式 | 说明 | 适用场景 |
+| ------ | ------ | ---------- |
+| `controller` | 仅主控，维护状态、调度任务 | 生产集群 |
+| `node` | 仅节点，接收并执行任务 | 生产集群 |
+| `standalone` | 主控 + 节点同进程，in-process 通道 | 开发/测试/单机部署 |
 
-## 角色架构
+初期单 Controller。预留多 Controller 接口，未来通过 Raft（openraft）实现高可用。
 
-### v0.1: 单进程 hybrid
+## 详细设计
 
-```text
-┌─ shirohad ────────────────────────────────────────┐
-│  Controller                                        │
-│  ├─ StateMachineEngine / Recovery / Timer          │
-│  ├─ TaskQueue (SQLite)                          │
-│  └─ Admin API                                      │
-│                                                    │
-│  Executor                                          │
-│  ├─ 加载 Wasm Artifact                             │
-│  ├─ 注入 Host Capability                           │
-│  └─ 返回 ActivityResult                            │
-│                                                    │
-│  Shared                                            │
-│  ├─ SQLite                                         │
-│  ├─ Event History / Snapshot                       │
-│  └─ ArtifactStore                                  │
-└───────────────────────────────────────────────────┘
-```
-
-### v0.2: 进程拆分
-
-```text
-┌─ Controller ──────────────────────┐
-│  持久化 TaskQueue + Lease 管理     │
-│  Node RPC Server                   │
-└────────────────▲──────────────────┘
-                 │ poll / ack / heartbeat / cancel
-┌────────────────┴──────────────────┐
-│ Executor                           │
-│ Node RPC Client                    │
-└───────────────────────────────────┘
-```
-
-能力声明、节点匹配、权限裁剪和接口边界的详细规则分别见 [运行时与制品](runtime-and-artifacts.md) 与 [接口设计](interfaces.md)。
+| 文档 | 内容 |
+| ----- -| ------ |
+| [核心概念](core-concepts.md) | Flow、Job（生命周期/并发控制/版本迁移）、Execution、子流程 |
+| [WASM 设计](wasm-design.md) | Flow WASM 接口、Plugin WASM、权限系统、模块管理 |
+| [调度与定时器](scheduling.md) | 分发模式、调度策略、故障处理、背压、定时器 |
+| [事件溯源](event-sourcing.md) | 事件记录、审计追踪、故障恢复 |
+| [安全](security.md) | 节点认证（Join Token / mTLS）、WASM 沙箱 |
+| [可插拔后端](backends.md) | Transport、Storage、Context 传递 |
+| [运维与观测](operations.md) | 节点管理、观测性、拓扑模式 |
+| [路线图](roadmap.md) | Flow 验证、分阶段实施计划 |
