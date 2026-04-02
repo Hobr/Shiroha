@@ -12,7 +12,9 @@ use crate::job::ExecutionStatus;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventRecord {
     pub id: Uuid,
+    /// 事件流按 Job 分片；存储层通常据此把同一 Job 的事件聚在一起。
     pub job_id: Uuid,
+    /// 事件发生时间，由控制面写入，便于跨存储后端统一排序。
     pub timestamp_ms: u64,
     pub kind: EventKind,
 }
@@ -34,6 +36,7 @@ pub enum EventKind {
         event: String,
         from: String,
         to: String,
+        // 这里只记录“转移时声明的 action 名”，真正执行结果会落在单独的 ActionComplete 事件里。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         action: Option<String>,
     },

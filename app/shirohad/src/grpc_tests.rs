@@ -1,3 +1,8 @@
+//! 端到端 gRPC 集成测试。
+//!
+//! 这些测试通过真实的 tonic client + UDS server 覆盖“协议层 + 服务层 + 引擎层”
+//! 的完整往返路径，和直接调用 `JobServiceImpl` 的单元测试互补。
+
 use tokio::time::{Duration, sleep, timeout};
 
 use crate::test_support::{LiveGrpcServer, approval_manifest, timeout_manifest, wasm_for_manifest};
@@ -16,6 +21,7 @@ async fn wait_for_job(
     expected_state: &str,
     expected_current_state: &str,
 ) {
+    // 轮询而不是订阅流式事件，保持测试夹具简单，同时仍能覆盖异步状态推进。
     timeout(Duration::from_millis(500), async {
         loop {
             let job = client
@@ -40,6 +46,8 @@ async fn deploy_manifest(
     flow_id: &str,
     manifest: &shiroha_core::flow::FlowManifest,
 ) {
+    // 测试和生产一样走 deploy_flow RPC，而不是直接写 storage，
+    // 这样可以覆盖 component 编译、manifest 提取和内存缓存注册。
     client
         .deploy_flow(DeployFlowRequest {
             flow_id: flow_id.to_string(),
@@ -51,6 +59,7 @@ async fn deploy_manifest(
 
 #[tokio::test]
 async fn grpc_round_trip_flow_and_job_execution() {
+    // 覆盖最完整的 happy-path：deploy -> create -> trigger -> complete -> event log。
     let server = LiveGrpcServer::start("grpc-roundtrip").await;
     let mut flow = server.flow_client().await;
     let mut job = server.job_client().await;
@@ -116,6 +125,7 @@ async fn grpc_round_trip_flow_and_job_execution() {
 
 #[tokio::test]
 async fn grpc_pause_resume_processes_queued_event() {
+    // 验证 pause 后的 trigger-event 会先排队，resume 时再继续消费。
     let server = LiveGrpcServer::start("grpc-pause-resume").await;
     let mut flow = server.flow_client().await;
     let mut job = server.job_client().await;
@@ -171,6 +181,7 @@ async fn grpc_pause_resume_processes_queued_event() {
 
 #[tokio::test]
 async fn grpc_timer_event_completes_job() {
+    // 覆盖定时器通过 server 内部 forwarder 回注到 JobService 的路径。
     let server = LiveGrpcServer::start("grpc-timer").await;
     let mut flow = server.flow_client().await;
     let mut job = server.job_client().await;

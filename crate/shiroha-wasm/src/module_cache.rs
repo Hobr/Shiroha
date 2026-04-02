@@ -28,7 +28,7 @@ impl WasmModule {
 
     /// 简易哈希（MVP）：长度 + 首尾各16字节的十六进制
     ///
-    /// 生产环境应替换为 SHA-256。
+    /// 生产环境应替换为 SHA-256；当前实现只够测试和单进程缓存命中。
     fn compute_hash(bytes: &[u8]) -> String {
         let len = bytes.len();
         let head: Vec<u8> = bytes.iter().take(16).copied().collect();
@@ -54,6 +54,7 @@ impl ModuleCache {
     }
 
     pub fn get(&self, hash: &str) -> Option<Arc<WasmModule>> {
+        // 只在短临界区内 clone `Arc`，避免长时间持有全局缓存锁。
         self.modules.lock().unwrap().get(hash).cloned()
     }
 

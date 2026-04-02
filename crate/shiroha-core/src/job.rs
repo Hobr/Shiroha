@@ -36,6 +36,7 @@ impl std::fmt::Display for JobState {
 /// Job 运行实例
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
+    /// Job 主键，同时也是事件流、定时器和外部 API 的关联键。
     pub id: Uuid,
     pub flow_id: String,
     /// 创建时绑定的 Flow 版本，新版 Flow 部署后旧 Job 继续用旧版
@@ -43,7 +44,7 @@ pub struct Job {
     pub state: JobState,
     /// 当前所处的状态机节点名
     pub current_state: String,
-    /// 用户自定义上下文数据
+    /// 用户自定义上下文数据，框架只透传字节，不解释内容格式。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<Vec<u8>>,
 }
@@ -61,6 +62,7 @@ pub enum ExecutionStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionResult {
     pub status: ExecutionStatus,
+    /// guest action 的原始输出，由上层决定是否解释或持久化。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<Vec<u8>>,
 }
@@ -70,6 +72,7 @@ pub struct ActionResult {
 pub struct NodeResult {
     pub node_id: String,
     pub status: ExecutionStatus,
+    /// 保留每个节点返回的原始负载，供聚合函数自行解释。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<Vec<u8>>,
 }
@@ -79,7 +82,7 @@ pub struct NodeResult {
 pub struct AggregateDecision {
     /// 聚合后要触发的事件名，驱动状态机转移
     pub event: String,
-    /// 可选的上下文补丁，合并到 Job context
+    /// 可选的上下文补丁，具体如何合并由上层调度/控制逻辑决定。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_patch: Option<Vec<u8>>,
 }

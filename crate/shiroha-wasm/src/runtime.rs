@@ -14,6 +14,7 @@ impl WasmRuntime {
     /// 创建运行时，开启 fuel 消耗限制
     pub fn new() -> Result<Self, WasmError> {
         let mut config = wasmtime::Config::new();
+        // 这里只是打开 fuel 能力，真正的预算值会在创建 Store 时单独设置。
         config.consume_fuel(true);
         config.wasm_component_model(true);
         let engine = wasmtime::Engine::new(&config)?;
@@ -25,6 +26,7 @@ impl WasmRuntime {
         &self,
         wasm_bytes: &[u8],
     ) -> Result<wasmtime::component::Component, WasmError> {
+        // Shiroha 当前只接受 component model 输入，core module 会在这里直接被拒绝。
         wasmtime::component::Component::new(&self.engine, wasm_bytes)
             .map_err(|e| WasmError::Compile(e.to_string()))
     }

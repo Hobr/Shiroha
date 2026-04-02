@@ -17,6 +17,7 @@ use shiroha_core::job::{ActionResult, AggregateDecision, ExecutionStatus, NodeRe
 use crate::error::WasmError;
 
 const DEFAULT_FUEL: u64 = 1_000_000;
+// 兼容 WIT 生成代码中常见的 kebab-case / snake_case 两种导出命名。
 const GET_MANIFEST_EXPORTS: &[&str] = &["get-manifest", "get_manifest"];
 const INVOKE_ACTION_EXPORTS: &[&str] = &["invoke-action", "invoke_action"];
 const INVOKE_GUARD_EXPORTS: &[&str] = &["invoke-guard", "invoke_guard"];
@@ -48,6 +49,7 @@ pub struct GuardContext {
 
 #[derive(Default)]
 struct ComponentStoreState {
+    // 当前 host 只提供最小 WASI 上下文，没有额外的业务态共享给 guest。
     ctx: WasiCtx,
     table: ResourceTable,
 }
@@ -75,6 +77,8 @@ impl ComponentGuest {
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
             .map_err(|e| WasmError::Instantiation(e.to_string()))?;
 
+        // 每次调用都实例化独立的 store/component instance，避免 fuel 计数、
+        // guest 内部状态和资源句柄在不同请求之间相互污染。
         let mut store = wasmtime::Store::new(engine, ComponentStoreState::default());
         store
             .set_fuel(DEFAULT_FUEL)
@@ -95,6 +99,7 @@ impl ComponentGuest {
         Params: ComponentNamedList + Lower,
         Results: ComponentNamedList + Lift,
     {
+        // 允许 guest 端导出名在两种命名风格之间切换，而不影响 host 侧调用代码。
         for &name in export_names {
             if let Ok(func) = self
                 .instance
@@ -111,6 +116,9 @@ impl ComponentGuest {
     }
 }
 
+// 下面这组 `Component*` 类型精确镜像 WIT ABI 形状。
+// `WasmHost` 先通过它们与 component 交互，再统一转换成 `shiroha_core`
+// 中的领域类型，避免把 wasmtime 派生宏泄漏到其他 crate。
 #[derive(Debug, Clone, ComponentType, Lift, Lower)]
 #[component(record)]
 struct ComponentFlowManifest {
@@ -410,6 +418,8 @@ impl From<ComponentAggregateDecision> for AggregateDecision {
 }
 
 /// WASM component 的 host 端代理
+///
+/// 该类型本身只持有可复用的编译产物；真正的 guest 实例会在每次方法调用时创建。
 pub struct WasmHost {
     engine: wasmtime::Engine,
     component: wasmtime::component::Component,
@@ -426,6 +436,7 @@ impl WasmHost {
         })
     }
 
+    /// 创建一次性 guest 实例，用于单次 typed export 调用。
     fn guest(&self) -> Result<ComponentGuest, WasmError> {
         ComponentGuest::new(&self.engine, &self.component)
     }
@@ -471,6 +482,7 @@ impl WasmHost {
         name: &str,
         results: &[NodeResult],
     ) -> Result<AggregateDecision, WasmError> {
+        // fan-out 聚合要先把领域层结果重新编码为 WIT 记录数组，再交给 guest 聚合函数。
         let mut guest = self.guest()?;
         let typed_results: Vec<ComponentNodeResult> =
             results.iter().map(ComponentNodeResult::from).collect();

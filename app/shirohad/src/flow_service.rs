@@ -70,6 +70,8 @@ impl FlowService for FlowServiceImpl {
 
         let version = Uuid::now_v7();
         let registration = FlowRegistration {
+            // gRPC 请求里的 flow_id 是平台侧注册键；
+            // manifest.id 保留 guest 自描述值，当前不强制二者一致。
             flow_id: flow_id.clone(),
             version,
             manifest: manifest.clone(),

@@ -1,3 +1,9 @@
+//! 测试用 WASM component fixture。
+//!
+//! 该 crate 通过环境变量注入 manifest JSON，再导出固定的
+//! `get_manifest / invoke_action / invoke_guard / aggregate` 实现，
+//! 供宿主侧测试 host-guest 交互链路。
+
 use serde::Deserialize;
 
 wit_bindgen::generate!({
@@ -89,6 +95,7 @@ enum FanOutStrategyTemplate {
 
 impl Guest for FlowComponent {
     fn get_manifest() -> FlowManifest {
+        // 构建脚本把 manifest JSON 烘焙进环境变量，这样测试可以按需生成不同的 component。
         let manifest: ManifestTemplate = serde_json::from_str(env!("SHIROHA_MANIFEST_JSON"))
             .expect("fixture manifest json must be valid");
         manifest.into()
@@ -131,6 +138,7 @@ impl Guest for FlowComponent {
             .count();
 
         match name.as_str() {
+            // 提供一个可预测的聚合策略，方便宿主侧断言 fan-out 返回值是否被正确解码。
             "pick-success" | "pick_success" if success_count > 0 => AggregateDecision {
                 event: "done".to_string(),
                 context_patch: Some(format!("success_count={success_count}").into_bytes()),

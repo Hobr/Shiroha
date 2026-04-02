@@ -42,6 +42,7 @@ impl StateMachineEngine {
             .first()
             .ok_or_else(|| ShirohaError::InvalidTransition {
                 from: current_state.to_string(),
+                // 这里留空是因为根本没有找到匹配边，上层只能知道“从哪里出发失败”。
                 to: String::new(),
                 event: event.to_string(),
             })?;
@@ -55,6 +56,7 @@ impl StateMachineEngine {
 
     /// 查找从指定状态出发、匹配指定事件的所有转移
     pub fn find_transitions<'a>(&'a self, state: &str, event: &str) -> Vec<&'a TransitionDef> {
+        // 返回所有候选边而不是只返回一条，便于上层在未来扩展更复杂的选择策略。
         self.manifest
             .transitions
             .iter()

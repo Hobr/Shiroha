@@ -47,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
         "starting shirohad"
     );
 
+    // Phase 1 的不同 mode 先共享同一套启动路径；后续再按 mode 分化控制面/执行面职责。
     let srv = server::ShirohaServer::new(&cli.data_dir).await?;
     srv.start(&cli.listen).await?;
 

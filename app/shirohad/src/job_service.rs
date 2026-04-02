@@ -22,10 +22,15 @@ use uuid::Uuid;
 use crate::server::ShirohaState;
 
 pub(crate) struct QueuedJobEvent {
+    /// 暂停期间保留原始事件名，resume 后按 FIFO 重放。
     pub event: String,
+    /// 事件负载与事件本身一起排队，避免 pause/resume 丢失调用上下文。
     pub payload: Option<Vec<u8>>,
 }
 
+/// JobService 的 standalone 实现。
+///
+/// 它把 gRPC 请求、定时器回调和 WASM 调用串成一条统一的 Job 处理链路。
 pub struct JobServiceImpl {
     state: Arc<ShirohaState>,
 }
@@ -41,6 +46,7 @@ impl JobServiceImpl {
         event: String,
         payload: Option<Vec<u8>>,
     ) -> Result<(), Status> {
+        // 所有入口都先拿到同一把 Job 锁，确保单个 Job 的状态转移严格串行。
         let lock = self.job_lock(job_id).await;
         let _guard = lock.lock().await;
         self.handle_event_locked(job_id, event, payload).await
@@ -49,6 +55,7 @@ impl JobServiceImpl {
     async fn job_lock(&self, job_id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
         let mut locks = self.state.job_locks.lock().await;
         locks
+            // 锁按需创建并常驻，后续同一个 job_id 可以复用同一条串行化通道。
             .entry(job_id)
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone()
@@ -116,6 +123,7 @@ impl JobServiceImpl {
         match job.state {
             JobState::Running => self.process_running_event(job, event, payload).await,
             JobState::Paused => {
+                // 暂停态不丢事件，而是先进入内存 FIFO，恢复后继续按顺序处理。
                 self.queue_event(job_id, event.clone(), payload).await;
                 tracing::info!(job_id = %job_id, event, "job paused; queued event");
                 Ok(())
@@ -133,6 +141,8 @@ impl JobServiceImpl {
         payload: Option<Vec<u8>>,
     ) -> Result<(), Status> {
         let flow = self.flow_registration(&job.flow_id).await?;
+        // 只在 engine 锁里完成“查拓扑、算下一步”这类纯读操作，
+        // 拿到执行计划后立刻释放锁，避免后续 WASM 调用阻塞其他 Job 读取同一个 Flow。
         let (from, to, action, guard, is_terminal, timeouts) = {
             let engines = self.state.engines.lock().await;
             let engine = engines
@@ -164,6 +174,7 @@ impl JobServiceImpl {
         };
 
         if let Some(guard_name) = guard.as_deref() {
+            // guard 失败时不能提交转移，所以必须先于 transition_job 执行。
             let guard_ctx = GuardContext {
                 job_id: job.id.to_string(),
                 from_state: from.clone(),
@@ -179,6 +190,7 @@ impl JobServiceImpl {
             }
         }
 
+        // 一旦离开旧状态，旧状态上的 timeout 全部失效，因此先整体撤销再按新状态重建。
         self.state.timer_wheel.cancel_all_job_timers(job.id).await;
         self.state
             .job_manager
@@ -188,6 +200,8 @@ impl JobServiceImpl {
 
         let mut action_failure = None;
         if let Some(action_name) = action.as_deref() {
+            // 当前语义里 action 是“转移后的副作用”：
+            // 即使 action 失败，状态转移和事件日志也已经提交，便于后续审计/补偿。
             let action_result = self
                 .invoke_action(&flow, action_name, job.id, &to, payload.clone())
                 .await?;
@@ -202,6 +216,7 @@ impl JobServiceImpl {
         }
 
         if is_terminal {
+            // 终态不再保留任何待触发 timeout。
             self.state
                 .job_manager
                 .complete_job(job.id, &to)
@@ -209,6 +224,7 @@ impl JobServiceImpl {
                 .map_err(|e| Status::internal(e.to_string()))?;
             self.state.timer_wheel.cancel_all_job_timers(job.id).await;
         } else {
+            // timeout 是“状态出边”的属性，所以进入新状态后要重新扫描所有出边注册。
             for timeout in timeouts {
                 self.register_timeout(job.id, timeout);
             }
@@ -225,6 +241,7 @@ impl JobServiceImpl {
 
     async fn drain_pending_events_locked(&self, job_id: Uuid) -> Result<(), Status> {
         while let Some(queued) = self.pop_queued_event(job_id).await {
+            // 每消费一个排队事件都重新读取 Job，确保后续事件看到的是最新状态。
             let job = self.load_job(job_id).await?;
             match job.state {
                 JobState::Running => {
@@ -278,6 +295,7 @@ impl JobServiceImpl {
                 ))
             })?;
 
+        // 缓存中保存的是编译后的 component；每次调用仍会创建新的 guest 实例。
         WasmHost::new(self.state.wasm_runtime.engine(), module.component())
             .map_err(|e| Status::internal(e.to_string()))
     }
@@ -315,6 +333,8 @@ impl JobServiceImpl {
 
         match dispatch {
             DispatchMode::Local | DispatchMode::Remote => {
+                // standalone 模式下本地执行和远端执行暂时走同一条 WASM 调用路径；
+                // 真正的集群调度会在这里分叉。
                 let mut host = self.wasm_host(flow)?;
                 host.invoke_action(
                     action_name,
