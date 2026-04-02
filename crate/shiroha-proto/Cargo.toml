@@ -1,0 +1,17 @@
+[package]
+name = "shiroha-proto"
+description = "Shiroha gRPC API 定义"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = "0.14"
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }

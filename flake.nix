@@ -65,7 +65,6 @@
               LD_LIBRARY_PATH = lib.makeLibraryPath packages;
               RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
 
-              PROTOBUF_LOCATION = "${protobuf}";
               PROTOC = "${protobuf}/bin/protoc";
               PROTOC_INCLUDE = "${protobuf}/include";
             };
