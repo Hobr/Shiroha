@@ -12,14 +12,20 @@ shiroha-engine = { workspace = true }
 shiroha-wasm = { workspace = true }
 shiroha-store-redb = { workspace = true }
 shiroha-proto = { workspace = true }
+
 tokio = { workspace = true }
 tonic = { workspace = true }
+
 clap = { workspace = true }
+
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
 anyhow = { workspace = true }
+
 serde_json = { workspace = true }
 uuid = { workspace = true }
+
 shadow-rs = { workspace = true }
 
 [build-dependencies]
