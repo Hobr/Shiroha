@@ -13,7 +13,8 @@ impl WasmRuntime {
     }
 
     pub fn load_module(&self, wasm_bytes: &[u8]) -> Result<wasmtime::Module, WasmError> {
-        wasmtime::Module::new(&self.engine, wasm_bytes).map_err(|e| WasmError::Compile(e.to_string()))
+        wasmtime::Module::new(&self.engine, wasm_bytes)
+            .map_err(|e| WasmError::Compile(e.to_string()))
     }
 
     pub fn engine(&self) -> &wasmtime::Engine {

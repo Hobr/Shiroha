@@ -46,7 +46,9 @@ impl Storage for RedbStorage {
         let txn = self.db.begin_write().map_err(s)?;
         {
             let mut table = txn.open_table(FLOWS_TABLE).map_err(s)?;
-            table.insert(flow.flow_id.as_str(), data.as_slice()).map_err(s)?;
+            table
+                .insert(flow.flow_id.as_str(), data.as_slice())
+                .map_err(s)?;
         }
         txn.commit().map_err(s)?;
         Ok(())
@@ -91,7 +93,9 @@ impl Storage for RedbStorage {
         let txn = self.db.begin_write().map_err(s)?;
         {
             let mut table = txn.open_table(JOBS_TABLE).map_err(s)?;
-            table.insert(job.id.as_bytes().as_slice(), data.as_slice()).map_err(s)?;
+            table
+                .insert(job.id.as_bytes().as_slice(), data.as_slice())
+                .map_err(s)?;
         }
         txn.commit().map_err(s)?;
         Ok(())

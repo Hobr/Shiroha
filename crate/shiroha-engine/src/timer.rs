@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -110,7 +110,12 @@ impl TimerWheel {
 
                 let handle = tokio::spawn(async move {
                     tokio::time::sleep(remaining).await;
-                    let _ = sender.send(TimerEvent { job_id: jid, event: evt }).await;
+                    let _ = sender
+                        .send(TimerEvent {
+                            job_id: jid,
+                            event: evt,
+                        })
+                        .await;
                     timer_map.lock().await.remove(&id);
                 });
 

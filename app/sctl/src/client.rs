@@ -32,14 +32,24 @@ impl ShirohaClient {
     }
 
     pub async fn list_flows(&mut self) -> anyhow::Result<()> {
-        let resp = self.flow.list_flows(ListFlowsRequest {}).await?.into_inner();
+        let resp = self
+            .flow
+            .list_flows(ListFlowsRequest {})
+            .await?
+            .into_inner();
         if resp.flows.is_empty() {
             println!("no flows");
             return Ok(());
         }
-        println!("{:<20} {:<38} {:<15} {}", "FLOW_ID", "VERSION", "INITIAL", "STATES");
+        println!(
+            "{:<20} {:<38} {:<15} STATES",
+            "FLOW_ID", "VERSION", "INITIAL"
+        );
         for f in &resp.flows {
-            println!("{:<20} {:<38} {:<15} {}", f.flow_id, f.version, f.initial_state, f.state_count);
+            println!(
+                "{:<20} {:<38} {:<15} {}",
+                f.flow_id, f.version, f.initial_state, f.state_count
+            );
         }
         Ok(())
     }
@@ -84,9 +94,12 @@ impl ShirohaClient {
             println!("no jobs");
             return Ok(());
         }
-        println!("{:<38} {:<20} {:<12} {}", "JOB_ID", "FLOW_ID", "STATE", "CURRENT");
+        println!("{:<38} {:<20} {:<12} CURRENT", "JOB_ID", "FLOW_ID", "STATE");
         for j in &resp.jobs {
-            println!("{:<38} {:<20} {:<12} {}", j.job_id, j.flow_id, j.state, j.current_state);
+            println!(
+                "{:<38} {:<20} {:<12} {}",
+                j.job_id, j.flow_id, j.state, j.current_state
+            );
         }
         Ok(())
     }
@@ -145,7 +158,7 @@ impl ShirohaClient {
             println!("no events");
             return Ok(());
         }
-        println!("{:<38} {:<16} {}", "ID", "TIMESTAMP_MS", "KIND");
+        println!("{:<38} {:<16} KIND", "ID", "TIMESTAMP_MS");
         for e in &resp.events {
             println!("{:<38} {:<16} {}", e.id, e.timestamp_ms, e.kind_json);
         }

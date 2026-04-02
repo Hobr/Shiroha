@@ -11,7 +11,10 @@ use crate::job::Job;
 
 pub trait Storage: Send + Sync {
     fn save_flow(&self, flow: &FlowRegistration) -> impl Future<Output = Result<()>> + Send;
-    fn get_flow(&self, flow_id: &str) -> impl Future<Output = Result<Option<FlowRegistration>>> + Send;
+    fn get_flow(
+        &self,
+        flow_id: &str,
+    ) -> impl Future<Output = Result<Option<FlowRegistration>>> + Send;
     fn list_flows(&self) -> impl Future<Output = Result<Vec<FlowRegistration>>> + Send;
     fn delete_flow(&self, flow_id: &str) -> impl Future<Output = Result<()>> + Send;
 
@@ -38,7 +41,10 @@ impl MemoryStorage {
 
 impl Storage for MemoryStorage {
     async fn save_flow(&self, flow: &FlowRegistration) -> Result<()> {
-        self.flows.write().await.insert(flow.flow_id.clone(), flow.clone());
+        self.flows
+            .write()
+            .await
+            .insert(flow.flow_id.clone(), flow.clone());
         Ok(())
     }
 

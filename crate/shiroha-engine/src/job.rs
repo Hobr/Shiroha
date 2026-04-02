@@ -83,7 +83,9 @@ impl<S: Storage> JobManager<S> {
         }
         job.state = JobState::Paused;
         self.storage.save_job(&job).await?;
-        self.storage.append_event(&make_event(job_id, EventKind::Paused)).await
+        self.storage
+            .append_event(&make_event(job_id, EventKind::Paused))
+            .await
     }
 
     pub async fn resume_job(&self, job_id: Uuid) -> Result<()> {
@@ -96,7 +98,9 @@ impl<S: Storage> JobManager<S> {
         }
         job.state = JobState::Running;
         self.storage.save_job(&job).await?;
-        self.storage.append_event(&make_event(job_id, EventKind::Resumed)).await
+        self.storage
+            .append_event(&make_event(job_id, EventKind::Resumed))
+            .await
     }
 
     pub async fn cancel_job(&self, job_id: Uuid) -> Result<()> {
@@ -109,7 +113,9 @@ impl<S: Storage> JobManager<S> {
         }
         job.state = JobState::Cancelled;
         self.storage.save_job(&job).await?;
-        self.storage.append_event(&make_event(job_id, EventKind::Cancelled)).await
+        self.storage
+            .append_event(&make_event(job_id, EventKind::Cancelled))
+            .await
     }
 
     pub async fn complete_job(&self, job_id: Uuid, final_state: &str) -> Result<()> {
