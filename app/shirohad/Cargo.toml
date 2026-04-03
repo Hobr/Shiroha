@@ -8,31 +8,31 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-shiroha-core = { workspace = true }
-shiroha-engine = { workspace = true }
-shiroha-wasm = { workspace = true }
-shiroha-store-redb = { workspace = true }
-shiroha-proto = { workspace = true }
+shiroha-core.workspace = true
+shiroha-engine.workspace = true
+shiroha-wasm.workspace = true
+shiroha-store-redb.workspace = true
+shiroha-proto.workspace = true
 
-tokio = { workspace = true }
-tonic = { workspace = true }
+tokio.workspace = true
+tonic.workspace = true
 
-clap = { workspace = true }
+clap.workspace = true
 
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
-anyhow = { workspace = true }
+anyhow.workspace = true
 
-serde_json = { workspace = true }
-uuid = { workspace = true }
+serde_json.workspace = true
+uuid.workspace = true
 
-shadow-rs = { workspace = true }
+shadow-rs.workspace = true
 
 [build-dependencies]
-shadow-rs = { workspace = true }
+shadow-rs.workspace = true
 
 [dev-dependencies]
-tokio-stream = { workspace = true }
-tower = { workspace = true }
-hyper-util = { workspace = true }
+tokio-stream.workspace = true
+tower.workspace = true
+hyper-util.workspace = true
