@@ -8,13 +8,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-shiroha-core = { workspace = true }
+shiroha-core.workspace = true
 
-tokio = { workspace = true }
-tokio-util = { workspace = true }
+tokio.workspace = true
+tokio-util.workspace = true
 
-tracing = { workspace = true }
+tracing.workspace = true
 
-thiserror = { workspace = true }
+thiserror.workspace = true
 
-uuid = { workspace = true }
+uuid.workspace = true

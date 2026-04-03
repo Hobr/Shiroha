@@ -8,11 +8,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-tonic = { workspace = true }
+tonic.workspace = true
 tonic-prost = "0.14"
 
-prost = { workspace = true }
-prost-types = { workspace = true }
+prost.workspace = true
+prost-types.workspace = true
 
 [build-dependencies]
-tonic-prost-build = { workspace = true }
+tonic-prost-build.workspace = true
