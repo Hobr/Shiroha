@@ -135,6 +135,14 @@ impl Guest for AdvancedFlow {
                     name: "ship".to_string(),
                     dispatch: DispatchMode::Remote,
                 },
+                ActionDef {
+                    name: "has-minimum-payload".to_string(),
+                    dispatch: DispatchMode::Local,
+                },
+                ActionDef {
+                    name: "allow-approve".to_string(),
+                    dispatch: DispatchMode::Local,
+                },
             ],
         }
     }
