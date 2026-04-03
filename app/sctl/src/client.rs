@@ -89,6 +89,9 @@ impl ShirohaClient {
             .await?
             .into_inner();
         if resp.flows.is_empty() {
+            if json_output {
+                return print_json_value(&Value::Array(Vec::new()));
+            }
             println!("no flows");
             return Ok(());
         }
@@ -211,6 +214,9 @@ impl ShirohaClient {
             .await?
             .into_inner();
         if resp.jobs.is_empty() {
+            if json_output {
+                return print_json_value(&Value::Array(Vec::new()));
+            }
             println!("no jobs");
             return Ok(());
         }
@@ -339,6 +345,9 @@ impl ShirohaClient {
 
         let events = self.fetch_job_events(job_id).await?;
         if events.is_empty() {
+            if json_output {
+                return print_json_value(&Value::Array(Vec::new()));
+            }
             println!("no events");
             return Ok(());
         }
@@ -357,7 +366,7 @@ impl ShirohaClient {
         let wait_future = async {
             loop {
                 let job = self.fetch_job(job_id).await?;
-                if job_matches_target(&job.state, target_state) {
+                if job_matches_target(&job, target_state) {
                     return Ok::<GetJobResponse, anyhow::Error>(job);
                 }
                 sleep(Duration::from_millis(interval_ms)).await;
@@ -405,9 +414,7 @@ impl ShirohaClient {
 
             if !new_events.is_empty() {
                 if json_output {
-                    for event in &new_events {
-                        print_json_value(&event_to_json_value(event))?;
-                    }
+                    print_json_value(&events_to_json_value(&new_events))?;
                 } else {
                     render_events(&new_events, pretty, false)?;
                 }
@@ -526,8 +533,7 @@ fn print_json_block(raw: &str, pretty: bool) {
 
 fn render_events(events: &[EventRecord], pretty: bool, json_output: bool) -> anyhow::Result<()> {
     if json_output {
-        let items: Vec<Value> = events.iter().map(event_to_json_value).collect();
-        return print_json_value(&Value::Array(items));
+        return print_json_value(&events_to_json_value(events));
     }
 
     if !pretty {
@@ -562,6 +568,10 @@ fn event_to_json_value(event: &EventRecord) -> Value {
     })
 }
 
+fn events_to_json_value(events: &[EventRecord]) -> Value {
+    Value::Array(events.iter().map(event_to_json_value).collect())
+}
+
 fn print_job_json(job: &GetJobResponse) -> anyhow::Result<()> {
     print_json_value(&json!({
         "job_id": job.job_id,
@@ -571,10 +581,10 @@ fn print_job_json(job: &GetJobResponse) -> anyhow::Result<()> {
     }))
 }
 
-fn job_matches_target(current_state: &str, target_state: Option<&str>) -> bool {
+fn job_matches_target(job: &GetJobResponse, target_state: Option<&str>) -> bool {
     match target_state {
-        Some(target) => current_state == target,
-        None => matches!(current_state, "completed" | "cancelled"),
+        Some(target) => job.state == target || job.current_state == target,
+        None => matches!(job.state.as_str(), "completed" | "cancelled"),
     }
 }
 
@@ -622,10 +632,30 @@ mod tests {
 
     #[test]
     fn job_matches_target_defaults_to_terminal_states() {
-        assert!(job_matches_target("completed", None));
-        assert!(job_matches_target("cancelled", None));
-        assert!(!job_matches_target("running", None));
-        assert!(job_matches_target("paused", Some("paused")));
+        let completed = GetJobResponse {
+            job_id: "job-1".into(),
+            flow_id: "flow".into(),
+            state: "completed".into(),
+            current_state: "approved".into(),
+        };
+        let cancelled = GetJobResponse {
+            job_id: "job-2".into(),
+            flow_id: "flow".into(),
+            state: "cancelled".into(),
+            current_state: "idle".into(),
+        };
+        let running = GetJobResponse {
+            job_id: "job-3".into(),
+            flow_id: "flow".into(),
+            state: "running".into(),
+            current_state: "waiting-approval".into(),
+        };
+
+        assert!(job_matches_target(&completed, None));
+        assert!(job_matches_target(&cancelled, None));
+        assert!(!job_matches_target(&running, None));
+        assert!(job_matches_target(&running, Some("running")));
+        assert!(job_matches_target(&running, Some("waiting-approval")));
     }
 
     #[test]
@@ -639,5 +669,27 @@ mod tests {
         assert_eq!(summary.state_count, 2);
         assert_eq!(summary.transition_count, 1);
         assert_eq!(summary.action_count, 2);
+    }
+
+    #[test]
+    fn events_to_json_value_returns_array() {
+        let value = events_to_json_value(&[EventRecord {
+            id: "event-1".into(),
+            job_id: "job-1".into(),
+            timestamp_ms: 42,
+            kind_json: r#"{"type":"created"}"#.into(),
+        }]);
+
+        assert_eq!(
+            value,
+            json!([{
+                "id": "event-1",
+                "job_id": "job-1",
+                "timestamp_ms": 42,
+                "kind": {
+                    "type": "created"
+                }
+            }])
+        );
     }
 }
