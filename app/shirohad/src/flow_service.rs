@@ -81,6 +81,11 @@ impl FlowService for FlowServiceImpl {
         // 持久化 + 缓存
         self.state
             .storage
+            .save_wasm_module(&registration.wasm_hash, &wasm_bytes)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        self.state
+            .storage
             .save_flow(&registration)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -90,12 +95,23 @@ impl FlowService for FlowServiceImpl {
             .flows
             .lock()
             .await
-            .insert(flow_id.clone(), registration);
+            .insert(flow_id.clone(), registration.clone());
+        self.state
+            .flow_versions
+            .lock()
+            .await
+            .insert((flow_id.clone(), version), registration);
+        let versioned_engine = StateMachineEngine::new(manifest.clone());
         self.state
             .engines
             .lock()
             .await
             .insert(flow_id.clone(), StateMachineEngine::new(manifest));
+        self.state
+            .versioned_engines
+            .lock()
+            .await
+            .insert((flow_id.clone(), version), versioned_engine);
 
         tracing::info!(flow_id, %version, "flow deployed");
 

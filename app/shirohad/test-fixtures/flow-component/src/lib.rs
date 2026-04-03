@@ -103,7 +103,7 @@ impl Guest for FlowComponent {
 
     fn invoke_action(name: String, ctx: ActionContext) -> ActionResult {
         match name.as_str() {
-            "ship" => {
+            "ship" | "enter" | "exit" => {
                 let payload_len = ctx.payload.as_ref().map_or(0, Vec::len);
                 ActionResult {
                     status: ExecutionStatus::Success,

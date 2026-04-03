@@ -62,7 +62,7 @@ impl TimerWheel {
     }
 
     /// 注册定时器，到期后发送 TimerEvent
-    pub fn register(&self, job_id: Uuid, event: String, duration: Duration) -> TimerHandle {
+    pub async fn register(&self, job_id: Uuid, event: String, duration: Duration) -> TimerHandle {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let sender = self.sender.clone();
         let timers = self.timers.clone();
@@ -85,10 +85,7 @@ impl TimerWheel {
             remaining: None,
         };
 
-        let timers = self.timers.clone();
-        tokio::spawn(async move {
-            timers.lock().await.insert(id, entry);
-        });
+        self.timers.lock().await.insert(id, entry);
 
         TimerHandle(id)
     }
@@ -170,7 +167,6 @@ impl TimerWheel {
 
 #[cfg(test)]
 mod tests {
-    use tokio::task::yield_now;
     use tokio::time::{Duration, sleep, timeout};
 
     use super::*;
@@ -180,7 +176,9 @@ mod tests {
         let (wheel, mut receiver) = TimerWheel::new();
         let job_id = Uuid::now_v7();
 
-        wheel.register(job_id, "timeout".into(), Duration::from_millis(20));
+        wheel
+            .register(job_id, "timeout".into(), Duration::from_millis(20))
+            .await;
 
         let event = timeout(Duration::from_millis(200), receiver.recv())
             .await
@@ -196,8 +194,9 @@ mod tests {
         let (wheel, mut receiver) = TimerWheel::new();
         let job_id = Uuid::now_v7();
 
-        wheel.register(job_id, "timeout".into(), Duration::from_millis(80));
-        yield_now().await;
+        wheel
+            .register(job_id, "timeout".into(), Duration::from_millis(80))
+            .await;
 
         sleep(Duration::from_millis(30)).await;
         wheel.pause_job_timers(job_id).await;
@@ -223,8 +222,9 @@ mod tests {
         let (wheel, mut receiver) = TimerWheel::new();
         let job_id = Uuid::now_v7();
 
-        wheel.register(job_id, "timeout".into(), Duration::from_millis(40));
-        yield_now().await;
+        wheel
+            .register(job_id, "timeout".into(), Duration::from_millis(40))
+            .await;
         wheel.cancel_all_job_timers(job_id).await;
 
         assert!(

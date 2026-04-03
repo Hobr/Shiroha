@@ -25,8 +25,20 @@ pub trait Storage: Send + Sync {
         &self,
         flow_id: &str,
     ) -> impl Future<Output = Result<Option<FlowRegistration>>> + Send;
+    fn get_flow_version(
+        &self,
+        flow_id: &str,
+        version: Uuid,
+    ) -> impl Future<Output = Result<Option<FlowRegistration>>> + Send;
+    fn list_flow_versions(&self) -> impl Future<Output = Result<Vec<FlowRegistration>>> + Send;
     fn list_flows(&self) -> impl Future<Output = Result<Vec<FlowRegistration>>> + Send;
     fn delete_flow(&self, flow_id: &str) -> impl Future<Output = Result<()>> + Send;
+    fn save_wasm_module(
+        &self,
+        hash: &str,
+        wasm_bytes: &[u8],
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn get_wasm_module(&self, hash: &str) -> impl Future<Output = Result<Option<Vec<u8>>>> + Send;
 
     fn save_job(&self, job: &Job) -> impl Future<Output = Result<()>> + Send;
     /// 同时写入 Job 快照和事件记录。
@@ -56,6 +68,8 @@ pub trait Storage: Send + Sync {
 #[derive(Debug, Default, Clone)]
 pub struct MemoryStorage {
     flows: Arc<RwLock<HashMap<String, FlowRegistration>>>,
+    flow_versions: Arc<RwLock<HashMap<(String, Uuid), FlowRegistration>>>,
+    wasm_modules: Arc<RwLock<HashMap<String, Vec<u8>>>>,
     jobs: Arc<RwLock<HashMap<Uuid, Job>>>,
     /// 事件按追加顺序保存在内存中，测试可以直接断言生命周期顺序。
     events: Arc<RwLock<Vec<EventRecord>>>,
@@ -69,6 +83,10 @@ impl MemoryStorage {
 
 impl Storage for MemoryStorage {
     async fn save_flow(&self, flow: &FlowRegistration) -> Result<()> {
+        self.flow_versions
+            .write()
+            .await
+            .insert((flow.flow_id.clone(), flow.version), flow.clone());
         self.flows
             .write()
             .await
@@ -80,13 +98,46 @@ impl Storage for MemoryStorage {
         Ok(self.flows.read().await.get(flow_id).cloned())
     }
 
+    async fn get_flow_version(
+        &self,
+        flow_id: &str,
+        version: Uuid,
+    ) -> Result<Option<FlowRegistration>> {
+        Ok(self
+            .flow_versions
+            .read()
+            .await
+            .get(&(flow_id.to_string(), version))
+            .cloned())
+    }
+
+    async fn list_flow_versions(&self) -> Result<Vec<FlowRegistration>> {
+        Ok(self.flow_versions.read().await.values().cloned().collect())
+    }
+
     async fn list_flows(&self) -> Result<Vec<FlowRegistration>> {
         Ok(self.flows.read().await.values().cloned().collect())
     }
 
     async fn delete_flow(&self, flow_id: &str) -> Result<()> {
         self.flows.write().await.remove(flow_id);
+        self.flow_versions
+            .write()
+            .await
+            .retain(|(candidate, _), _| candidate != flow_id);
         Ok(())
+    }
+
+    async fn save_wasm_module(&self, hash: &str, wasm_bytes: &[u8]) -> Result<()> {
+        self.wasm_modules
+            .write()
+            .await
+            .insert(hash.to_string(), wasm_bytes.to_vec());
+        Ok(())
+    }
+
+    async fn get_wasm_module(&self, hash: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self.wasm_modules.read().await.get(hash).cloned())
     }
 
     async fn save_job(&self, job: &Job) -> Result<()> {

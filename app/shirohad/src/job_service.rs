@@ -80,6 +80,21 @@ impl JobServiceImpl {
             .ok_or_else(|| Status::internal(format!("flow `{flow_id}` not loaded in memory")))
     }
 
+    async fn flow_registration_for_job(&self, job: &Job) -> Result<FlowRegistration, Status> {
+        self.state
+            .flow_versions
+            .lock()
+            .await
+            .get(&(job.flow_id.clone(), job.flow_version))
+            .cloned()
+            .ok_or_else(|| {
+                Status::internal(format!(
+                    "flow `{}` version {} not loaded in memory",
+                    job.flow_id, job.flow_version
+                ))
+            })
+    }
+
     async fn queue_event(&self, job_id: Uuid, event: String, payload: Option<Vec<u8>>) {
         self.state
             .pending_events
@@ -140,17 +155,23 @@ impl JobServiceImpl {
         event: String,
         payload: Option<Vec<u8>>,
     ) -> Result<(), Status> {
-        let flow = self.flow_registration(&job.flow_id).await?;
+        let flow = self.flow_registration_for_job(&job).await?;
         // 只在 engine 锁里完成“查拓扑、算下一步”这类纯读操作，
         // 拿到执行计划后立刻释放锁，避免后续 WASM 调用阻塞其他 Job 读取同一个 Flow。
-        let (from, to, action, guard, is_terminal, timeouts) = {
-            let engines = self.state.engines.lock().await;
+        let (from, to, action, guard, on_exit, on_enter, is_terminal, timeouts) = {
+            let engines = self.state.versioned_engines.lock().await;
             let engine = engines
-                .get(&job.flow_id)
+                .get(&(job.flow_id.clone(), job.flow_version))
                 .ok_or_else(|| Status::internal("engine not found for flow"))?;
             let result = engine
                 .process_event(&job.current_state, &event)
                 .map_err(|e| Status::failed_precondition(e.to_string()))?;
+            let from_state = engine
+                .get_state(&result.from)
+                .ok_or_else(|| Status::internal("source state not found in manifest"))?;
+            let to_state = engine
+                .get_state(&result.to)
+                .ok_or_else(|| Status::internal("target state not found in manifest"))?;
             let next_timeouts = if engine.is_terminal(&result.to) {
                 Vec::new()
             } else {
@@ -168,6 +189,8 @@ impl JobServiceImpl {
                 result.to.clone(),
                 result.action,
                 result.guard,
+                from_state.on_exit.clone(),
+                to_state.on_enter.clone(),
                 engine.is_terminal(&result.to),
                 next_timeouts,
             )
@@ -198,20 +221,20 @@ impl JobServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let mut action_failure = None;
-        if let Some(action_name) = action.as_deref() {
-            // 当前语义里 action 是“转移后的副作用”：
-            // 即使 action 失败，状态转移和事件日志也已经提交，便于后续审计/补偿。
-            let action_result = self
-                .invoke_action(&flow, action_name, job.id, &to, payload.clone())
-                .await?;
-            self.record_action_result(job.id, action_name, &action_result)
-                .await?;
-            if action_result.status != ExecutionStatus::Success {
-                action_failure = Some(format!(
-                    "transition committed but action `{action_name}` finished with status {}",
-                    execution_status_name(action_result.status)
-                ));
+        let mut action_failures = Vec::new();
+        for (action_name, action_state) in [
+            on_exit.as_deref().map(|name| (name, from.as_str())),
+            action.as_deref().map(|name| (name, to.as_str())),
+            on_enter.as_deref().map(|name| (name, to.as_str())),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(message) = self
+                .run_declared_action(&flow, action_name, job.id, action_state, payload.clone())
+                .await?
+            {
+                action_failures.push(message);
             }
         }
 
@@ -226,14 +249,14 @@ impl JobServiceImpl {
         } else {
             // timeout 是“状态出边”的属性，所以进入新状态后要重新扫描所有出边注册。
             for timeout in timeouts {
-                self.register_timeout(job.id, timeout);
+                self.register_timeout(job.id, timeout).await;
             }
         }
 
         tracing::info!(job_id = %job.id, event, from, to, "event processed");
 
-        if let Some(message) = action_failure {
-            return Err(Status::aborted(message));
+        if !action_failures.is_empty() {
+            return Err(Status::aborted(action_failures.join("; ")));
         }
 
         Ok(())
@@ -275,12 +298,40 @@ impl JobServiceImpl {
             .map_err(|e| Status::internal(e.to_string()))
     }
 
-    fn register_timeout(&self, job_id: Uuid, timeout: TimeoutDef) {
-        self.state.timer_wheel.register(
-            job_id,
-            timeout.timeout_event,
-            std::time::Duration::from_millis(timeout.duration_ms),
-        );
+    async fn run_declared_action(
+        &self,
+        flow: &FlowRegistration,
+        action_name: &str,
+        job_id: Uuid,
+        state: &str,
+        payload: Option<Vec<u8>>,
+    ) -> Result<Option<String>, Status> {
+        // 当前语义里 action / state hook 都属于“状态推进后的副作用”：
+        // 即使执行状态失败，转移和事件日志也已经提交，便于后续审计/补偿。
+        let action_result = self
+            .invoke_action(flow, action_name, job_id, state, payload)
+            .await?;
+        self.record_action_result(job_id, action_name, &action_result)
+            .await?;
+        if action_result.status == ExecutionStatus::Success {
+            return Ok(None);
+        }
+
+        Ok(Some(format!(
+            "transition committed but action `{action_name}` finished with status {}",
+            execution_status_name(action_result.status)
+        )))
+    }
+
+    async fn register_timeout(&self, job_id: Uuid, timeout: TimeoutDef) {
+        self.state
+            .timer_wheel
+            .register(
+                job_id,
+                timeout.timeout_event,
+                std::time::Duration::from_millis(timeout.duration_ms),
+            )
+            .await;
     }
 
     fn wasm_host(&self, flow: &FlowRegistration) -> Result<WasmHost, Status> {
@@ -375,13 +426,9 @@ impl JobService for JobServiceImpl {
     ) -> Result<Response<CreateJobResponse>, Status> {
         let req = request.into_inner();
         let flow = self
-            .state
-            .flows
-            .lock()
+            .flow_registration(&req.flow_id)
             .await
-            .get(&req.flow_id)
-            .cloned()
-            .ok_or_else(|| Status::not_found(format!("flow `{}` not found", req.flow_id)))?;
+            .map_err(|_| Status::not_found(format!("flow `{}` not found", req.flow_id)))?;
 
         let job = self
             .state
@@ -395,15 +442,33 @@ impl JobService for JobServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
+        let mut action_failures = Vec::new();
+        let initial_state = flow
+            .manifest
+            .states
+            .iter()
+            .find(|state| state.name == flow.manifest.initial_state)
+            .ok_or_else(|| Status::internal("initial state not found in manifest"))?;
+        if let Some(on_enter) = initial_state.on_enter.as_deref()
+            && let Some(message) = self
+                .run_declared_action(&flow, on_enter, job.id, &flow.manifest.initial_state, None)
+                .await?
+        {
+            action_failures.push(message);
+        }
+
         for transition in &flow.manifest.transitions {
             if transition.from == flow.manifest.initial_state
                 && let Some(timeout) = transition.timeout.clone()
             {
-                self.register_timeout(job.id, timeout);
+                self.register_timeout(job.id, timeout).await;
             }
         }
 
         tracing::info!(job_id = %job.id, flow_id = req.flow_id, "job created");
+        if !action_failures.is_empty() {
+            return Err(Status::aborted(action_failures.join("; ")));
+        }
         Ok(Response::new(CreateJobResponse {
             job_id: job.id.to_string(),
         }))
@@ -557,6 +622,9 @@ mod tests {
         TestHarness, approval_manifest, timeout_manifest, wasm_for_manifest,
     };
     use shiroha_core::event::EventKind;
+    use shiroha_core::flow::{
+        ActionDef, DispatchMode, FlowManifest, StateDef, StateKind, TransitionDef,
+    };
     use shiroha_proto::shiroha_api::flow_service_server::FlowService;
 
     async fn deploy_flow(
@@ -599,6 +667,101 @@ mod tests {
         })
         .await
         .expect("job should reach expected state")
+    }
+
+    fn approval_manifest_to(flow_id: &str, terminal_state: &str) -> FlowManifest {
+        FlowManifest {
+            id: flow_id.to_string(),
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: terminal_state.into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![TransitionDef {
+                from: "idle".into(),
+                to: terminal_state.into(),
+                event: "approve".into(),
+                guard: None,
+                action: Some("ship".into()),
+                timeout: None,
+            }],
+            initial_state: "idle".into(),
+            actions: vec![ActionDef {
+                name: "ship".into(),
+                dispatch: DispatchMode::Local,
+            }],
+        }
+    }
+
+    fn initial_on_enter_manifest(flow_id: &str) -> FlowManifest {
+        FlowManifest {
+            id: flow_id.to_string(),
+            states: vec![StateDef {
+                name: "idle".into(),
+                kind: StateKind::Normal,
+                on_enter: Some("enter".into()),
+                on_exit: None,
+                subprocess: None,
+            }],
+            transitions: vec![],
+            initial_state: "idle".into(),
+            actions: vec![ActionDef {
+                name: "enter".into(),
+                dispatch: DispatchMode::Local,
+            }],
+        }
+    }
+
+    fn state_hooks_manifest(flow_id: &str) -> FlowManifest {
+        FlowManifest {
+            id: flow_id.to_string(),
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: Some("exit".into()),
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: Some("enter".into()),
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![TransitionDef {
+                from: "idle".into(),
+                to: "done".into(),
+                event: "approve".into(),
+                guard: None,
+                action: None,
+                timeout: None,
+            }],
+            initial_state: "idle".into(),
+            actions: vec![
+                ActionDef {
+                    name: "enter".into(),
+                    dispatch: DispatchMode::Local,
+                },
+                ActionDef {
+                    name: "exit".into(),
+                    dispatch: DispatchMode::Local,
+                },
+            ],
+        }
     }
 
     #[tokio::test]
@@ -862,5 +1025,162 @@ mod tests {
             .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
             .collect();
         assert!(kinds.iter().any(|kind| matches!(kind, EventKind::Completed { final_state } if final_state == "timed_out")));
+    }
+
+    #[tokio::test]
+    async fn redeploy_keeps_existing_jobs_on_their_bound_flow_version() {
+        let harness = TestHarness::new("job-service-version-binding").await;
+        deploy_flow(
+            harness.state.clone(),
+            "approval",
+            &approval_manifest_to("approval", "done"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let old_job = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: None,
+            }))
+            .await
+            .expect("create old job")
+            .into_inner();
+
+        deploy_flow(
+            harness.state.clone(),
+            "approval",
+            &approval_manifest_to("approval", "rerouted"),
+        )
+        .await;
+
+        let new_job = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: None,
+            }))
+            .await
+            .expect("create new job")
+            .into_inner();
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: old_job.job_id.clone(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect("trigger old job");
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: new_job.job_id.clone(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect("trigger new job");
+
+        let old_state = wait_for_job(&service, &old_job.job_id, "completed", "done").await;
+        let new_state = wait_for_job(&service, &new_job.job_id, "completed", "rerouted").await;
+
+        assert_eq!(old_state.current_state, "done");
+        assert_eq!(new_state.current_state, "rerouted");
+    }
+
+    #[tokio::test]
+    async fn create_job_runs_initial_state_on_enter_action() {
+        let harness = TestHarness::new("job-service-initial-on-enter").await;
+        deploy_flow(
+            harness.state.clone(),
+            "with-initial-hook",
+            &initial_on_enter_manifest("with-initial-hook"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "with-initial-hook".into(),
+                context: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id,
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        let kinds: Vec<EventKind> = events
+            .events
+            .into_iter()
+            .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
+            .collect();
+
+        assert_eq!(kinds.len(), 2);
+        assert!(matches!(kinds[0], EventKind::Created { .. }));
+        assert!(matches!(
+            &kinds[1],
+            EventKind::ActionComplete { action, .. } if action == "enter"
+        ));
+    }
+
+    #[tokio::test]
+    async fn transition_runs_state_exit_and_enter_actions() {
+        let harness = TestHarness::new("job-service-state-hooks").await;
+        deploy_flow(
+            harness.state.clone(),
+            "with-hooks",
+            &state_hooks_manifest("with-hooks"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "with-hooks".into(),
+                context: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect("trigger event");
+
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id,
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        let kinds: Vec<EventKind> = events
+            .events
+            .into_iter()
+            .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
+            .collect();
+
+        assert_eq!(kinds.len(), 5);
+        assert!(matches!(kinds[0], EventKind::Created { .. }));
+        assert!(matches!(kinds[1], EventKind::Transition { .. }));
+        assert!(matches!(
+            &kinds[2],
+            EventKind::ActionComplete { action, .. } if action == "exit"
+        ));
+        assert!(matches!(
+            &kinds[3],
+            EventKind::ActionComplete { action, .. } if action == "enter"
+        ));
+        assert!(matches!(kinds[4], EventKind::Completed { .. }));
     }
 }
