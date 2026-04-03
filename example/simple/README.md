@@ -27,7 +27,7 @@
 ```bash
 cargo build \
   --offline \
-  --manifest-path examples/simple/Cargo.toml \
+  --manifest-path example/simple/Cargo.toml \
   --target wasm32-wasip2 \
   --release
 ```
@@ -35,20 +35,35 @@ cargo build \
 输出文件:
 
 ```bash
-examples/simple/target/wasm32-wasip2/release/simple.wasm
+example/simple/target/wasm32-wasip2/release/simple.wasm
 ```
 
 ## 部署
 
 ```bash
 sctl deploy \
-  --file examples/simple/target/wasm32-wasip2/release/simple.wasm \
+  --file example/simple/target/wasm32-wasip2/release/simple.wasm \
   --flow-id simple
+```
+
+部署后可以先确认服务端看到的 manifest：
+
+```bash
+sctl flow --flow-id simple
 ```
 
 ## 触发测试
 
+创建一个带上下文的 Job，然后用带 payload 的事件推进：
+
 ```bash
-sctl create --flow-id simple
-sctl trigger --job-id <job-id> --event approve
+sctl create --flow-id simple --context-text "demo-request"
+sctl trigger --job-id <job-id> --event approve --payload-text "approved-by-cli"
+```
+
+等待进入终态并查看事件日志：
+
+```bash
+sctl wait --job-id <job-id> --state completed
+sctl events --job-id <job-id> --pretty
 ```

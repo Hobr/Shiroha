@@ -58,6 +58,11 @@ Shiroha 提供一种能力：将状态机的 Action/Callback 等计算密集或 
 
 初期单 Controller。预留多 Controller 接口，未来通过 Raft（openraft）实现高可用。
 
+当前实现状态：
+
+- Phase 1 只有 `standalone` 路径是完整可用的
+- `controller` / `node` 模式对应的分离部署仍属于后续阶段
+
 ## 详细设计
 
 | 文档 | 内容 |
