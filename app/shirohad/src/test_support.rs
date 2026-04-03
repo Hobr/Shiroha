@@ -281,6 +281,46 @@ pub(crate) fn wasm_for_manifest(manifest: &FlowManifest) -> Vec<u8> {
     fs::read(&wasm_path).expect("read built component fixture")
 }
 
+pub(crate) fn example_wasm(manifest_path: &str, package_name: &str) -> Vec<u8> {
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let manifest_path = workspace_root.join(manifest_path);
+    let build_root = std::env::temp_dir()
+        .join("shiroha-example-builds")
+        .join(package_name);
+    let target_dir = build_root.join("target");
+    let wasm_path = target_dir.join(format!("wasm32-wasip2/release/{package_name}.wasm"));
+
+    if wasm_path.exists() {
+        return fs::read(&wasm_path).expect("read cached example component");
+    }
+
+    static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    let _guard = BUILD_LOCK
+        .get_or_init(|| StdMutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    if wasm_path.exists() {
+        return fs::read(&wasm_path).expect("read cached example component");
+    }
+
+    fs::create_dir_all(&build_root).expect("create example build dir");
+    let status = Command::new("cargo")
+        .arg("build")
+        .arg("--offline")
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .arg("--target")
+        .arg("wasm32-wasip2")
+        .arg("--release")
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .status()
+        .expect("run cargo build for example component");
+
+    assert!(status.success(), "example component build failed");
+    fs::read(&wasm_path).expect("read built example component")
+}
+
 fn temp_data_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("shiroha-{prefix}-{}", Uuid::now_v7()))
 }

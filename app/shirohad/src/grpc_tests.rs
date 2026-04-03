@@ -5,7 +5,9 @@
 
 use tokio::time::{Duration, sleep, timeout};
 
-use crate::test_support::{LiveGrpcServer, approval_manifest, timeout_manifest, wasm_for_manifest};
+use crate::test_support::{
+    LiveGrpcServer, approval_manifest, example_wasm, timeout_manifest, wasm_for_manifest,
+};
 use shiroha_core::event::EventKind;
 use shiroha_proto::shiroha_api::flow_service_client::FlowServiceClient;
 use shiroha_proto::shiroha_api::job_service_client::JobServiceClient;
@@ -52,6 +54,16 @@ async fn deploy_manifest(
         .deploy_flow(DeployFlowRequest {
             flow_id: flow_id.to_string(),
             wasm_bytes: wasm_for_manifest(manifest),
+        })
+        .await
+        .expect("deploy flow");
+}
+
+async fn deploy_wasm(client: &mut FlowServiceClient<Channel>, flow_id: &str, wasm_bytes: Vec<u8>) {
+    client
+        .deploy_flow(DeployFlowRequest {
+            flow_id: flow_id.to_string(),
+            wasm_bytes,
         })
         .await
         .expect("deploy flow");
@@ -215,4 +227,153 @@ async fn grpc_timer_event_completes_job() {
     assert!(kinds.iter().any(
         |kind| matches!(kind, EventKind::Completed { final_state } if final_state == "timed_out")
     ));
+}
+
+#[tokio::test]
+async fn grpc_simple_example_component_runs_end_to_end() {
+    let server = LiveGrpcServer::start("grpc-example-simple").await;
+    let mut flow = server.flow_client().await;
+    let mut job = server.job_client().await;
+
+    deploy_wasm(
+        &mut flow,
+        "simple",
+        example_wasm("example/simple/Cargo.toml", "simple"),
+    )
+    .await;
+
+    let created = job
+        .create_job(CreateJobRequest {
+            flow_id: "simple".into(),
+            context: Some(b"demo-request".to_vec()),
+        })
+        .await
+        .expect("create job")
+        .into_inner();
+
+    job.trigger_event(TriggerEventRequest {
+        job_id: created.job_id.clone(),
+        event: "approve".into(),
+        payload: Some(b"approved-by-test".to_vec()),
+    })
+    .await
+    .expect("trigger approve");
+
+    wait_for_job(&mut job, &created.job_id, "completed", "approved").await;
+}
+
+#[tokio::test]
+async fn grpc_advanced_example_runs_supported_submit_path() {
+    let server = LiveGrpcServer::start("grpc-example-advanced").await;
+    let mut flow = server.flow_client().await;
+    let mut job = server.job_client().await;
+
+    deploy_wasm(
+        &mut flow,
+        "advanced",
+        example_wasm("example/advanced/Cargo.toml", "advanced"),
+    )
+    .await;
+
+    let created = job
+        .create_job(CreateJobRequest {
+            flow_id: "advanced".into(),
+            context: Some(b"quote-request".to_vec()),
+        })
+        .await
+        .expect("create job")
+        .into_inner();
+
+    job.trigger_event(TriggerEventRequest {
+        job_id: created.job_id.clone(),
+        event: "submit".into(),
+        payload: Some(b"draft-ready".to_vec()),
+    })
+    .await
+    .expect("trigger submit");
+
+    wait_for_job(&mut job, &created.job_id, "running", "legal-review").await;
+
+    let events = job
+        .get_job_events(GetJobEventsRequest {
+            job_id: created.job_id,
+        })
+        .await
+        .expect("get events")
+        .into_inner();
+    let kinds: Vec<EventKind> = events
+        .events
+        .into_iter()
+        .map(|event| serde_json::from_str(&event.kind_json).expect("event json"))
+        .collect();
+
+    assert!(matches!(kinds[0], EventKind::Created { .. }));
+    assert!(matches!(kinds[1], EventKind::Transition { .. }));
+    assert!(matches!(
+        &kinds[2],
+        EventKind::ActionComplete { action, .. } if action == "normalize-request"
+    ));
+}
+
+#[tokio::test]
+async fn grpc_subprocess_examples_support_manual_parent_child_progression() {
+    let server = LiveGrpcServer::start("grpc-example-sub").await;
+    let mut flow = server.flow_client().await;
+    let mut job = server.job_client().await;
+
+    deploy_wasm(
+        &mut flow,
+        "legal-review-demo",
+        example_wasm("example/sub/child/Cargo.toml", "child"),
+    )
+    .await;
+    deploy_wasm(
+        &mut flow,
+        "purchase-parent-demo",
+        example_wasm("example/sub/parent/Cargo.toml", "parent"),
+    )
+    .await;
+
+    let child_job = job
+        .create_job(CreateJobRequest {
+            flow_id: "legal-review-demo".into(),
+            context: None,
+        })
+        .await
+        .expect("create child job")
+        .into_inner();
+    job.trigger_event(TriggerEventRequest {
+        job_id: child_job.job_id.clone(),
+        event: "approve".into(),
+        payload: None,
+    })
+    .await
+    .expect("trigger child approve");
+    wait_for_job(&mut job, &child_job.job_id, "completed", "approved").await;
+
+    let parent_job = job
+        .create_job(CreateJobRequest {
+            flow_id: "purchase-parent-demo".into(),
+            context: None,
+        })
+        .await
+        .expect("create parent job")
+        .into_inner();
+    job.trigger_event(TriggerEventRequest {
+        job_id: parent_job.job_id.clone(),
+        event: "submit".into(),
+        payload: Some(b"legal-review-request".to_vec()),
+    })
+    .await
+    .expect("trigger submit");
+    wait_for_job(&mut job, &parent_job.job_id, "running", "legal-review").await;
+
+    job.trigger_event(TriggerEventRequest {
+        job_id: parent_job.job_id.clone(),
+        event: "legal-review-complete".into(),
+        payload: None,
+    })
+    .await
+    .expect("simulate child completion");
+    wait_for_job(&mut job, &parent_job.job_id, "completed", "approved").await;
 }
