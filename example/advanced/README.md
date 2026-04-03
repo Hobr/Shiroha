@@ -54,6 +54,8 @@
 
 - `timeout`
   当前 standalone 路径已经能真正跑通
+- `guard` / `local` / `remote`
+  当前 standalone 路径已经能真正跑通；`remote` 目前会退化成同进程内的 WASM 调用
 - `fan-out`
   当前主要用于展示 manifest / guest 侧写法，完整多节点分发仍待继续实现
 - `subprocess`
@@ -66,7 +68,7 @@
 ```bash
 cargo build \
   --offline \
-  --manifest-path examples/advanced/Cargo.toml \
+  --manifest-path example/advanced/Cargo.toml \
   --target wasm32-wasip2 \
   --release
 ```
@@ -74,13 +76,29 @@ cargo build \
 输出文件：
 
 ```bash
-examples/advanced/target/wasm32-wasip2/release/advanced.wasm
+example/advanced/target/wasm32-wasip2/release/advanced.wasm
 ```
 
 ## 部署
 
 ```bash
 sctl deploy \
-  --file examples/advanced/target/wasm32-wasip2/release/advanced.wasm \
+  --file example/advanced/target/wasm32-wasip2/release/advanced.wasm \
   --flow-id advanced
+```
+
+## 当前可实际跑通的路径
+
+虽然 `fan-out` 和自动 `subprocess` 编排还没落地，但这份 component 里前半段链路已经能在当前 runtime 上真实执行：
+
+```bash
+sctl create --flow-id advanced --context-text "quote-request"
+sctl trigger --job-id <job-id> --event submit --payload-text "draft-ready"
+```
+
+此时 Job 会从 `draft` 进入 `legal-review`，并执行 `normalize-request` action。可以用下面命令确认：
+
+```bash
+sctl get --job-id <job-id>
+sctl events --job-id <job-id> --pretty
 ```

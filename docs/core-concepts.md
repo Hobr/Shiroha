@@ -9,6 +9,12 @@
 - **Action**：可执行的业务逻辑函数
 - **Guard**：转移前的条件判断函数（必须是纯函数、确定性）
 
+在当前 standalone 实现里，状态级 hook 已经会被真正执行：
+
+- 创建 Job 后，会执行初始状态的 `on-enter`
+- 状态转移时，按 `on-exit -> transition action -> on-enter` 的顺序执行
+- 这些执行结果和普通 Action 一样会记录到事件日志里
+
 ## Job
 
 一个 Flow 的运行实例。绑定特定版本的 Flow WASM 模块。
@@ -39,9 +45,9 @@
 
 操作接口：
 
-- `pause(job_id)`：暂停 Job，in-flight Execution 继续完成但结果暂存不推进状态机
-- `resume(job_id)`：恢复 Job，按序处理暂存的事件和 Execution 结果
-- `cancel(job_id)`：取消 Job，通知相关 Node 取消正在执行的 Execution
+- `pause(job_id)`：暂停 Job，外部事件和定时器事件入队但不推进状态机
+- `resume(job_id)`：恢复 Job，按序处理暂存的事件
+- `cancel(job_id)`：取消 Job，并清理该 Job 相关的本地定时器
 - Job 级别可配置 `max_lifetime`，超时自动取消
 
 ### Job 并发控制
@@ -50,7 +56,7 @@
 
 - 每个 Job 持有一个有序的 event inbox（FIFO 队列）
 - Controller 内部每个 Job 同一时刻只有一个事件在处理
-- 事件处理过程：取出事件 → 评估 Guard → 执行状态转移 → 触发 Action → 完成后取下一个事件
+- 事件处理过程：取出事件 → 评估 Guard → 提交状态转移 → 执行 `on-exit` / transition action / `on-enter` → 完成后取下一个事件
 
 这是正确性保证的基础，避免并发状态转移导致状态不一致。
 
@@ -58,7 +64,9 @@
 
 - 新版 Flow WASM 部署后，已运行的 Job 继续使用创建时绑定的旧版 WASM
 - 新创建的 Job 使用最新版本
-- 旧版 WASM 在所有关联 Job 完成后可清理
+- 当前实现会同时持久化最新版本别名、版本历史和原始 WASM 字节
+- Controller 重启后会重建模块缓存，因此旧 Job 可以继续按绑定版本运行
+- “旧版 WASM 自动清理/保留策略”仍属于后续迭代
 
 ## Execution
 
@@ -76,7 +84,15 @@
 子 Flow Job-2:          start ──► review ──► approved
 ```
 
+设计目标：
+
 - 主 Flow 中 `state-kind = subprocess` 的状态进入时，Controller 自动创建子 Job
 - 子 Job 完成后，Controller 向主 Job 注入 `completion-event` 驱动继续
 - 子 Job 取消/失败时，可配置是否级联取消主 Job
 - Controller 维护父子 Job 关联关系，支持查询子 Job 状态
+
+当前实现状态：
+
+- `subprocess` manifest 声明已经可部署和查询
+- 自动创建子 Job、父子关联管理、完成回注仍未落地
+- 现阶段可通过手工触发 `completion-event` 的方式模拟子流程回注

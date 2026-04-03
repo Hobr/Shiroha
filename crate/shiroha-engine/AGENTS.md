@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-02 | Updated: 2026-04-02 -->
+<!-- Generated: 2026-04-02 | Updated: 2026-04-03 -->
 
 # shiroha-engine
 
@@ -23,8 +23,9 @@
 
 - `StateMachineEngine` 是纯逻辑（给定状态+事件→转移结果），不管理 Job 状态
 - `JobManager` 负责所有状态变更 + 事件溯源写入，泛型 `S: Storage` 允许注入不同后端
-- `TimerWheel` 每个定时器是独立的 tokio::spawn 任务，暂停时 abort 并记录剩余时间
+- `TimerWheel` 每个定时器是独立的 tokio::spawn 任务，暂停时 abort 并记录剩余时间；`register()` 现在是 async，确保定时器先进入索引再返回
 - 添加新调度策略：实现 `Scheduler` trait 即可
+- 状态级 hook（`on-enter` / `on-exit`）在 `shirohad` 层执行，不在 engine 层实现
 
 ### Testing Requirements
 

@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-02 | Updated: 2026-04-02 -->
+<!-- Generated: 2026-04-02 | Updated: 2026-04-03 -->
 
 # crate
 
@@ -14,7 +14,7 @@ Workspace 库 crate 目录。按关注点分离为 5 个独立 crate，通过 tr
 | `shiroha-core/` | 核心类型与 trait 定义（见 `shiroha-core/AGENTS.md`） |
 | `shiroha-engine/` | 状态机引擎、Job 管理、定时器（见 `shiroha-engine/AGENTS.md`） |
 | `shiroha-proto/` | gRPC protobuf 服务定义（见 `shiroha-proto/AGENTS.md`） |
-| `shiroha-store-redb/` | Redb 嵌入式存储后端（见 `shiroha-store-redb/AGENTS.md`） |
+| `shiroha-store-redb/` | Redb 嵌入式存储后端（latest flow、version history、wasm bytes）（见 `shiroha-store-redb/AGENTS.md`） |
 | `shiroha-wasm/` | WASM 运行时集成（见 `shiroha-wasm/AGENTS.md`） |
 
 ## For AI Agents

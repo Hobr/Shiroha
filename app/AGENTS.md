@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-02 | Updated: 2026-04-02 -->
+<!-- Generated: 2026-04-02 | Updated: 2026-04-03 -->
 
 # app
 
@@ -20,6 +20,7 @@
 
 - 两个 app 共享 `shiroha-proto` 的 gRPC 类型定义
 - 修改 proto 后需同时检查 shirohad 和 sctl 的编译
+- `sctl` 同时维护人类可读输出和 `--json` 机器可读输出
 - `build.rs` 使用 shadow-rs 注入构建信息
 
 <!-- MANUAL: -->

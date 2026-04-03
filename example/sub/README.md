@@ -3,9 +3,9 @@
 这是一组父子 Flow component 示例：
 
 - 父流程：
-  [parent-flow/src/lib.rs](/mnt/data/Project/Shiroha/examples/rust-wasip2/subprocess-demo/parent-flow/src/lib.rs)
+  [parent/src/lib.rs](/mnt/data/Project/Shiroha/example/sub/parent/src/lib.rs)
 - 子流程：
-  [child-flow/src/lib.rs](/mnt/data/Project/Shiroha/examples/rust-wasip2/subprocess-demo/child-flow/src/lib.rs)
+  [child/src/lib.rs](/mnt/data/Project/Shiroha/example/sub/child/src/lib.rs)
 
 两者都实现了 [flow.wit](/mnt/data/Project/Shiroha/crate/shiroha-wasm/wit/flow.wit)，目标平台都是 `wasm32-wasip2`。
 
@@ -34,7 +34,7 @@
 ```bash
 cargo build \
   --offline \
-  --manifest-path examples/sub/parent/Cargo.toml \
+  --manifest-path example/sub/parent/Cargo.toml \
   --target wasm32-wasip2 \
   --release
 ```
@@ -44,7 +44,7 @@ cargo build \
 ```bash
 cargo build \
   --offline \
-  --manifest-path examples/sub/child/Cargo.toml \
+  --manifest-path example/sub/child/Cargo.toml \
   --target wasm32-wasip2 \
   --release
 ```
@@ -55,11 +55,11 @@ cargo build \
 
 ```bash
 sctl deploy \
-  --file examples/sub/child/target/wasm32-wasip2/release/child.wasm \
+  --file example/sub/child/target/wasm32-wasip2/release/child.wasm \
   --flow-id legal-review-demo
 
 sctl deploy \
-  --file examples/sub/parent/target/wasm32-wasip2/release/parent.wasm \
+  --file example/sub/parent/target/wasm32-wasip2/release/parent.wasm \
   --flow-id purchase-parent-demo
 ```
 
@@ -74,8 +74,22 @@ sctl deploy \
 所以当前你可以：
 
 1. 部署这两个 component
-2. 创建父流程 Job
-3. 触发 `submit` 让父流程进入 `legal-review`
+2. 你可以先单独创建一个子流程 Job，手工触发 `approve` 或 `reject`，确认子流程本身可运行
+3. 创建父流程 Job，并用带 payload 的 `submit` 让父流程进入 `legal-review`
 4. 先手工触发父 Job 的 `legal-review-complete` 或 `legal-review-rejected`，模拟子流程结果回注
+
+示例命令：
+
+```bash
+sctl create --flow-id legal-review-demo
+sctl trigger --job-id <child-job-id> --event approve
+
+sctl create --flow-id purchase-parent-demo
+sctl trigger --job-id <parent-job-id> --event submit --payload-text "legal-review-request"
+sctl get --job-id <parent-job-id>
+sctl trigger --job-id <parent-job-id> --event legal-review-complete
+sctl wait --job-id <parent-job-id> --state completed
+sctl events --job-id <parent-job-id> --pretty
+```
 
 也就是说，这是一组“真实可编译 component + 真实父子流程建模示例”，但自动父子联动本身还需要继续开发。

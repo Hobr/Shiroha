@@ -21,10 +21,13 @@
 - 定时器：transition timeout，Controller 本地 timer wheel
 - wasmtime 集成：加载 WASM、调用 get-manifest / invoke-action / invoke-guard
 - 基础 WIT host 接口（sandbox world）
+- 状态级 hook：`on-enter` / `on-exit`
 - Job 生命周期：running / paused / cancelled / completed
 - 事件溯源：状态转移事件写入 Storage（与状态更新同事务）
-- Redb 持久化
-- sctl CLI：部署 Flow、创建 Job、触发事件、查询状态、暂停/恢复/取消 Job
+- Flow 版本绑定：旧 Job 继续使用创建时绑定的版本
+- Redb 持久化（最新 Flow 别名 + 版本历史 + 原始 WASM 字节）
+- 重启恢复：重新加载 Flow 版本和模块缓存，继续执行已持久化 Job
+- sctl CLI：部署/列出/查看 Flow，创建/列出/查看/等待 Job，触发事件、暂停/恢复/取消 Job，查询事件日志
 - tracing 结构化日志
 
 ### Phase 2 — 分布式
@@ -53,8 +56,8 @@
 - WASM Plugin 体系（scheduler / middleware 插件槽）
 - 子流程：subprocess 状态类型、父子 Job 关联
 - Web 管理界面
-- Flow 版本管理
-- 事件溯源查询/回放 API
+- Flow 版本生命周期管理（清理策略、保留策略、历史查询）
+- 事件溯源回放 API
 
 ### Phase 4 — 生态扩展
 
