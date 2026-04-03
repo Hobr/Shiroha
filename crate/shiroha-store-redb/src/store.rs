@@ -4,7 +4,9 @@
 //! 适用于单机生产部署场景。
 //!
 //! 数据以 JSON 序列化存储，表结构：
-//! - `flows`: flow_id (str) → FlowRegistration (JSON bytes)
+//! - `flows`: flow_id (str) → 最新 FlowRegistration (JSON bytes)
+//! - `flow_versions`: flow_id + version → 指定版本 FlowRegistration (JSON bytes)
+//! - `wasm_modules`: wasm_hash (str) → 原始 wasm bytes
 //! - `jobs`: job_id (16 bytes UUID) → Job (JSON bytes)
 //! - `events`: job_id+event_id (32 bytes) → EventRecord (JSON bytes)
 
@@ -20,6 +22,8 @@ use shiroha_core::storage::Storage;
 use uuid::Uuid;
 
 const FLOWS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("flows");
+const FLOW_VERSIONS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("flow_versions");
+const WASM_MODULES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("wasm_modules");
 const JOBS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("jobs");
 const EVENTS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("events");
 
@@ -40,6 +44,8 @@ impl RedbStorage {
         // 首次启动时确保所有表存在
         let txn = db.begin_write().map_err(s)?;
         let _ = txn.open_table(FLOWS_TABLE).map_err(s)?;
+        let _ = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+        let _ = txn.open_table(WASM_MODULES_TABLE).map_err(s)?;
         let _ = txn.open_table(JOBS_TABLE).map_err(s)?;
         let _ = txn.open_table(EVENTS_TABLE).map_err(s)?;
         txn.commit().map_err(s)?;
@@ -55,16 +61,27 @@ impl RedbStorage {
         key[16..].copy_from_slice(event_id.as_bytes());
         key
     }
+
+    fn flow_version_key(flow_id: &str, version: Uuid) -> String {
+        format!("{flow_id}\u{0}{version}")
+    }
 }
 
 impl Storage for RedbStorage {
     async fn save_flow(&self, flow: &FlowRegistration) -> Result<()> {
         let data = serde_json::to_vec(flow).map_err(s)?;
+        let version_key = Self::flow_version_key(&flow.flow_id, flow.version);
         let txn = self.db.begin_write().map_err(s)?;
         {
             let mut table = txn.open_table(FLOWS_TABLE).map_err(s)?;
             table
                 .insert(flow.flow_id.as_str(), data.as_slice())
+                .map_err(s)?;
+        }
+        {
+            let mut table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+            table
+                .insert(version_key.as_str(), data.as_slice())
                 .map_err(s)?;
         }
         txn.commit().map_err(s)?;
@@ -81,6 +98,35 @@ impl Storage for RedbStorage {
             }
             None => Ok(None),
         }
+    }
+
+    async fn get_flow_version(
+        &self,
+        flow_id: &str,
+        version: Uuid,
+    ) -> Result<Option<FlowRegistration>> {
+        let txn = self.db.begin_read().map_err(s)?;
+        let table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+        let version_key = Self::flow_version_key(flow_id, version);
+        match table.get(version_key.as_str()).map_err(s)? {
+            Some(data) => {
+                let flow: FlowRegistration = serde_json::from_slice(data.value()).map_err(s)?;
+                Ok(Some(flow))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn list_flow_versions(&self) -> Result<Vec<FlowRegistration>> {
+        let txn = self.db.begin_read().map_err(s)?;
+        let table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+        let mut flows = Vec::new();
+        for entry in table.iter().map_err(s)? {
+            let (_, v) = entry.map_err(s)?;
+            let flow: FlowRegistration = serde_json::from_slice(v.value()).map_err(s)?;
+            flows.push(flow);
+        }
+        Ok(flows)
     }
 
     async fn list_flows(&self) -> Result<Vec<FlowRegistration>> {
@@ -101,8 +147,46 @@ impl Storage for RedbStorage {
             let mut table = txn.open_table(FLOWS_TABLE).map_err(s)?;
             table.remove(flow_id).map_err(s)?;
         }
+        let version_prefix = format!("{flow_id}\u{0}");
+        let version_keys = {
+            let table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+            let mut keys = Vec::new();
+            for entry in table.iter().map_err(s)? {
+                let (k, _) = entry.map_err(s)?;
+                let key = k.value();
+                if key.starts_with(&version_prefix) {
+                    keys.push(key.to_string());
+                }
+            }
+            keys
+        };
+        {
+            let mut table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+            for key in version_keys {
+                table.remove(key.as_str()).map_err(s)?;
+            }
+        }
         txn.commit().map_err(s)?;
         Ok(())
+    }
+
+    async fn save_wasm_module(&self, hash: &str, wasm_bytes: &[u8]) -> Result<()> {
+        let txn = self.db.begin_write().map_err(s)?;
+        {
+            let mut table = txn.open_table(WASM_MODULES_TABLE).map_err(s)?;
+            table.insert(hash, wasm_bytes).map_err(s)?;
+        }
+        txn.commit().map_err(s)?;
+        Ok(())
+    }
+
+    async fn get_wasm_module(&self, hash: &str) -> Result<Option<Vec<u8>>> {
+        let txn = self.db.begin_read().map_err(s)?;
+        let table = txn.open_table(WASM_MODULES_TABLE).map_err(s)?;
+        match table.get(hash).map_err(s)? {
+            Some(data) => Ok(Some(data.value().to_vec())),
+            None => Ok(None),
+        }
     }
 
     async fn save_job(&self, job: &Job) -> Result<()> {
@@ -272,6 +356,7 @@ mod tests {
         let path = temp_db_path("persist");
         let flow = sample_flow_registration();
         let job = sample_job(&flow);
+        let wasm_bytes = b"(component)".to_vec();
         let event = EventRecord {
             id: Uuid::now_v7(),
             job_id: job.id,
@@ -285,6 +370,10 @@ mod tests {
 
         {
             let storage = RedbStorage::new(&path).expect("open db");
+            storage
+                .save_wasm_module(&flow.wasm_hash, &wasm_bytes)
+                .await
+                .expect("save wasm module");
             storage.save_flow(&flow).await.expect("save flow");
             storage
                 .save_job_with_event(&job, &event)
@@ -298,6 +387,11 @@ mod tests {
             .await
             .expect("get flow")
             .expect("flow exists");
+        let versioned_flow = reopened
+            .get_flow_version(&flow.flow_id, flow.version)
+            .await
+            .expect("get flow version")
+            .expect("flow version exists");
         let stored_job = reopened
             .get_job(job.id)
             .await
@@ -306,8 +400,15 @@ mod tests {
         let events = reopened.get_events(job.id).await.expect("events");
         let jobs = reopened.list_jobs(&flow.flow_id).await.expect("jobs");
         let flows = reopened.list_flows().await.expect("flows");
+        let flow_versions = reopened.list_flow_versions().await.expect("flow versions");
+        let stored_wasm = reopened
+            .get_wasm_module(&flow.wasm_hash)
+            .await
+            .expect("get wasm module")
+            .expect("wasm exists");
 
         assert_eq!(stored_flow.flow_id, flow.flow_id);
+        assert_eq!(versioned_flow.version, flow.version);
         assert_eq!(stored_flow.wasm_hash, "hash-demo");
         assert_eq!(stored_job.current_state, "idle");
         assert_eq!(stored_job.context, Some(vec![1, 2, 3]));
@@ -315,7 +416,51 @@ mod tests {
         assert!(matches!(events[0].kind, EventKind::Created { .. }));
         assert_eq!(jobs.len(), 1);
         assert_eq!(flows.len(), 1);
+        assert_eq!(flow_versions.len(), 1);
+        assert_eq!(stored_wasm, wasm_bytes);
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn list_flows_returns_latest_while_versions_keep_history() {
+        let path = temp_db_path("flow-versions");
+        let first = sample_flow_registration();
+        let second = FlowRegistration {
+            version: Uuid::now_v7(),
+            wasm_hash: "hash-demo-v2".into(),
+            ..first.clone()
+        };
+        let storage = RedbStorage::new(&path).expect("open db");
+
+        storage.save_flow(&first).await.expect("save first flow");
+        storage.save_flow(&second).await.expect("save second flow");
+
+        let latest = storage
+            .get_flow(&first.flow_id)
+            .await
+            .expect("get latest")
+            .expect("latest exists");
+        let first_version = storage
+            .get_flow_version(&first.flow_id, first.version)
+            .await
+            .expect("get first version")
+            .expect("first version exists");
+        let second_version = storage
+            .get_flow_version(&second.flow_id, second.version)
+            .await
+            .expect("get second version")
+            .expect("second version exists");
+        let latest_list = storage.list_flows().await.expect("list latest");
+        let all_versions = storage.list_flow_versions().await.expect("list versions");
+
+        assert_eq!(latest.version, second.version);
+        assert_eq!(first_version.version, first.version);
+        assert_eq!(second_version.version, second.version);
+        assert_eq!(latest_list.len(), 1);
+        assert_eq!(all_versions.len(), 2);
+
+        drop(storage);
         let _ = std::fs::remove_file(path);
     }
 
