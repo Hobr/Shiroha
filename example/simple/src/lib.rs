@@ -51,10 +51,16 @@ impl Guest for ApprovalFlow {
                 },
             ],
             initial_state: "pending-approval".to_string(),
-            actions: vec![ActionDef {
-                name: "ship".to_string(),
-                dispatch: DispatchMode::Local,
-            }],
+            actions: vec![
+                ActionDef {
+                    name: "ship".to_string(),
+                    dispatch: DispatchMode::Local,
+                },
+                ActionDef {
+                    name: "allow-approve".to_string(),
+                    dispatch: DispatchMode::Local,
+                },
+            ],
         }
     }
 

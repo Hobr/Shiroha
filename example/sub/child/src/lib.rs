@@ -60,6 +60,10 @@ impl Guest for ChildFlow {
                     name: "record-rejection".to_string(),
                     dispatch: DispatchMode::Local,
                 },
+                ActionDef {
+                    name: "allow-approval".to_string(),
+                    dispatch: DispatchMode::Local,
+                },
             ],
         }
     }

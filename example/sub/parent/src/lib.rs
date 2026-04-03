@@ -78,6 +78,10 @@ impl Guest for ParentFlow {
                     name: "finalize-parent".to_string(),
                     dispatch: DispatchMode::Local,
                 },
+                ActionDef {
+                    name: "has-payload".to_string(),
+                    dispatch: DispatchMode::Local,
+                },
             ],
         }
     }
