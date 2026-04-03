@@ -71,7 +71,7 @@
 
             shellHook = ''
               export CARGO_HOME="$PWD/.cargo"
-              export PATH="$CARGO_HOME/bin:$PATH"
+              export PATH="$CARGO_HOME/bin:$PWD/target/debug:$PATH"
             '';
           };
       }
