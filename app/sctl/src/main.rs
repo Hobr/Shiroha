@@ -121,7 +121,7 @@ enum Commands {
         /// 持续轮询并打印新事件
         #[arg(long)]
         follow: bool,
-        /// follow 模式下的轮询间隔（毫秒）
+        /// follow 模式下的轮询间隔（毫秒）；配合 --json 时每批新事件输出一个 JSON 数组
         #[arg(long, default_value_t = 500)]
         interval_ms: u64,
     },
@@ -129,7 +129,7 @@ enum Commands {
     Wait {
         #[arg(short = 'i', long)]
         job_id: String,
-        /// 目标状态名，未指定时等待 completed/cancelled
+        /// 目标 lifecycle state 或 current_state，未指定时等待 completed/cancelled
         #[arg(long)]
         state: Option<String>,
         /// 最大等待时间（毫秒），未指定则一直等待
