@@ -4,8 +4,9 @@
 //! - 初始状态是否存在
 //! - 转移引用的状态是否存在
 //! - 不可达状态检测（BFS）
+//! - 可达状态是否存在到终态的路径（死锁/无出口检测）
 //! - 终态不应有出边
-//! - Action/Guard 引用是否在 actions 列表中声明
+//! - Action/Guard 引用是否在 actions 列表中声明（含状态 hook）
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -18,6 +19,7 @@ pub enum ValidationWarning {
     InvalidInitialState(String),
     MissingState { field: String, state: String },
     UnreachableState(String),
+    DeadlockState(String),
     TerminalWithOutgoing(String),
     MissingAction(String),
     MissingGuard(String),
@@ -32,6 +34,9 @@ impl fmt::Display for ValidationWarning {
             }
             Self::UnreachableState(s) => {
                 write!(f, "state `{s}` is unreachable from initial state")
+            }
+            Self::DeadlockState(s) => {
+                write!(f, "state `{s}` cannot reach any terminal state")
             }
             Self::TerminalWithOutgoing(s) => {
                 write!(f, "terminal state `{s}` has outgoing transitions")
@@ -90,6 +95,18 @@ impl FlowValidator {
                 warnings.push(ValidationWarning::MissingGuard(guard.clone()));
             }
         }
+        for state in &manifest.states {
+            if let Some(ref on_enter) = state.on_enter
+                && !action_names.contains(on_enter.as_str())
+            {
+                warnings.push(ValidationWarning::MissingAction(on_enter.clone()));
+            }
+            if let Some(ref on_exit) = state.on_exit
+                && !action_names.contains(on_exit.as_str())
+            {
+                warnings.push(ValidationWarning::MissingAction(on_exit.clone()));
+            }
+        }
 
         // 终态不应有出边
         for state in &manifest.states {
@@ -127,6 +144,41 @@ impl FlowValidator {
         for state in &manifest.states {
             if !visited.contains(state.name.as_str()) {
                 warnings.push(ValidationWarning::UnreachableState(state.name.clone()));
+            }
+        }
+
+        // 反向 BFS：从所有终态出发，标记哪些状态“存在通往终态的路径”。
+        let terminal_states: HashSet<&str> = manifest
+            .states
+            .iter()
+            .filter(|state| state.kind == shiroha_core::flow::StateKind::Terminal)
+            .map(|state| state.name.as_str())
+            .collect();
+        let mut reverse_adj: HashMap<&str, Vec<&str>> = HashMap::new();
+        for t in &manifest.transitions {
+            reverse_adj
+                .entry(t.to.as_str())
+                .or_default()
+                .push(t.from.as_str());
+        }
+        let mut can_reach_terminal = terminal_states.clone();
+        let mut reverse_queue: VecDeque<&str> = terminal_states.iter().copied().collect();
+        while let Some(current) = reverse_queue.pop_front() {
+            if let Some(neighbors) = reverse_adj.get(current) {
+                for &prev in neighbors {
+                    if can_reach_terminal.insert(prev) {
+                        reverse_queue.push_back(prev);
+                    }
+                }
+            }
+        }
+
+        for state in &manifest.states {
+            if visited.contains(state.name.as_str())
+                && state.kind != shiroha_core::flow::StateKind::Terminal
+                && !can_reach_terminal.contains(state.name.as_str())
+            {
+                warnings.push(ValidationWarning::DeadlockState(state.name.clone()));
             }
         }
 
@@ -240,6 +292,71 @@ mod tests {
         )));
         assert!(warnings.iter().any(
             |warning| matches!(warning, ValidationWarning::UnreachableState(state) if state == "orphan")
+        ));
+    }
+
+    #[test]
+    fn deadlock_and_missing_state_hook_are_reported() {
+        let manifest = FlowManifest {
+            id: "deadlock".into(),
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: Some("bootstrap".into()),
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "loop".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: Some("cleanup".into()),
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![
+                TransitionDef {
+                    from: "idle".into(),
+                    to: "loop".into(),
+                    event: "start".into(),
+                    guard: None,
+                    action: None,
+                    timeout: None,
+                },
+                TransitionDef {
+                    from: "loop".into(),
+                    to: "loop".into(),
+                    event: "spin".into(),
+                    guard: None,
+                    action: None,
+                    timeout: None,
+                },
+            ],
+            initial_state: "idle".into(),
+            actions: vec![],
+        };
+
+        let warnings = FlowValidator::validate(&manifest);
+
+        assert!(warnings.iter().any(
+            |warning| matches!(warning, ValidationWarning::MissingAction(name) if name == "bootstrap")
+        ));
+        assert!(warnings.iter().any(
+            |warning| matches!(warning, ValidationWarning::MissingAction(name) if name == "cleanup")
+        ));
+        assert!(warnings.iter().any(
+            |warning| matches!(warning, ValidationWarning::DeadlockState(state) if state == "idle")
+        ));
+        assert!(warnings.iter().any(
+            |warning| matches!(warning, ValidationWarning::DeadlockState(state) if state == "loop")
         ));
     }
 }

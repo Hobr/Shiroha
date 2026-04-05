@@ -56,6 +56,8 @@ impl FlowService for FlowServiceImpl {
             wasm_module.component(),
         )
         .map_err(|e| Status::internal(e.to_string()))?;
+        host.validate_required_exports()
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let manifest = host
             .get_manifest()
@@ -63,9 +65,13 @@ impl FlowService for FlowServiceImpl {
 
         // 静态验证
         let warnings = FlowValidator::validate(&manifest);
+        let warning_messages: Vec<String> = warnings.iter().map(|w| w.to_string()).collect();
         if !warnings.is_empty() {
-            let msgs: Vec<String> = warnings.iter().map(|w| w.to_string()).collect();
-            tracing::warn!(flow_id, warnings = ?msgs, "flow validation warnings");
+            tracing::warn!(
+                flow_id,
+                warnings = ?warning_messages,
+                "flow validation warnings"
+            );
         }
 
         let version = Uuid::now_v7();
@@ -118,6 +124,7 @@ impl FlowService for FlowServiceImpl {
         Ok(Response::new(DeployFlowResponse {
             flow_id,
             version: version.to_string(),
+            warnings: warning_messages,
         }))
     }
 
@@ -223,8 +230,58 @@ mod tests {
     use super::*;
     use crate::job_service::JobServiceImpl;
     use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
+    use shiroha_core::flow::{FlowManifest, StateDef, StateKind, TransitionDef};
     use shiroha_proto::shiroha_api::job_service_server::JobService;
     use shiroha_proto::shiroha_api::{CreateJobRequest, DeleteFlowRequest};
+
+    fn warning_manifest() -> FlowManifest {
+        FlowManifest {
+            id: "warning-demo".into(),
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: Some("bootstrap".into()),
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "loop".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: Some("cleanup".into()),
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![
+                TransitionDef {
+                    from: "idle".into(),
+                    to: "loop".into(),
+                    event: "start".into(),
+                    guard: None,
+                    action: None,
+                    timeout: None,
+                },
+                TransitionDef {
+                    from: "loop".into(),
+                    to: "loop".into(),
+                    event: "spin".into(),
+                    guard: None,
+                    action: None,
+                    timeout: None,
+                },
+            ],
+            initial_state: "idle".into(),
+            actions: Vec::new(),
+        }
+    }
 
     #[tokio::test]
     async fn deploy_list_and_get_flow_round_trip() {
@@ -299,6 +356,35 @@ mod tests {
             .expect_err("missing exports should fail");
 
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn deploy_flow_returns_validation_warnings() {
+        let harness = TestHarness::new("flow-warnings").await;
+        let service = FlowServiceImpl::new(harness.state.clone());
+
+        let deploy = service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "warning-demo".into(),
+                wasm_bytes: wasm_for_manifest(&warning_manifest()),
+            }))
+            .await
+            .expect("deploy flow")
+            .into_inner();
+
+        assert!(!deploy.warnings.is_empty());
+        assert!(
+            deploy
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("cannot reach any terminal state"))
+        );
+        assert!(
+            deploy
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("bootstrap"))
+        );
     }
 
     #[tokio::test]

@@ -72,6 +72,7 @@ impl ShirohaClient {
                 "flow_id": resp.flow_id,
                 "version": resp.version,
                 "manifest": manifest,
+                "warnings": resp.warnings,
             }))?;
             return Ok(());
         }
@@ -87,6 +88,9 @@ impl ShirohaClient {
                 summary.transition_count,
                 summary.action_count
             );
+        }
+        for warning in &resp.warnings {
+            eprintln!("warning: {warning}");
         }
         Ok(())
     }
