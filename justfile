@@ -31,19 +31,23 @@ release-shirohad:
     {{build_cmd}} {{package-shirohad}} --release
 
 [working-directory: "example/simple"]
-build-example-plugin-simple:
-    {{build_cmd}} {{target-plugin}}
+build-example-simple:
+    {{build_cmd}} {{target-plugin}} --manifest-path ../simple/Cargo.toml --release
 
 [working-directory: "example/advanced"]
-build-example-plugin-advanced:
-    {{build_cmd}} {{target-plugin}}
+build-example-advanced:
+    {{build_cmd}} {{target-plugin}} --manifest-path ../advanced/Cargo.toml --release
+
+[working-directory: "example/warning-deadlock"]
+build-example-warning-deadlock:
+    {{build_cmd}} {{target-plugin}} --manifest-path ../warning-deadlock/Cargo.toml --release
 
 [working-directory: "example/sub"]
-build-example-plugin-sub:
-    {{build_cmd}} {{target-plugin}} --manifest-path ../sub/child/Cargo.toml
-    {{build_cmd}} {{target-plugin}} --manifest-path ../sub/parent/Cargo.toml
+build-example-sub:
+    {{build_cmd}} {{target-plugin}} --manifest-path ../sub/child/Cargo.toml --release
+    {{build_cmd}} {{target-plugin}} --manifest-path ../sub/parent/Cargo.toml --release
 
-build-example: build-example-plugin-simple build-example-plugin-advanced build-example-plugin-sub
+build-example: build-example-simple build-example-advanced build-example-warning-deadlock build-example-sub
 
 build: build-sctl build-shirohad build-example
 release: release-sctl release-shirohad
