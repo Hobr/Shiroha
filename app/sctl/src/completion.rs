@@ -2,8 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::time::Duration;
 
 use clap_complete::engine::CompletionCandidate;
-
-use crate::client::ShirohaClient;
+use sctl::control::ControlClient;
 
 const DEFAULT_SERVER: &str = "http://[::1]:50051";
 const COMPLETION_TIMEOUT: Duration = Duration::from_millis(500);
@@ -21,7 +20,7 @@ const EVENT_KIND_NAMES: &[&str] = &[
 pub fn flow_id_completer(current: &OsStr) -> Vec<CompletionCandidate> {
     let context = CompletionContext::from_process_args();
     let candidates = run_query(async move {
-        let mut client = ShirohaClient::connect(&context.server).await?;
+        let mut client = ControlClient::connect(&context.server).await?;
         client.list_flow_ids().await
     })
     .unwrap_or_default();
@@ -32,7 +31,7 @@ pub fn flow_id_completer(current: &OsStr) -> Vec<CompletionCandidate> {
 pub fn job_id_completer(current: &OsStr) -> Vec<CompletionCandidate> {
     let context = CompletionContext::from_process_args();
     let candidates = run_query(async move {
-        let mut client = ShirohaClient::connect(&context.server).await?;
+        let mut client = ControlClient::connect(&context.server).await?;
         client.list_job_ids().await
     })
     .unwrap_or_default();
@@ -47,7 +46,7 @@ pub fn job_event_completer(current: &OsStr) -> Vec<CompletionCandidate> {
     };
 
     let candidates = run_query(async move {
-        let mut client = ShirohaClient::connect(&context.server).await?;
+        let mut client = ControlClient::connect(&context.server).await?;
         client.list_job_event_names(&job_id).await
     })
     .unwrap_or_default();
@@ -60,7 +59,7 @@ pub fn wait_state_completer(current: &OsStr) -> Vec<CompletionCandidate> {
     let job_id = context.job_id.clone();
 
     let candidates = run_query(async move {
-        let mut client = ShirohaClient::connect(&context.server).await?;
+        let mut client = ControlClient::connect(&context.server).await?;
         let mut states = LIFECYCLE_STATES
             .iter()
             .map(ToString::to_string)
@@ -83,7 +82,7 @@ pub fn job_event_id_completer(current: &OsStr) -> Vec<CompletionCandidate> {
     };
 
     let candidates = run_query(async move {
-        let mut client = ShirohaClient::connect(&context.server).await?;
+        let mut client = ControlClient::connect(&context.server).await?;
         client.list_job_event_ids(&job_id).await
     })
     .unwrap_or_default();

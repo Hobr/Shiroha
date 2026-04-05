@@ -5,17 +5,14 @@
 use std::path::Path;
 
 use anyhow::{Context, bail};
+use sctl::control::{ControlClient, EventQuery};
 use serde_json::{Value, json};
-use shiroha_proto::shiroha_api::flow_service_client::FlowServiceClient;
-use shiroha_proto::shiroha_api::job_service_client::JobServiceClient;
 use shiroha_proto::shiroha_api::*;
 use tokio::time::{Duration, sleep};
-use tonic::transport::Channel;
 
 /// shirohad gRPC 客户端
 pub struct ShirohaClient {
-    flow: FlowServiceClient<Channel>,
-    job: JobServiceClient<Channel>,
+    api: ControlClient,
 }
 
 pub struct EventQueryOptions {
@@ -33,10 +30,8 @@ pub struct EventQueryOptions {
 impl ShirohaClient {
     /// 连接到 shirohad gRPC 服务
     pub async fn connect(addr: &str) -> anyhow::Result<Self> {
-        let channel = Channel::from_shared(addr.to_string())?.connect().await?;
         Ok(Self {
-            flow: FlowServiceClient::new(channel.clone()),
-            job: JobServiceClient::new(channel),
+            api: ControlClient::connect(addr).await?,
         })
     }
 
@@ -48,24 +43,9 @@ impl ShirohaClient {
         json_output: bool,
     ) -> anyhow::Result<()> {
         let wasm_bytes = std::fs::read(file)?;
-        let resp = self
-            .flow
-            .deploy_flow(DeployFlowRequest {
-                flow_id: flow_id.to_string(),
-                wasm_bytes,
-            })
-            .await?
-            .into_inner();
+        let resp = self.api.deploy_flow(flow_id, wasm_bytes).await?;
 
-        let flow_details = self
-            .flow
-            .get_flow(GetFlowRequest {
-                flow_id: resp.flow_id.clone(),
-                version: None,
-            })
-            .await
-            .ok()
-            .map(|response| response.into_inner());
+        let flow_details = self.api.get_flow(&resp.flow_id, None).await.ok();
 
         if json_output {
             let manifest = flow_details
@@ -99,23 +79,17 @@ impl ShirohaClient {
     }
 
     pub async fn list_flows(&mut self, json_output: bool) -> anyhow::Result<()> {
-        let mut resp = self
-            .flow
-            .list_flows(ListFlowsRequest {})
-            .await?
-            .into_inner();
-        if resp.flows.is_empty() {
+        let flows = self.api.list_flows().await?;
+        if flows.is_empty() {
             if json_output {
                 return print_json_value(&Value::Array(Vec::new()));
             }
             println!("no flows");
             return Ok(());
         }
-        resp.flows
-            .sort_by(|left, right| left.flow_id.cmp(&right.flow_id));
         if json_output {
             print_json_value(&json!(
-                resp.flows
+                flows
                     .iter()
                     .map(|flow| json!({
                         "flow_id": flow.flow_id,
@@ -132,7 +106,7 @@ impl ShirohaClient {
             "{:<20} {:<38} {:<15} STATES",
             "FLOW_ID", "VERSION", "INITIAL"
         );
-        for f in &resp.flows {
+        for f in &flows {
             println!(
                 "{:<20} {:<38} {:<15} {}",
                 f.flow_id, f.version, f.initial_state, f.state_count
@@ -140,18 +114,6 @@ impl ShirohaClient {
         }
         Ok(())
     }
-
-    pub async fn list_flow_ids(&mut self) -> anyhow::Result<Vec<String>> {
-        let mut resp = self
-            .flow
-            .list_flows(ListFlowsRequest {})
-            .await?
-            .into_inner();
-        resp.flows
-            .sort_by(|left, right| left.flow_id.cmp(&right.flow_id));
-        Ok(resp.flows.into_iter().map(|flow| flow.flow_id).collect())
-    }
-
     pub async fn get_flow(
         &mut self,
         flow_id: &str,
@@ -159,14 +121,7 @@ impl ShirohaClient {
         summary: bool,
         json_output: bool,
     ) -> anyhow::Result<()> {
-        let resp = self
-            .flow
-            .get_flow(GetFlowRequest {
-                flow_id: flow_id.to_string(),
-                version: version.map(ToString::to_string),
-            })
-            .await?
-            .into_inner();
+        let resp = self.api.get_flow(flow_id, version).await?;
         if json_output {
             print_json_value(&json!({
                 "flow_id": resp.flow_id,
@@ -191,25 +146,17 @@ impl ShirohaClient {
         flow_id: &str,
         json_output: bool,
     ) -> anyhow::Result<()> {
-        let mut resp = self
-            .flow
-            .list_flow_versions(ListFlowVersionsRequest {
-                flow_id: flow_id.to_string(),
-            })
-            .await?
-            .into_inner();
-        if resp.flows.is_empty() {
+        let flows = self.api.list_flow_versions(flow_id).await?;
+        if flows.is_empty() {
             if json_output {
                 return print_json_value(&Value::Array(Vec::new()));
             }
             println!("no historical versions");
             return Ok(());
         }
-        resp.flows
-            .sort_by(|left, right| right.version.cmp(&left.version));
         if json_output {
             print_json_value(&json!(
-                resp.flows
+                flows
                     .iter()
                     .map(|flow| json!({
                         "flow_id": flow.flow_id,
@@ -225,7 +172,7 @@ impl ShirohaClient {
             "{:<20} {:<38} {:<15} STATES",
             "FLOW_ID", "VERSION", "INITIAL"
         );
-        for flow in &resp.flows {
+        for flow in &flows {
             println!(
                 "{:<20} {:<38} {:<15} {}",
                 flow.flow_id, flow.version, flow.initial_state, flow.state_count
@@ -235,13 +182,7 @@ impl ShirohaClient {
     }
 
     pub async fn delete_flow(&mut self, flow_id: &str, json_output: bool) -> anyhow::Result<()> {
-        let resp = self
-            .flow
-            .delete_flow(DeleteFlowRequest {
-                flow_id: flow_id.to_string(),
-            })
-            .await?
-            .into_inner();
+        let resp = self.api.delete_flow(flow_id).await?;
         if json_output {
             print_json_value(&json!({
                 "flow_id": resp.flow_id,
@@ -259,14 +200,7 @@ impl ShirohaClient {
         context: Option<Vec<u8>>,
         json_output: bool,
     ) -> anyhow::Result<()> {
-        let resp = self
-            .job
-            .create_job(CreateJobRequest {
-                flow_id: flow_id.to_string(),
-                context: context.clone(),
-            })
-            .await?
-            .into_inner();
+        let resp = self.api.create_job(flow_id, context.clone()).await?;
         if json_output {
             print_json_value(&json!({
                 "job_id": resp.job_id,
@@ -287,13 +221,7 @@ impl ShirohaClient {
     }
 
     pub async fn get_job(&mut self, job_id: &str, json_output: bool) -> anyhow::Result<()> {
-        let resp = self
-            .job
-            .get_job(GetJobRequest {
-                job_id: job_id.to_string(),
-            })
-            .await?
-            .into_inner();
+        let resp = self.api.get_job(job_id).await?;
         if json_output {
             print_job_json(&resp)?;
             return Ok(());
@@ -303,13 +231,7 @@ impl ShirohaClient {
     }
 
     pub async fn delete_job(&mut self, job_id: &str, json_output: bool) -> anyhow::Result<()> {
-        let resp = self
-            .job
-            .delete_job(DeleteJobRequest {
-                job_id: job_id.to_string(),
-            })
-            .await?
-            .into_inner();
+        let resp = self.api.delete_job(job_id).await?;
         if json_output {
             print_json_value(&json!({
                 "job_id": resp.job_id,
@@ -328,12 +250,13 @@ impl ShirohaClient {
         json_output: bool,
     ) -> anyhow::Result<()> {
         let mut jobs = if all {
-            self.fetch_all_jobs().await?
+            self.api.list_all_jobs().await?
         } else {
-            self.fetch_jobs_for_flow(
-                flow_id.expect("clap should require --flow-id when --all is absent"),
-            )
-            .await?
+            self.api
+                .list_jobs_for_flow(
+                    flow_id.expect("clap should require --flow-id when --all is absent"),
+                )
+                .await?
         };
         if jobs.is_empty() {
             if json_output {
@@ -366,31 +289,6 @@ impl ShirohaClient {
         }
         Ok(())
     }
-
-    pub async fn list_job_ids(&mut self) -> anyhow::Result<Vec<String>> {
-        let mut job_ids = self
-            .fetch_all_jobs()
-            .await?
-            .into_iter()
-            .map(|job| job.job_id)
-            .collect::<Vec<_>>();
-        job_ids.sort_unstable();
-        job_ids.dedup();
-        Ok(job_ids)
-    }
-
-    pub async fn list_job_event_names(&mut self, job_id: &str) -> anyhow::Result<Vec<String>> {
-        let job = self.fetch_job(job_id).await?;
-        let flow = self.fetch_flow(&job.flow_id).await?;
-        Ok(manifest_event_names(&flow.manifest_json))
-    }
-
-    pub async fn list_wait_states(&mut self, job_id: &str) -> anyhow::Result<Vec<String>> {
-        let job = self.fetch_job(job_id).await?;
-        let flow = self.fetch_flow(&job.flow_id).await?;
-        Ok(manifest_state_names(&flow.manifest_json))
-    }
-
     pub async fn trigger_event(
         &mut self,
         job_id: &str,
@@ -398,12 +296,8 @@ impl ShirohaClient {
         payload: Option<Vec<u8>>,
         json_output: bool,
     ) -> anyhow::Result<()> {
-        self.job
-            .trigger_event(TriggerEventRequest {
-                job_id: job_id.to_string(),
-                event: event.to_string(),
-                payload: payload.clone(),
-            })
+        self.api
+            .trigger_event(job_id, event, payload.clone())
             .await?;
         if json_output {
             print_json_value(&json!({
@@ -424,11 +318,7 @@ impl ShirohaClient {
     }
 
     pub async fn pause_job(&mut self, job_id: &str, json_output: bool) -> anyhow::Result<()> {
-        self.job
-            .pause_job(PauseJobRequest {
-                job_id: job_id.to_string(),
-            })
-            .await?;
+        self.api.pause_job(job_id).await?;
         if json_output {
             print_json_value(&json!({
                 "job_id": job_id,
@@ -441,11 +331,7 @@ impl ShirohaClient {
     }
 
     pub async fn resume_job(&mut self, job_id: &str, json_output: bool) -> anyhow::Result<()> {
-        self.job
-            .resume_job(ResumeJobRequest {
-                job_id: job_id.to_string(),
-            })
-            .await?;
+        self.api.resume_job(job_id).await?;
         if json_output {
             print_json_value(&json!({
                 "job_id": job_id,
@@ -458,11 +344,7 @@ impl ShirohaClient {
     }
 
     pub async fn cancel_job(&mut self, job_id: &str, json_output: bool) -> anyhow::Result<()> {
-        self.job
-            .cancel_job(CancelJobRequest {
-                job_id: job_id.to_string(),
-            })
-            .await?;
+        self.api.cancel_job(job_id).await?;
         if json_output {
             print_json_value(&json!({
                 "job_id": job_id,
@@ -484,14 +366,17 @@ impl ShirohaClient {
         }
 
         let events = apply_tail(
-            self.fetch_job_events(
-                job_id,
-                options.since_id.as_deref(),
-                options.since_timestamp_ms,
-                options.limit,
-                &options.kind_filters,
-            )
-            .await?,
+            self.api
+                .get_job_events(
+                    job_id,
+                    &EventQuery {
+                        since_id: options.since_id.clone(),
+                        since_timestamp_ms: options.since_timestamp_ms,
+                        limit: options.limit,
+                        kind_filters: options.kind_filters.clone(),
+                    },
+                )
+                .await?,
             options.tail,
         );
         if events.is_empty() {
@@ -515,7 +400,7 @@ impl ShirohaClient {
     ) -> anyhow::Result<()> {
         let wait_future = async {
             loop {
-                let job = self.fetch_job(job_id).await?;
+                let job = self.api.get_job(job_id).await?;
                 if job_matches_target(&job, target_state) {
                     return Ok::<GetJobResponse, anyhow::Error>(job);
                 }
@@ -552,14 +437,20 @@ impl ShirohaClient {
         let mut since_id = options.since_id.clone();
         let mut since_timestamp_ms = options.since_timestamp_ms;
         loop {
-            let new_events = self.fetch_job_events(
-                job_id,
-                since_id.as_deref(),
-                since_timestamp_ms,
-                options.limit,
-                &options.kind_filters,
+            let new_events = apply_tail(
+                self.api
+                    .get_job_events(
+                        job_id,
+                        &EventQuery {
+                            since_id: since_id.clone(),
+                            since_timestamp_ms,
+                            limit: options.limit,
+                            kind_filters: options.kind_filters.clone(),
+                        },
+                    )
+                    .await?,
+                options.tail,
             );
-            let new_events = apply_tail(new_events.await?, options.tail);
 
             if !new_events.is_empty() {
                 since_id = new_events.last().map(|event| event.id.clone());
@@ -578,83 +469,6 @@ impl ShirohaClient {
                 _ = sleep(Duration::from_millis(options.interval_ms)) => {}
             }
         }
-    }
-
-    async fn fetch_job_events(
-        &mut self,
-        job_id: &str,
-        since_id: Option<&str>,
-        since_timestamp_ms: Option<u64>,
-        limit: Option<u32>,
-        kind_filters: &[String],
-    ) -> anyhow::Result<Vec<EventRecord>> {
-        let mut events = self
-            .job
-            .get_job_events(GetJobEventsRequest {
-                job_id: job_id.to_string(),
-                since_id: since_id.map(ToString::to_string),
-                since_timestamp_ms,
-                limit,
-                kind: kind_filters.to_vec(),
-            })
-            .await?
-            .into_inner()
-            .events;
-        events.sort_by(|left, right| {
-            left.timestamp_ms
-                .cmp(&right.timestamp_ms)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        Ok(events)
-    }
-
-    pub async fn list_job_event_ids(&mut self, job_id: &str) -> anyhow::Result<Vec<String>> {
-        Ok(self
-            .fetch_job_events(job_id, None, None, None, &[])
-            .await?
-            .into_iter()
-            .map(|event| event.id)
-            .collect())
-    }
-
-    async fn fetch_job(&mut self, job_id: &str) -> anyhow::Result<GetJobResponse> {
-        Ok(self
-            .job
-            .get_job(GetJobRequest {
-                job_id: job_id.to_string(),
-            })
-            .await?
-            .into_inner())
-    }
-
-    async fn fetch_jobs_for_flow(&mut self, flow_id: &str) -> anyhow::Result<Vec<GetJobResponse>> {
-        Ok(self
-            .job
-            .list_jobs(ListJobsRequest {
-                flow_id: flow_id.to_string(),
-            })
-            .await?
-            .into_inner()
-            .jobs)
-    }
-
-    async fn fetch_all_jobs(&mut self) -> anyhow::Result<Vec<GetJobResponse>> {
-        let mut jobs = Vec::new();
-        for flow_id in self.list_flow_ids().await? {
-            jobs.extend(self.fetch_jobs_for_flow(&flow_id).await?);
-        }
-        Ok(jobs)
-    }
-
-    async fn fetch_flow(&mut self, flow_id: &str) -> anyhow::Result<GetFlowResponse> {
-        Ok(self
-            .flow
-            .get_flow(GetFlowRequest {
-                flow_id: flow_id.to_string(),
-                version: None,
-            })
-            .await?
-            .into_inner())
     }
 }
 
@@ -1050,42 +864,6 @@ fn value_to_label(value: &Value) -> String {
         .unwrap_or_else(|| compact_json(&value.to_string()))
 }
 
-fn manifest_event_names(raw: &str) -> Vec<String> {
-    let Some(value) = parse_json_value(raw) else {
-        return Vec::new();
-    };
-
-    let mut events = value
-        .get("transitions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|transition| transition.get("event").and_then(Value::as_str))
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    events.sort_unstable();
-    events.dedup();
-    events
-}
-
-fn manifest_state_names(raw: &str) -> Vec<String> {
-    let Some(value) = parse_json_value(raw) else {
-        return Vec::new();
-    };
-
-    let mut states = value
-        .get("states")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|state| state.get("name").and_then(Value::as_str))
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    states.sort_unstable();
-    states.dedup();
-    states
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1156,36 +934,6 @@ mod tests {
         assert_eq!(summary.state_count, 2);
         assert_eq!(summary.transition_count, 1);
         assert_eq!(summary.action_count, 2);
-    }
-
-    #[test]
-    fn manifest_event_names_extracts_and_deduplicates() {
-        let events = manifest_event_names(
-            r#"{
-                "transitions":[
-                    {"event":"approve"},
-                    {"event":"archive"},
-                    {"event":"approve"}
-                ]
-            }"#,
-        );
-
-        assert_eq!(events, vec!["approve", "archive"]);
-    }
-
-    #[test]
-    fn manifest_state_names_extracts_and_sorts() {
-        let states = manifest_state_names(
-            r#"{
-                "states":[
-                    {"name":"done"},
-                    {"name":"idle"},
-                    {"name":"done"}
-                ]
-            }"#,
-        );
-
-        assert_eq!(states, vec!["done", "idle"]);
     }
 
     #[test]
