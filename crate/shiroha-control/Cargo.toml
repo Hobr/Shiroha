@@ -1,0 +1,15 @@
+[package]
+name = "shiroha-control"
+description = "Shiroha Control Client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+shiroha-proto.workspace = true
+
+tonic.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
