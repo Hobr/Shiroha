@@ -12,7 +12,8 @@ use shiroha_engine::validator::FlowValidator;
 use shiroha_proto::shiroha_api::flow_service_server::FlowService;
 use shiroha_proto::shiroha_api::{
     DeleteFlowRequest, DeleteFlowResponse, DeployFlowRequest, DeployFlowResponse, FlowSummary,
-    GetFlowRequest, GetFlowResponse, ListFlowsRequest, ListFlowsResponse,
+    GetFlowRequest, GetFlowResponse, ListFlowVersionsRequest, ListFlowVersionsResponse,
+    ListFlowsRequest, ListFlowsResponse,
 };
 use shiroha_wasm::module_cache::WasmModule;
 use tonic::{Request, Response, Status};
@@ -27,6 +28,15 @@ pub struct FlowServiceImpl {
 impl FlowServiceImpl {
     pub fn new(state: Arc<ShirohaState>) -> Self {
         Self { state }
+    }
+
+    fn flow_summary(flow: &FlowRegistration) -> FlowSummary {
+        FlowSummary {
+            flow_id: flow.flow_id.clone(),
+            version: flow.version.to_string(),
+            initial_state: flow.manifest.initial_state.clone(),
+            state_count: flow.manifest.states.len() as u32,
+        }
     }
 }
 
@@ -139,31 +149,55 @@ impl FlowService for FlowServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let summaries = flows
-            .iter()
-            .map(|f| FlowSummary {
-                flow_id: f.flow_id.clone(),
-                version: f.version.to_string(),
-                initial_state: f.manifest.initial_state.clone(),
-                state_count: f.manifest.states.len() as u32,
-            })
-            .collect();
+        let summaries = flows.iter().map(Self::flow_summary).collect();
 
         Ok(Response::new(ListFlowsResponse { flows: summaries }))
+    }
+
+    async fn list_flow_versions(
+        &self,
+        request: Request<ListFlowVersionsRequest>,
+    ) -> Result<Response<ListFlowVersionsResponse>, Status> {
+        let flow_id = request.into_inner().flow_id;
+        let mut flows = self
+            .state
+            .storage
+            .list_flow_versions()
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        flows.retain(|flow| flow.flow_id == flow_id);
+
+        Ok(Response::new(ListFlowVersionsResponse {
+            flows: flows.iter().map(Self::flow_summary).collect(),
+        }))
     }
 
     async fn get_flow(
         &self,
         request: Request<GetFlowRequest>,
     ) -> Result<Response<GetFlowResponse>, Status> {
-        let flow_id = request.into_inner().flow_id;
-        let flow = self
-            .state
-            .storage
-            .get_flow(&flow_id)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| Status::not_found(format!("flow `{flow_id}` not found")))?;
+        let req = request.into_inner();
+        let flow_id = req.flow_id;
+        let flow = if let Some(version) = req.version {
+            let version = version
+                .parse::<Uuid>()
+                .map_err(|_| Status::invalid_argument(format!("invalid UUID: {version}")))?;
+            self.state
+                .storage
+                .get_flow_version(&flow_id, version)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?
+                .ok_or_else(|| {
+                    Status::not_found(format!("flow `{flow_id}` version {version} not found"))
+                })?
+        } else {
+            self.state
+                .storage
+                .get_flow(&flow_id)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?
+                .ok_or_else(|| Status::not_found(format!("flow `{flow_id}` not found")))?
+        };
 
         let manifest_json =
             serde_json::to_string(&flow.manifest).map_err(|e| Status::internal(e.to_string()))?;
@@ -232,7 +266,10 @@ mod tests {
     use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
     use shiroha_core::flow::{FlowManifest, StateDef, StateKind, TransitionDef};
     use shiroha_proto::shiroha_api::job_service_server::JobService;
-    use shiroha_proto::shiroha_api::{CreateJobRequest, DeleteFlowRequest};
+    use shiroha_proto::shiroha_api::{
+        CreateJobRequest, DeleteFlowRequest, GetFlowRequest, ListFlowVersionsRequest,
+        ListFlowsRequest,
+    };
 
     fn warning_manifest() -> FlowManifest {
         FlowManifest {
@@ -314,6 +351,7 @@ mod tests {
         let fetched = service
             .get_flow(Request::new(GetFlowRequest {
                 flow_id: "demo-flow".into(),
+                version: None,
             }))
             .await
             .expect("get flow")
@@ -385,6 +423,80 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("bootstrap"))
         );
+    }
+
+    #[tokio::test]
+    async fn list_flow_versions_and_get_specific_version_work() {
+        let harness = TestHarness::new("flow-service-version-query").await;
+        let service = FlowServiceImpl::new(harness.state.clone());
+        let first = approval_manifest("demo-flow", Some("allow"));
+        let second = approval_manifest("demo-flow", Some("deny"));
+
+        let first_deploy = service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "demo-flow".into(),
+                wasm_bytes: wasm_for_manifest(&first),
+            }))
+            .await
+            .expect("deploy first flow")
+            .into_inner();
+        let second_deploy = service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "demo-flow".into(),
+                wasm_bytes: wasm_for_manifest(&second),
+            }))
+            .await
+            .expect("deploy second flow")
+            .into_inner();
+
+        let latest = service
+            .get_flow(Request::new(GetFlowRequest {
+                flow_id: "demo-flow".into(),
+                version: None,
+            }))
+            .await
+            .expect("get latest flow")
+            .into_inner();
+        assert_eq!(latest.version, second_deploy.version);
+
+        let first_version = service
+            .get_flow(Request::new(GetFlowRequest {
+                flow_id: "demo-flow".into(),
+                version: Some(first_deploy.version.clone()),
+            }))
+            .await
+            .expect("get first version")
+            .into_inner();
+        assert_eq!(first_version.version, first_deploy.version);
+
+        let versions = service
+            .list_flow_versions(Request::new(ListFlowVersionsRequest {
+                flow_id: "demo-flow".into(),
+            }))
+            .await
+            .expect("list flow versions")
+            .into_inner();
+        assert_eq!(versions.flows.len(), 2);
+        assert!(
+            versions
+                .flows
+                .iter()
+                .any(|flow| flow.version == first_deploy.version)
+        );
+        assert!(
+            versions
+                .flows
+                .iter()
+                .any(|flow| flow.version == second_deploy.version)
+        );
+
+        let latest_list = service
+            .list_flows(Request::new(ListFlowsRequest {}))
+            .await
+            .expect("list latest flows")
+            .into_inner();
+        assert_eq!(latest_list.flows.len(), 1);
+        assert_eq!(latest_list.flows[0].version, second_deploy.version);
     }
 
     #[tokio::test]

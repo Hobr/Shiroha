@@ -76,6 +76,21 @@ pub fn wait_state_completer(current: &OsStr) -> Vec<CompletionCandidate> {
     filter_candidates(current, candidates)
 }
 
+pub fn job_event_id_completer(current: &OsStr) -> Vec<CompletionCandidate> {
+    let context = CompletionContext::from_process_args();
+    let Some(job_id) = context.job_id.clone() else {
+        return Vec::new();
+    };
+
+    let candidates = run_query(async move {
+        let mut client = ShirohaClient::connect(&context.server).await?;
+        client.list_job_event_ids(&job_id).await
+    })
+    .unwrap_or_default();
+
+    filter_candidates(current, candidates)
+}
+
 pub fn event_kind_completer(current: &OsStr) -> Vec<CompletionCandidate> {
     filter_candidates(
         current,

@@ -148,9 +148,21 @@ enum Commands {
             add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
         )]
         flow_id: String,
+        /// 查询指定部署版本；默认返回 latest alias
+        #[arg(long, value_name = "VERSION")]
+        version: Option<String>,
         /// 以拓扑摘要视图展示状态、转移和 action
         #[arg(long, conflicts_with = "json")]
         summary: bool,
+    },
+    /// 列出某个 Flow 的历史部署版本
+    FlowVersions {
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
+        )]
+        flow_id: String,
     },
     /// 删除 Flow；要求不存在关联 Job
     DeleteFlow {
@@ -263,6 +275,19 @@ enum Commands {
         /// 持续轮询并打印新事件
         #[arg(long)]
         follow: bool,
+        /// 仅返回给定事件 ID 之后的新事件
+        #[arg(
+            long,
+            value_name = "EVENT_ID",
+            add = clap_complete::engine::ArgValueCompleter::new(completion::job_event_id_completer)
+        )]
+        since_id: Option<String>,
+        /// 仅返回严格晚于该时间戳（毫秒）的事件
+        #[arg(long)]
+        since_timestamp_ms: Option<u64>,
+        /// 服务端最多返回前 N 条匹配事件
+        #[arg(long, value_name = "N", value_parser = parse_positive_u32)]
+        limit: Option<u32>,
         /// 仅输出指定类型的事件；可重复传入多个值
         #[arg(
             long = "kind",
@@ -327,7 +352,15 @@ async fn async_main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Deploy { file, flow_id } => c.deploy(&flow_id, &file, cli.json).await?,
         Commands::Flows => c.list_flows(cli.json).await?,
-        Commands::Flow { flow_id, summary } => c.get_flow(&flow_id, summary, cli.json).await?,
+        Commands::Flow {
+            flow_id,
+            version,
+            summary,
+        } => {
+            c.get_flow(&flow_id, version.as_deref(), summary, cli.json)
+                .await?
+        }
+        Commands::FlowVersions { flow_id } => c.list_flow_versions(&flow_id, cli.json).await?,
         Commands::DeleteFlow { flow_id } => c.delete_flow(&flow_id, cli.json).await?,
         Commands::Complete(..) => unreachable!("complete command handled before gRPC connect"),
         Commands::Create { flow_id, context } => {
@@ -369,6 +402,9 @@ async fn async_main() -> anyhow::Result<()> {
             job_id,
             pretty,
             follow,
+            since_id,
+            since_timestamp_ms,
+            limit,
             kind,
             tail,
             interval_ms,
@@ -378,6 +414,9 @@ async fn async_main() -> anyhow::Result<()> {
                 client::EventQueryOptions {
                     pretty,
                     follow,
+                    since_id,
+                    since_timestamp_ms,
+                    limit,
                     kind_filters: kind,
                     tail,
                     interval_ms,
@@ -482,6 +521,16 @@ fn write_completion_script(path: &Path, script: &[u8]) -> anyhow::Result<()> {
 fn parse_positive_usize(input: &str) -> Result<usize, String> {
     let value = input
         .parse::<usize>()
+        .map_err(|error| format!("invalid positive integer `{input}`: {error}"))?;
+    if value == 0 {
+        return Err("value must be greater than 0".to_string());
+    }
+    Ok(value)
+}
+
+fn parse_positive_u32(input: &str) -> Result<u32, String> {
+    let value = input
+        .parse::<u32>()
         .map_err(|error| format!("invalid positive integer `{input}`: {error}"))?;
     if value == 0 {
         return Err("value must be greater than 0".to_string());
