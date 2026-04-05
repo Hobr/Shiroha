@@ -22,13 +22,6 @@ use uuid::Uuid;
 
 use crate::server::ShirohaState;
 
-pub(crate) struct QueuedJobEvent {
-    /// 暂停期间保留原始事件名，resume 后按 FIFO 重放。
-    pub event: String,
-    /// 事件负载与事件本身一起排队，避免 pause/resume 丢失调用上下文。
-    pub payload: Option<Vec<u8>>,
-}
-
 /// JobService 的 standalone 实现。
 ///
 /// 它把 gRPC 请求、定时器回调和 WASM 调用串成一条统一的 Job 处理链路。
@@ -107,39 +100,6 @@ impl JobServiceImpl {
             })
     }
 
-    async fn queue_event(&self, job_id: Uuid, event: String, payload: Option<Vec<u8>>) {
-        self.state
-            .pending_events
-            .lock()
-            .await
-            .entry(job_id)
-            .or_default()
-            .push_back(QueuedJobEvent { event, payload });
-    }
-
-    async fn pop_queued_event(&self, job_id: Uuid) -> Option<QueuedJobEvent> {
-        let mut queues = self.state.pending_events.lock().await;
-        let next = queues.get_mut(&job_id).and_then(|queue| queue.pop_front());
-        if queues.get(&job_id).is_some_and(|queue| queue.is_empty()) {
-            queues.remove(&job_id);
-        }
-        next
-    }
-
-    async fn push_front_queued_event(&self, job_id: Uuid, queued: QueuedJobEvent) {
-        self.state
-            .pending_events
-            .lock()
-            .await
-            .entry(job_id)
-            .or_default()
-            .push_front(queued);
-    }
-
-    async fn clear_queued_events(&self, job_id: Uuid) {
-        self.state.pending_events.lock().await.remove(&job_id);
-    }
-
     async fn remove_job_lock(&self, job_id: Uuid) {
         self.state.job_locks.lock().await.remove(&job_id);
     }
@@ -154,8 +114,12 @@ impl JobServiceImpl {
         match job.state {
             JobState::Running => self.process_running_event(job, event, payload).await,
             JobState::Paused => {
-                // 暂停态不丢事件，而是先进入内存 FIFO，恢复后继续按顺序处理。
-                self.queue_event(job_id, event.clone(), payload).await;
+                // 暂停态不丢事件，而是持久化到 Job 快照里，恢复后继续按顺序处理。
+                self.state
+                    .job_manager
+                    .queue_pending_event(job_id, event.clone(), payload)
+                    .await
+                    .map_err(|e| Status::internal(e.to_string()))?;
                 tracing::info!(job_id = %job_id, event, "job paused; queued event");
                 Ok(())
             }
@@ -279,7 +243,13 @@ impl JobServiceImpl {
     }
 
     async fn drain_pending_events_locked(&self, job_id: Uuid) -> Result<(), Status> {
-        while let Some(queued) = self.pop_queued_event(job_id).await {
+        while let Some(queued) = self
+            .state
+            .job_manager
+            .pop_pending_event(job_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?
+        {
             // 每消费一个排队事件都重新读取 Job，确保后续事件看到的是最新状态。
             let job = self.load_job(job_id).await?;
             match job.state {
@@ -288,11 +258,19 @@ impl JobServiceImpl {
                         .await?;
                 }
                 JobState::Paused => {
-                    self.push_front_queued_event(job_id, queued).await;
+                    self.state
+                        .job_manager
+                        .push_front_pending_event(job_id, queued)
+                        .await
+                        .map_err(|e| Status::internal(e.to_string()))?;
                     return Ok(());
                 }
                 JobState::Cancelled | JobState::Completed => {
-                    self.clear_queued_events(job_id).await;
+                    self.state
+                        .job_manager
+                        .clear_pending_events(job_id)
+                        .await
+                        .map_err(|e| Status::internal(e.to_string()))?;
                     return Ok(());
                 }
             }
@@ -547,7 +525,6 @@ impl JobService for JobServiceImpl {
                 _ => Status::internal(e.to_string()),
             })?;
         self.state.timer_wheel.cancel_all_job_timers(job_id).await;
-        self.clear_queued_events(job_id).await;
         self.remove_job_lock(job_id).await;
 
         Ok(Response::new(DeleteJobResponse {
@@ -618,7 +595,6 @@ impl JobService for JobServiceImpl {
             .await
             .map_err(|e| Status::failed_precondition(e.to_string()))?;
         self.state.timer_wheel.cancel_all_job_timers(job_id).await;
-        self.clear_queued_events(job_id).await;
 
         Ok(Response::new(CancelJobResponse {}))
     }
@@ -960,7 +936,6 @@ mod tests {
             .expect("create job")
             .into_inner();
         let job_id = created.job_id.clone();
-        let job_uuid = job_id.parse::<Uuid>().expect("uuid");
 
         service
             .pause_job(Request::new(PauseJobRequest {
@@ -986,16 +961,15 @@ mod tests {
             .into_inner();
         assert_eq!(paused.state, "paused");
         assert_eq!(paused.current_state, "idle");
-        assert_eq!(
-            harness
-                .state
-                .pending_events
-                .lock()
-                .await
-                .get(&job_uuid)
-                .map(std::collections::VecDeque::len),
-            Some(1)
-        );
+        let stored = harness
+            .state
+            .job_manager
+            .get_job(job_id.parse::<Uuid>().expect("uuid"))
+            .await
+            .expect("get stored job")
+            .expect("job exists");
+        assert_eq!(stored.pending_events.len(), 1);
+        assert_eq!(stored.pending_events[0].event, "approve");
 
         service
             .resume_job(Request::new(ResumeJobRequest {
@@ -1011,15 +985,14 @@ mod tests {
             .into_inner();
         assert_eq!(resumed.state, "completed");
         assert_eq!(resumed.current_state, "done");
-        assert!(
-            harness
-                .state
-                .pending_events
-                .lock()
-                .await
-                .get(&job_uuid)
-                .is_none()
-        );
+        let stored = harness
+            .state
+            .job_manager
+            .get_job(resumed.job_id.parse::<Uuid>().expect("uuid"))
+            .await
+            .expect("get stored job")
+            .expect("job exists");
+        assert!(stored.pending_events.is_empty());
 
         let events = service
             .get_job_events(Request::new(GetJobEventsRequest {

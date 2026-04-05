@@ -33,6 +33,14 @@ impl std::fmt::Display for JobState {
     }
 }
 
+/// 暂停期间暂存的事件
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingJobEvent {
+    pub event: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Vec<u8>>,
+}
+
 /// Job 运行实例
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
@@ -47,6 +55,9 @@ pub struct Job {
     /// 用户自定义上下文数据，框架只透传字节，不解释内容格式。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<Vec<u8>>,
+    /// 暂停期间收到但尚未处理的事件；需要跟随 Job 快照一起持久化。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_events: Vec<PendingJobEvent>,
 }
 
 /// Action 执行状态

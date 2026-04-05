@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use shiroha_core::error::{Result, ShirohaError};
 use shiroha_core::event::{EventKind, EventRecord};
-use shiroha_core::job::{ExecutionStatus, Job, JobState};
+use shiroha_core::job::{ExecutionStatus, Job, JobState, PendingJobEvent};
 use shiroha_core::storage::Storage;
 use uuid::Uuid;
 
@@ -60,6 +60,7 @@ impl<S: Storage> JobManager<S> {
             state: JobState::Running,
             current_state: initial_state.to_string(),
             context,
+            pending_events: Vec::new(),
         };
         let event = make_event(
             job.id,
@@ -94,6 +95,53 @@ impl<S: Storage> JobManager<S> {
             });
         }
         self.storage.delete_job(job_id).await
+    }
+
+    /// 向暂停中的 Job 追加待处理事件。
+    pub async fn queue_pending_event(
+        &self,
+        job_id: Uuid,
+        event: String,
+        payload: Option<Vec<u8>>,
+    ) -> Result<()> {
+        let mut job = self.load_job(job_id).await?;
+        if job.state != JobState::Paused {
+            return Err(ShirohaError::InvalidJobState {
+                expected: "paused".into(),
+                actual: job.state.to_string(),
+            });
+        }
+        job.pending_events.push(PendingJobEvent { event, payload });
+        self.storage.save_job(&job).await
+    }
+
+    pub async fn pop_pending_event(&self, job_id: Uuid) -> Result<Option<PendingJobEvent>> {
+        let mut job = self.load_job(job_id).await?;
+        if job.pending_events.is_empty() {
+            return Ok(None);
+        }
+        let next = job.pending_events.remove(0);
+        self.storage.save_job(&job).await?;
+        Ok(Some(next))
+    }
+
+    pub async fn push_front_pending_event(
+        &self,
+        job_id: Uuid,
+        queued: PendingJobEvent,
+    ) -> Result<()> {
+        let mut job = self.load_job(job_id).await?;
+        job.pending_events.insert(0, queued);
+        self.storage.save_job(&job).await
+    }
+
+    pub async fn clear_pending_events(&self, job_id: Uuid) -> Result<()> {
+        let mut job = self.load_job(job_id).await?;
+        if job.pending_events.is_empty() {
+            return Ok(());
+        }
+        job.pending_events.clear();
+        self.storage.save_job(&job).await
     }
 
     /// 暂停 Job（Running → Paused）
@@ -134,6 +182,7 @@ impl<S: Storage> JobManager<S> {
             });
         }
         job.state = JobState::Cancelled;
+        job.pending_events.clear();
         let event = make_event(job_id, EventKind::Cancelled);
         self.storage.save_job_with_event(&job, &event).await
     }
@@ -143,6 +192,7 @@ impl<S: Storage> JobManager<S> {
         let mut job = self.load_job(job_id).await?;
         job.state = JobState::Completed;
         job.current_state = final_state.to_string();
+        job.pending_events.clear();
         let event = make_event(
             job_id,
             EventKind::Completed {
@@ -238,6 +288,7 @@ mod tests {
         assert_eq!(stored.current_state, "idle");
         assert_eq!(stored.state, JobState::Running);
         assert_eq!(stored.context, Some(vec![1, 2, 3]));
+        assert!(stored.pending_events.is_empty());
 
         let events = manager.get_events(job.id).await.expect("events");
         assert_eq!(events.len(), 1);
@@ -363,5 +414,47 @@ mod tests {
                 .expect("get events")
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn pending_events_are_persisted_with_job_snapshot() {
+        let storage = Arc::new(MemoryStorage::new());
+        let manager = JobManager::new(storage.clone());
+        let job = manager
+            .create_job("demo", Uuid::now_v7(), "idle", None)
+            .await
+            .expect("job created");
+
+        manager.pause_job(job.id).await.expect("pause");
+        manager
+            .queue_pending_event(job.id, "approve".into(), Some(vec![1, 2]))
+            .await
+            .expect("queue event");
+
+        let stored = storage
+            .get_job(job.id)
+            .await
+            .expect("get job")
+            .expect("job exists");
+        assert_eq!(stored.pending_events.len(), 1);
+        assert_eq!(stored.pending_events[0].event, "approve");
+        assert_eq!(
+            stored.pending_events[0].payload.as_deref(),
+            Some(&[1, 2][..])
+        );
+
+        let popped = manager
+            .pop_pending_event(job.id)
+            .await
+            .expect("pop event")
+            .expect("event exists");
+        assert_eq!(popped.event, "approve");
+
+        let stored = storage
+            .get_job(job.id)
+            .await
+            .expect("get job")
+            .expect("job exists");
+        assert!(stored.pending_events.is_empty());
     }
 }
