@@ -139,6 +139,10 @@ fn parse_json(stdout: &[u8]) -> Value {
     serde_json::from_slice(stdout).expect("stdout should be valid json")
 }
 
+fn temp_file_path(prefix: &str, extension: &str) -> PathBuf {
+    unique_temp_dir(prefix).join(format!("sctl-complete.{extension}"))
+}
+
 #[test]
 fn complete_command_emits_bash_script() {
     let output = Command::new(sctl_binary())
@@ -163,6 +167,50 @@ fn complete_command_emits_fish_script() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("complete --keep-order --exclusive --command sctl"));
     assert!(stdout.contains("COMPLETE=fish"));
+}
+
+#[test]
+fn complete_command_prints_default_fish_path() {
+    let output = Command::new(sctl_binary())
+        .env("HOME", "/tmp/sctl-home")
+        .args(["complete", "fish", "--print-path"])
+        .output()
+        .expect("complete fish print-path command");
+    expect_success(&output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "/tmp/sctl-home/.config/fish/completions/sctl.fish"
+    );
+}
+
+#[test]
+fn complete_command_writes_script_to_explicit_output() {
+    let output_path = temp_file_path("sctl-complete-output", "fish");
+    let output_dir = output_path.parent().expect("temp output dir").to_path_buf();
+    let output = Command::new(sctl_binary())
+        .args([
+            "complete",
+            "fish",
+            "--output",
+            output_path.to_str().expect("utf-8 temp path"),
+        ])
+        .output()
+        .expect("complete fish output command");
+    expect_success(&output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        output_path.to_str().expect("utf-8 temp path")
+    );
+
+    let script = std::fs::read_to_string(&output_path).expect("read written fish completion");
+    assert!(script.contains("complete --keep-order --exclusive --command sctl"));
+    assert!(script.contains("COMPLETE=fish"));
+
+    let _ = std::fs::remove_dir_all(&output_dir);
 }
 
 fn expect_success(output: &std::process::Output) {
