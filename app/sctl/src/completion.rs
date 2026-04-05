@@ -2,7 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::time::Duration;
 
 use clap_complete::engine::CompletionCandidate;
-use sctl::control::ControlClient;
+use shiroha_client::ControlClient;
 
 const DEFAULT_SERVER: &str = "http://[::1]:50051";
 const COMPLETION_TIMEOUT: Duration = Duration::from_millis(500);

@@ -3,7 +3,7 @@ members = [
     "app/sctl",
     "app/shirohad",
 
-    "crate/shiroha-control",
+    "crate/shiroha-client",
     "crate/shiroha-core",
     "crate/shiroha-engine",
     "crate/shiroha-proto",
@@ -22,7 +22,7 @@ repository = "https://github.com/Hobr/Shiroha"
 [workspace.dependencies]
 # 内部
 shiroha-core = { path = "crate/shiroha-core" }
-shiroha-control = { path = "crate/shiroha-control" }
+shiroha-client = { path = "crate/shiroha-client" }
 shiroha-engine = { path = "crate/shiroha-engine" }
 shiroha-proto = { path = "crate/shiroha-proto" }
 shiroha-store-redb = { path = "crate/shiroha-store-redb" }

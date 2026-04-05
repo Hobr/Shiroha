@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use shiroha_control::JobEvent;
+use shiroha_client::JobEvent;
 
 use crate::presenter_support::{compact_json, print_json_block, print_json_value};
 
