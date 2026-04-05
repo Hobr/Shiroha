@@ -98,6 +98,15 @@ struct FlowDeployArgs {
 }
 
 #[derive(Args)]
+struct FlowRmArgs {
+    #[command(flatten)]
+    flow: FlowIdArgs,
+    /// 自动删除关联 Job，并在需要时先取消运行中的 Job
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Args)]
 struct FlowGetArgs {
     #[command(flatten)]
     flow: FlowIdArgs,
@@ -115,6 +124,15 @@ struct JobCreateArgs {
     flow: FlowIdArgs,
     #[command(flatten)]
     context: ContextArgs,
+}
+
+#[derive(Args)]
+struct JobRmArgs {
+    #[command(flatten)]
+    job: JobIdArgs,
+    /// 若 Job 仍在运行或暂停，先自动取消再删除
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Args)]
@@ -284,7 +302,7 @@ enum FlowCommands {
     /// 列出某个 Flow 的历史部署版本
     Vers(FlowIdArgs),
     /// 删除 Flow；要求不存在关联 Job
-    Rm(FlowIdArgs),
+    Rm(FlowRmArgs),
 }
 
 #[derive(clap::Subcommand)]
@@ -294,7 +312,7 @@ enum JobCommands {
     /// 查询 Job 详情
     Get(JobIdArgs),
     /// 删除 Job；要求 Job 已 cancelled/completed
-    Rm(JobIdArgs),
+    Rm(JobRmArgs),
     /// 列出 Job
     Ls(JobsListArgs),
     /// 触发事件
@@ -367,7 +385,11 @@ async fn dispatch_flow_command(
                 .await
         }
         FlowCommands::Vers(args) => client.list_flow_versions(&args.flow_id, json_output).await,
-        FlowCommands::Rm(args) => client.delete_flow(&args.flow_id, json_output).await,
+        FlowCommands::Rm(args) => {
+            client
+                .delete_flow(&args.flow.flow_id, args.force, json_output)
+                .await
+        }
     }
 }
 
@@ -391,7 +413,11 @@ async fn dispatch_job_command(
                 .await
         }
         JobCommands::Get(args) => client.get_job(&args.job_id, json_output).await,
-        JobCommands::Rm(args) => client.delete_job(&args.job_id, json_output).await,
+        JobCommands::Rm(args) => {
+            client
+                .delete_job(&args.job.job_id, args.force, json_output)
+                .await
+        }
         JobCommands::Ls(args) => {
             client
                 .list_jobs(args.flow_id.as_deref(), args.all, json_output)

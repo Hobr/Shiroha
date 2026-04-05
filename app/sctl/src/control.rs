@@ -12,6 +12,19 @@ pub struct EventQuery {
     pub kind_filters: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForceDeleteJobResult {
+    pub job_id: String,
+    pub previous_state: String,
+    pub cancelled_before_delete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForceDeleteFlowResult {
+    pub flow_id: String,
+    pub deleted_jobs: Vec<ForceDeleteJobResult>,
+}
+
 pub struct ControlClient {
     flow: FlowServiceClient<Channel>,
     job: JobServiceClient<Channel>,
@@ -171,6 +184,36 @@ impl ControlClient {
             .into_inner())
     }
 
+    pub async fn force_delete_job(&mut self, job_id: &str) -> anyhow::Result<ForceDeleteJobResult> {
+        let job = self.get_job(job_id).await?;
+        let cancelled_before_delete = matches!(job.state.as_str(), "running" | "paused");
+        if cancelled_before_delete {
+            self.cancel_job(job_id).await?;
+        }
+        self.delete_job(job_id).await?;
+        Ok(ForceDeleteJobResult {
+            job_id: job.job_id,
+            previous_state: job.state,
+            cancelled_before_delete,
+        })
+    }
+
+    pub async fn force_delete_flow(
+        &mut self,
+        flow_id: &str,
+    ) -> anyhow::Result<ForceDeleteFlowResult> {
+        let jobs = self.list_jobs_for_flow(flow_id).await?;
+        let mut deleted_jobs = Vec::with_capacity(jobs.len());
+        for job in jobs {
+            deleted_jobs.push(self.force_delete_job(&job.job_id).await?);
+        }
+        self.delete_flow(flow_id).await?;
+        Ok(ForceDeleteFlowResult {
+            flow_id: flow_id.to_string(),
+            deleted_jobs,
+        })
+    }
+
     pub async fn trigger_event(
         &mut self,
         job_id: &str,
@@ -324,5 +367,18 @@ mod tests {
 
         assert_eq!(manifest_state_names(&raw), vec!["done", "idle"]);
         assert_eq!(manifest_event_names(&raw), vec!["approve", "reject"]);
+    }
+
+    #[test]
+    fn force_delete_result_carries_state_information() {
+        let result = ForceDeleteJobResult {
+            job_id: "job-1".into(),
+            previous_state: "running".into(),
+            cancelled_before_delete: true,
+        };
+
+        assert_eq!(result.job_id, "job-1");
+        assert_eq!(result.previous_state, "running");
+        assert!(result.cancelled_before_delete);
     }
 }
