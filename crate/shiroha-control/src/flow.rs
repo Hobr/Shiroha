@@ -1,6 +1,48 @@
+use anyhow::Context;
+use serde_json::Value;
 use shiroha_proto::shiroha_api::*;
 
 use crate::client::ControlClient;
+use crate::manifest::parse_json_value_required;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlowVersionSummary {
+    pub flow_id: String,
+    pub version: String,
+    pub initial_state: String,
+    pub state_count: u32,
+}
+
+impl From<FlowSummary> for FlowVersionSummary {
+    fn from(value: FlowSummary) -> Self {
+        Self {
+            flow_id: value.flow_id,
+            version: value.version,
+            initial_state: value.initial_state,
+            state_count: value.state_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlowDetails {
+    pub flow_id: String,
+    pub version: String,
+    pub manifest: Value,
+}
+
+impl TryFrom<GetFlowResponse> for FlowDetails {
+    type Error = anyhow::Error;
+
+    fn try_from(value: GetFlowResponse) -> Result<Self, Self::Error> {
+        Ok(Self {
+            flow_id: value.flow_id,
+            version: value.version,
+            manifest: parse_json_value_required(&value.manifest_json, "manifest_json")
+                .context("invalid flow manifest returned by server")?,
+        })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForceDeleteFlowResult {
@@ -24,7 +66,7 @@ impl ControlClient {
             .into_inner())
     }
 
-    pub async fn list_flows(&mut self) -> anyhow::Result<Vec<FlowSummary>> {
+    pub async fn list_flows(&mut self) -> anyhow::Result<Vec<FlowVersionSummary>> {
         let mut flows = self
             .flow
             .list_flows(ListFlowsRequest {})
@@ -32,7 +74,7 @@ impl ControlClient {
             .into_inner()
             .flows;
         flows.sort_by(|left, right| left.flow_id.cmp(&right.flow_id));
-        Ok(flows)
+        Ok(flows.into_iter().map(FlowVersionSummary::from).collect())
     }
 
     pub async fn list_flow_ids(&mut self) -> anyhow::Result<Vec<String>> {
@@ -44,7 +86,10 @@ impl ControlClient {
             .collect())
     }
 
-    pub async fn list_flow_versions(&mut self, flow_id: &str) -> anyhow::Result<Vec<FlowSummary>> {
+    pub async fn list_flow_versions(
+        &mut self,
+        flow_id: &str,
+    ) -> anyhow::Result<Vec<FlowVersionSummary>> {
         let mut flows = self
             .flow
             .list_flow_versions(ListFlowVersionsRequest {
@@ -54,22 +99,24 @@ impl ControlClient {
             .into_inner()
             .flows;
         flows.sort_by(|left, right| right.version.cmp(&left.version));
-        Ok(flows)
+        Ok(flows.into_iter().map(FlowVersionSummary::from).collect())
     }
 
     pub async fn get_flow(
         &mut self,
         flow_id: &str,
         version: Option<&str>,
-    ) -> anyhow::Result<GetFlowResponse> {
-        Ok(self
+    ) -> anyhow::Result<FlowDetails> {
+        let response = self
             .flow
             .get_flow(GetFlowRequest {
                 flow_id: flow_id.to_string(),
                 version: version.map(ToString::to_string),
             })
             .await?
-            .into_inner())
+            .into_inner();
+
+        FlowDetails::try_from(response)
     }
 
     pub async fn delete_flow(&mut self, flow_id: &str) -> anyhow::Result<DeleteFlowResponse> {
@@ -96,5 +143,25 @@ impl ControlClient {
             flow_id: flow_id.to_string(),
             deleted_jobs,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn flow_details_parse_manifest_json() {
+        let details = FlowDetails::try_from(GetFlowResponse {
+            flow_id: "flow-a".into(),
+            version: "v1".into(),
+            manifest_json: r#"{"initial_state":"idle"}"#.into(),
+        })
+        .expect("manifest json should parse");
+
+        assert_eq!(details.flow_id, "flow-a");
+        assert_eq!(details.version, "v1");
+        assert_eq!(details.manifest, json!({"initial_state": "idle"}));
     }
 }

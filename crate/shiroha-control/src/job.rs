@@ -1,7 +1,9 @@
+use anyhow::Context;
+use serde_json::Value;
 use shiroha_proto::shiroha_api::*;
 
 use crate::client::ControlClient;
-use crate::manifest::{manifest_event_names, manifest_state_names};
+use crate::manifest::{manifest_event_names, manifest_state_names, parse_json_value_required};
 
 #[derive(Debug, Clone, Default)]
 pub struct EventQuery {
@@ -16,6 +18,51 @@ pub struct ForceDeleteJobResult {
     pub job_id: String,
     pub previous_state: String,
     pub cancelled_before_delete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobDetails {
+    pub job_id: String,
+    pub flow_id: String,
+    pub state: String,
+    pub current_state: String,
+    pub flow_version: String,
+    pub context_bytes: Option<u64>,
+}
+
+impl From<GetJobResponse> for JobDetails {
+    fn from(value: GetJobResponse) -> Self {
+        Self {
+            job_id: value.job_id,
+            flow_id: value.flow_id,
+            state: value.state,
+            current_state: value.current_state,
+            flow_version: value.flow_version,
+            context_bytes: value.context_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JobEvent {
+    pub id: String,
+    pub job_id: String,
+    pub timestamp_ms: u64,
+    pub kind: Value,
+}
+
+impl TryFrom<EventRecord> for JobEvent {
+    type Error = anyhow::Error;
+
+    fn try_from(value: EventRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.id,
+            job_id: value.job_id,
+            timestamp_ms: value.timestamp_ms,
+            kind: parse_json_value_required(&value.kind_json, "kind_json")
+                .context("invalid job event payload returned by server")?,
+        })
+    }
 }
 
 impl ControlClient {
@@ -34,20 +81,18 @@ impl ControlClient {
             .into_inner())
     }
 
-    pub async fn get_job(&mut self, job_id: &str) -> anyhow::Result<GetJobResponse> {
+    pub async fn get_job(&mut self, job_id: &str) -> anyhow::Result<JobDetails> {
         Ok(self
             .job
             .get_job(GetJobRequest {
                 job_id: job_id.to_string(),
             })
             .await?
-            .into_inner())
+            .into_inner()
+            .into())
     }
 
-    pub async fn list_jobs_for_flow(
-        &mut self,
-        flow_id: &str,
-    ) -> anyhow::Result<Vec<GetJobResponse>> {
+    pub async fn list_jobs_for_flow(&mut self, flow_id: &str) -> anyhow::Result<Vec<JobDetails>> {
         let mut jobs = self
             .job
             .list_jobs(ListJobsRequest {
@@ -57,15 +102,15 @@ impl ControlClient {
             .into_inner()
             .jobs;
         sort_jobs(&mut jobs);
-        Ok(jobs)
+        Ok(jobs.into_iter().map(JobDetails::from).collect())
     }
 
-    pub async fn list_all_jobs(&mut self) -> anyhow::Result<Vec<GetJobResponse>> {
+    pub async fn list_all_jobs(&mut self) -> anyhow::Result<Vec<JobDetails>> {
         let mut jobs = Vec::new();
         for flow_id in self.list_flow_ids().await? {
             jobs.extend(self.list_jobs_for_flow(&flow_id).await?);
         }
-        sort_jobs(&mut jobs);
+        sort_job_details(&mut jobs);
         Ok(jobs)
     }
 
@@ -152,7 +197,7 @@ impl ControlClient {
         &mut self,
         job_id: &str,
         query: &EventQuery,
-    ) -> anyhow::Result<Vec<EventRecord>> {
+    ) -> anyhow::Result<Vec<JobEvent>> {
         let mut events = self
             .job
             .get_job_events(GetJobEventsRequest {
@@ -170,7 +215,7 @@ impl ControlClient {
                 .cmp(&right.timestamp_ms)
                 .then_with(|| left.id.cmp(&right.id))
         });
-        Ok(events)
+        events.into_iter().map(JobEvent::try_from).collect()
     }
 
     pub async fn list_job_event_ids(&mut self, job_id: &str) -> anyhow::Result<Vec<String>> {
@@ -185,13 +230,13 @@ impl ControlClient {
     pub async fn list_job_event_names(&mut self, job_id: &str) -> anyhow::Result<Vec<String>> {
         let job = self.get_job(job_id).await?;
         let flow = self.get_flow(&job.flow_id, None).await?;
-        Ok(manifest_event_names(&flow.manifest_json))
+        Ok(manifest_event_names(&flow.manifest))
     }
 
     pub async fn list_wait_states(&mut self, job_id: &str) -> anyhow::Result<Vec<String>> {
         let job = self.get_job(job_id).await?;
         let flow = self.get_flow(&job.flow_id, None).await?;
-        Ok(manifest_state_names(&flow.manifest_json))
+        Ok(manifest_state_names(&flow.manifest))
     }
 }
 
@@ -203,9 +248,18 @@ fn sort_jobs(jobs: &mut [GetJobResponse]) {
     });
 }
 
+fn sort_job_details(jobs: &mut [JobDetails]) {
+    jobs.sort_by(|left, right| {
+        left.flow_id
+            .cmp(&right.flow_id)
+            .then_with(|| left.job_id.cmp(&right.job_id))
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn force_delete_result_carries_state_information() {
@@ -218,5 +272,38 @@ mod tests {
         assert_eq!(result.job_id, "job-1");
         assert_eq!(result.previous_state, "running");
         assert!(result.cancelled_before_delete);
+    }
+
+    #[test]
+    fn job_details_extract_proto_fields() {
+        let details = JobDetails::from(GetJobResponse {
+            job_id: "job-1".into(),
+            flow_id: "flow-a".into(),
+            state: "running".into(),
+            current_state: "review".into(),
+            flow_version: "v1".into(),
+            context_bytes: Some(42),
+        });
+
+        assert_eq!(details.job_id, "job-1");
+        assert_eq!(details.flow_id, "flow-a");
+        assert_eq!(details.state, "running");
+        assert_eq!(details.current_state, "review");
+        assert_eq!(details.flow_version, "v1");
+        assert_eq!(details.context_bytes, Some(42));
+    }
+
+    #[test]
+    fn job_event_parses_kind_json() {
+        let event = JobEvent::try_from(EventRecord {
+            id: "event-1".into(),
+            job_id: "job-1".into(),
+            timestamp_ms: 123,
+            kind_json: r#"{"type":"created"}"#.into(),
+        })
+        .expect("kind json should parse");
+
+        assert_eq!(event.id, "event-1");
+        assert_eq!(event.kind, json!({"type": "created"}));
     }
 }
