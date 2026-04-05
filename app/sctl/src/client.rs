@@ -125,6 +125,17 @@ impl ShirohaClient {
         Ok(())
     }
 
+    pub async fn list_flow_ids(&mut self) -> anyhow::Result<Vec<String>> {
+        let mut resp = self
+            .flow
+            .list_flows(ListFlowsRequest {})
+            .await?
+            .into_inner();
+        resp.flows
+            .sort_by(|left, right| left.flow_id.cmp(&right.flow_id));
+        Ok(resp.flows.into_iter().map(|flow| flow.flow_id).collect())
+    }
+
     pub async fn get_flow(&mut self, flow_id: &str, json_output: bool) -> anyhow::Result<()> {
         let resp = self
             .flow
@@ -244,6 +255,39 @@ impl ShirohaClient {
             );
         }
         Ok(())
+    }
+
+    pub async fn list_job_ids(&mut self) -> anyhow::Result<Vec<String>> {
+        let mut flow_ids = self.list_flow_ids().await?;
+        flow_ids.sort_unstable();
+
+        let mut job_ids = Vec::new();
+        for flow_id in flow_ids {
+            let mut resp = self
+                .job
+                .list_jobs(ListJobsRequest { flow_id })
+                .await?
+                .into_inner();
+            resp.jobs
+                .sort_by(|left, right| left.job_id.cmp(&right.job_id));
+            job_ids.extend(resp.jobs.into_iter().map(|job| job.job_id));
+        }
+
+        job_ids.sort_unstable();
+        job_ids.dedup();
+        Ok(job_ids)
+    }
+
+    pub async fn list_job_event_names(&mut self, job_id: &str) -> anyhow::Result<Vec<String>> {
+        let job = self.fetch_job(job_id).await?;
+        let flow = self.fetch_flow(&job.flow_id).await?;
+        Ok(manifest_event_names(&flow.manifest_json))
+    }
+
+    pub async fn list_wait_states(&mut self, job_id: &str) -> anyhow::Result<Vec<String>> {
+        let job = self.fetch_job(job_id).await?;
+        let flow = self.fetch_flow(&job.flow_id).await?;
+        Ok(manifest_state_names(&flow.manifest_json))
     }
 
     pub async fn trigger_event(
@@ -455,6 +499,16 @@ impl ShirohaClient {
             .await?
             .into_inner())
     }
+
+    async fn fetch_flow(&mut self, flow_id: &str) -> anyhow::Result<GetFlowResponse> {
+        Ok(self
+            .flow
+            .get_flow(GetFlowRequest {
+                flow_id: flow_id.to_string(),
+            })
+            .await?
+            .into_inner())
+    }
 }
 
 pub fn decode_optional_bytes(
@@ -605,6 +659,42 @@ fn manifest_summary(raw: &str) -> Option<ManifestSummary> {
     })
 }
 
+fn manifest_event_names(raw: &str) -> Vec<String> {
+    let Some(value) = parse_json_value(raw) else {
+        return Vec::new();
+    };
+
+    let mut events = value
+        .get("transitions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|transition| transition.get("event").and_then(Value::as_str))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    events.sort_unstable();
+    events.dedup();
+    events
+}
+
+fn manifest_state_names(raw: &str) -> Vec<String> {
+    let Some(value) = parse_json_value(raw) else {
+        return Vec::new();
+    };
+
+    let mut states = value
+        .get("states")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|state| state.get("name").and_then(Value::as_str))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    states.sort_unstable();
+    states.dedup();
+    states
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -669,6 +759,36 @@ mod tests {
         assert_eq!(summary.state_count, 2);
         assert_eq!(summary.transition_count, 1);
         assert_eq!(summary.action_count, 2);
+    }
+
+    #[test]
+    fn manifest_event_names_extracts_and_deduplicates() {
+        let events = manifest_event_names(
+            r#"{
+                "transitions":[
+                    {"event":"approve"},
+                    {"event":"archive"},
+                    {"event":"approve"}
+                ]
+            }"#,
+        );
+
+        assert_eq!(events, vec!["approve", "archive"]);
+    }
+
+    #[test]
+    fn manifest_state_names_extracts_and_sorts() {
+        let states = manifest_state_names(
+            r#"{
+                "states":[
+                    {"name":"done"},
+                    {"name":"idle"},
+                    {"name":"done"}
+                ]
+            }"#,
+        );
+
+        assert_eq!(states, vec!["done", "idle"]);
     }
 
     #[test]
