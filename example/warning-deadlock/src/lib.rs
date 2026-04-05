@@ -13,7 +13,7 @@ impl Guest for WarningDeadlockFlow {
                 StateDef {
                     name: "idle".to_string(),
                     kind: StateKind::Normal,
-                    on_enter: Some("bootstrap".to_string()),
+                    on_enter: None,
                     on_exit: None,
                     subprocess: None,
                 },
@@ -21,7 +21,7 @@ impl Guest for WarningDeadlockFlow {
                     name: "loop".to_string(),
                     kind: StateKind::Normal,
                     on_enter: None,
-                    on_exit: Some("cleanup".to_string()),
+                    on_exit: None,
                     subprocess: None,
                 },
                 StateDef {
