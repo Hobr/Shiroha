@@ -1,8 +1,7 @@
-use serde_json::Value;
-use shiroha_proto::shiroha_api::flow_service_client::FlowServiceClient;
-use shiroha_proto::shiroha_api::job_service_client::JobServiceClient;
 use shiroha_proto::shiroha_api::*;
-use tonic::transport::Channel;
+
+use crate::client::ControlClient;
+use crate::manifest::{manifest_event_names, manifest_state_names};
 
 #[derive(Debug, Clone, Default)]
 pub struct EventQuery {
@@ -19,99 +18,7 @@ pub struct ForceDeleteJobResult {
     pub cancelled_before_delete: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ForceDeleteFlowResult {
-    pub flow_id: String,
-    pub deleted_jobs: Vec<ForceDeleteJobResult>,
-}
-
-pub struct ControlClient {
-    flow: FlowServiceClient<Channel>,
-    job: JobServiceClient<Channel>,
-}
-
 impl ControlClient {
-    pub async fn connect(addr: &str) -> anyhow::Result<Self> {
-        let channel = Channel::from_shared(addr.to_string())?.connect().await?;
-        Ok(Self {
-            flow: FlowServiceClient::new(channel.clone()),
-            job: JobServiceClient::new(channel),
-        })
-    }
-
-    pub async fn deploy_flow(
-        &mut self,
-        flow_id: &str,
-        wasm_bytes: Vec<u8>,
-    ) -> anyhow::Result<DeployFlowResponse> {
-        Ok(self
-            .flow
-            .deploy_flow(DeployFlowRequest {
-                flow_id: flow_id.to_string(),
-                wasm_bytes,
-            })
-            .await?
-            .into_inner())
-    }
-
-    pub async fn list_flows(&mut self) -> anyhow::Result<Vec<FlowSummary>> {
-        let mut flows = self
-            .flow
-            .list_flows(ListFlowsRequest {})
-            .await?
-            .into_inner()
-            .flows;
-        flows.sort_by(|left, right| left.flow_id.cmp(&right.flow_id));
-        Ok(flows)
-    }
-
-    pub async fn list_flow_ids(&mut self) -> anyhow::Result<Vec<String>> {
-        Ok(self
-            .list_flows()
-            .await?
-            .into_iter()
-            .map(|flow| flow.flow_id)
-            .collect())
-    }
-
-    pub async fn list_flow_versions(&mut self, flow_id: &str) -> anyhow::Result<Vec<FlowSummary>> {
-        let mut flows = self
-            .flow
-            .list_flow_versions(ListFlowVersionsRequest {
-                flow_id: flow_id.to_string(),
-            })
-            .await?
-            .into_inner()
-            .flows;
-        flows.sort_by(|left, right| right.version.cmp(&left.version));
-        Ok(flows)
-    }
-
-    pub async fn get_flow(
-        &mut self,
-        flow_id: &str,
-        version: Option<&str>,
-    ) -> anyhow::Result<GetFlowResponse> {
-        Ok(self
-            .flow
-            .get_flow(GetFlowRequest {
-                flow_id: flow_id.to_string(),
-                version: version.map(ToString::to_string),
-            })
-            .await?
-            .into_inner())
-    }
-
-    pub async fn delete_flow(&mut self, flow_id: &str) -> anyhow::Result<DeleteFlowResponse> {
-        Ok(self
-            .flow
-            .delete_flow(DeleteFlowRequest {
-                flow_id: flow_id.to_string(),
-            })
-            .await?
-            .into_inner())
-    }
-
     pub async fn create_job(
         &mut self,
         flow_id: &str,
@@ -195,22 +102,6 @@ impl ControlClient {
             job_id: job.job_id,
             previous_state: job.state,
             cancelled_before_delete,
-        })
-    }
-
-    pub async fn force_delete_flow(
-        &mut self,
-        flow_id: &str,
-    ) -> anyhow::Result<ForceDeleteFlowResult> {
-        let jobs = self.list_jobs_for_flow(flow_id).await?;
-        let mut deleted_jobs = Vec::with_capacity(jobs.len());
-        for job in jobs {
-            deleted_jobs.push(self.force_delete_job(&job.job_id).await?);
-        }
-        self.delete_flow(flow_id).await?;
-        Ok(ForceDeleteFlowResult {
-            flow_id: flow_id.to_string(),
-            deleted_jobs,
         })
     }
 
@@ -312,62 +203,9 @@ fn sort_jobs(jobs: &mut [GetJobResponse]) {
     });
 }
 
-fn parse_json_value(raw: &str) -> Option<Value> {
-    serde_json::from_str(raw).ok()
-}
-
-fn manifest_event_names(raw: &str) -> Vec<String> {
-    let Some(value) = parse_json_value(raw) else {
-        return Vec::new();
-    };
-
-    let mut events = value
-        .get("transitions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|transition| transition.get("event").and_then(Value::as_str))
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    events.sort_unstable();
-    events.dedup();
-    events
-}
-
-fn manifest_state_names(raw: &str) -> Vec<String> {
-    let Some(value) = parse_json_value(raw) else {
-        return Vec::new();
-    };
-
-    let mut states = value
-        .get("states")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|state| state.get("name").and_then(Value::as_str))
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    states.sort_unstable();
-    states.dedup();
-    states
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn manifest_helpers_extract_deduped_names() {
-        let manifest = json!({
-            "states": [{"name": "idle"}, {"name": "done"}, {"name": "idle"}],
-            "transitions": [{"event": "approve"}, {"event": "reject"}, {"event": "approve"}]
-        });
-        let raw = serde_json::to_string(&manifest).expect("manifest json");
-
-        assert_eq!(manifest_state_names(&raw), vec!["done", "idle"]);
-        assert_eq!(manifest_event_names(&raw), vec!["approve", "reject"]);
-    }
 
     #[test]
     fn force_delete_result_carries_state_information() {

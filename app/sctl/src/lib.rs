@@ -1,1 +1,1 @@
-pub mod control;
+pub use shiroha_control as control;
