@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use shiroha_control::{
+use shiroha_client::{
     FlowDetails, FlowVersionSummary, ForceDeleteFlowResult, ForceDeleteJobResult,
 };
 

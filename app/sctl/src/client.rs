@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use shiroha_control::{ControlClient, EventQuery, JobDetails, JobEvent};
+use shiroha_client::{ControlClient, EventQuery, JobDetails, JobEvent};
 use tokio::time::{Duration, sleep};
 
 use crate::{event_presenter, flow_presenter, job_presenter};

@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-shiroha-control.workspace = true
+shiroha-client.workspace = true
 shiroha-proto.workspace = true
 
 tokio.workspace = true

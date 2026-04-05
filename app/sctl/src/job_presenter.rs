@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use shiroha_control::{ForceDeleteJobResult, JobDetails};
+use shiroha_client::{ForceDeleteJobResult, JobDetails};
 
 use crate::presenter_support::{format_optional_u64, print_json_value};
 
