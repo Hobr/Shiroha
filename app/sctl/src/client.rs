@@ -19,6 +19,15 @@ pub struct ShirohaClient {
     job: JobServiceClient<Channel>,
 }
 
+pub struct EventQueryOptions {
+    pub pretty: bool,
+    pub follow: bool,
+    pub kind_filters: Vec<String>,
+    pub tail: Option<usize>,
+    pub interval_ms: u64,
+    pub json_output: bool,
+}
+
 impl ShirohaClient {
     /// 连接到 shirohad gRPC 服务
     pub async fn connect(addr: &str) -> anyhow::Result<Self> {
@@ -136,7 +145,12 @@ impl ShirohaClient {
         Ok(resp.flows.into_iter().map(|flow| flow.flow_id).collect())
     }
 
-    pub async fn get_flow(&mut self, flow_id: &str, json_output: bool) -> anyhow::Result<()> {
+    pub async fn get_flow(
+        &mut self,
+        flow_id: &str,
+        summary: bool,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
         let resp = self
             .flow
             .get_flow(GetFlowRequest {
@@ -150,6 +164,10 @@ impl ShirohaClient {
                 "version": resp.version,
                 "manifest": parse_json_value(&resp.manifest_json).unwrap_or(Value::String(resp.manifest_json)),
             }))?;
+            return Ok(());
+        }
+        if summary {
+            print_flow_summary(&resp.flow_id, &resp.version, &resp.manifest_json);
             return Ok(());
         }
         println!("flow_id:  {}", resp.flow_id);
@@ -216,39 +234,34 @@ impl ShirohaClient {
         Ok(())
     }
 
-    pub async fn list_jobs(&mut self, flow_id: &str, json_output: bool) -> anyhow::Result<()> {
-        let mut resp = self
-            .job
-            .list_jobs(ListJobsRequest {
-                flow_id: flow_id.to_string(),
-            })
+    pub async fn list_jobs(
+        &mut self,
+        flow_id: Option<&str>,
+        all: bool,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
+        let mut jobs = if all {
+            self.fetch_all_jobs().await?
+        } else {
+            self.fetch_jobs_for_flow(
+                flow_id.expect("clap should require --flow-id when --all is absent"),
+            )
             .await?
-            .into_inner();
-        if resp.jobs.is_empty() {
+        };
+        if jobs.is_empty() {
             if json_output {
                 return print_json_value(&Value::Array(Vec::new()));
             }
             println!("no jobs");
             return Ok(());
         }
-        resp.jobs
-            .sort_by(|left, right| left.job_id.cmp(&right.job_id));
+        sort_jobs(&mut jobs);
         if json_output {
-            print_json_value(&json!(
-                resp.jobs
-                    .iter()
-                    .map(|job| json!({
-                        "job_id": job.job_id,
-                        "flow_id": job.flow_id,
-                        "state": job.state,
-                        "current_state": job.current_state,
-                    }))
-                    .collect::<Vec<_>>()
-            ))?;
+            print_json_value(&jobs_to_json_value(&jobs))?;
             return Ok(());
         }
         println!("{:<38} {:<20} {:<12} CURRENT", "JOB_ID", "FLOW_ID", "STATE");
-        for j in &resp.jobs {
+        for j in &jobs {
             println!(
                 "{:<38} {:<20} {:<12} {}",
                 j.job_id, j.flow_id, j.state, j.current_state
@@ -258,21 +271,12 @@ impl ShirohaClient {
     }
 
     pub async fn list_job_ids(&mut self) -> anyhow::Result<Vec<String>> {
-        let mut flow_ids = self.list_flow_ids().await?;
-        flow_ids.sort_unstable();
-
-        let mut job_ids = Vec::new();
-        for flow_id in flow_ids {
-            let mut resp = self
-                .job
-                .list_jobs(ListJobsRequest { flow_id })
-                .await?
-                .into_inner();
-            resp.jobs
-                .sort_by(|left, right| left.job_id.cmp(&right.job_id));
-            job_ids.extend(resp.jobs.into_iter().map(|job| job.job_id));
-        }
-
+        let mut job_ids = self
+            .fetch_all_jobs()
+            .await?
+            .into_iter()
+            .map(|job| job.job_id)
+            .collect::<Vec<_>>();
         job_ids.sort_unstable();
         job_ids.dedup();
         Ok(job_ids)
@@ -376,26 +380,25 @@ impl ShirohaClient {
     pub async fn get_job_events(
         &mut self,
         job_id: &str,
-        pretty: bool,
-        follow: bool,
-        interval_ms: u64,
-        json_output: bool,
+        options: EventQueryOptions,
     ) -> anyhow::Result<()> {
-        if follow {
-            return self
-                .follow_job_events(job_id, pretty, interval_ms, json_output)
-                .await;
+        if options.follow {
+            return self.follow_job_events(job_id, &options).await;
         }
 
-        let events = self.fetch_job_events(job_id).await?;
+        let events = select_events(
+            self.fetch_job_events(job_id).await?,
+            &options.kind_filters,
+            options.tail,
+        );
         if events.is_empty() {
-            if json_output {
+            if options.json_output {
                 return print_json_value(&Value::Array(Vec::new()));
             }
             println!("no events");
             return Ok(());
         }
-        render_events(&events, pretty, json_output)?;
+        render_events(&events, options.pretty, options.json_output)?;
         Ok(())
     }
 
@@ -444,23 +447,25 @@ impl ShirohaClient {
     async fn follow_job_events(
         &mut self,
         job_id: &str,
-        pretty: bool,
-        interval_ms: u64,
-        json_output: bool,
+        options: &EventQueryOptions,
     ) -> anyhow::Result<()> {
         let mut seen_ids = HashSet::new();
         loop {
             let events = self.fetch_job_events(job_id).await?;
-            let new_events: Vec<_> = events
-                .into_iter()
-                .filter(|event| seen_ids.insert(event.id.clone()))
-                .collect();
+            let new_events = select_events(
+                events
+                    .into_iter()
+                    .filter(|event| seen_ids.insert(event.id.clone()))
+                    .collect(),
+                &options.kind_filters,
+                options.tail,
+            );
 
             if !new_events.is_empty() {
-                if json_output {
+                if options.json_output {
                     print_json_value(&events_to_json_value(&new_events))?;
                 } else {
-                    render_events(&new_events, pretty, false)?;
+                    render_events(&new_events, options.pretty, false)?;
                 }
             }
 
@@ -468,7 +473,7 @@ impl ShirohaClient {
                 _ = tokio::signal::ctrl_c() => {
                     return Ok(());
                 }
-                _ = sleep(Duration::from_millis(interval_ms)) => {}
+                _ = sleep(Duration::from_millis(options.interval_ms)) => {}
             }
         }
     }
@@ -498,6 +503,25 @@ impl ShirohaClient {
             })
             .await?
             .into_inner())
+    }
+
+    async fn fetch_jobs_for_flow(&mut self, flow_id: &str) -> anyhow::Result<Vec<GetJobResponse>> {
+        Ok(self
+            .job
+            .list_jobs(ListJobsRequest {
+                flow_id: flow_id.to_string(),
+            })
+            .await?
+            .into_inner()
+            .jobs)
+    }
+
+    async fn fetch_all_jobs(&mut self) -> anyhow::Result<Vec<GetJobResponse>> {
+        let mut jobs = Vec::new();
+        for flow_id in self.list_flow_ids().await? {
+            jobs.extend(self.fetch_jobs_for_flow(&flow_id).await?);
+        }
+        Ok(jobs)
     }
 
     async fn fetch_flow(&mut self, flow_id: &str) -> anyhow::Result<GetFlowResponse> {
@@ -626,6 +650,21 @@ fn events_to_json_value(events: &[EventRecord]) -> Value {
     Value::Array(events.iter().map(event_to_json_value).collect())
 }
 
+fn jobs_to_json_value(jobs: &[GetJobResponse]) -> Value {
+    Value::Array(
+        jobs.iter()
+            .map(|job| {
+                json!({
+                    "job_id": job.job_id,
+                    "flow_id": job.flow_id,
+                    "state": job.state,
+                    "current_state": job.current_state,
+                })
+            })
+            .collect(),
+    )
+}
+
 fn print_job_json(job: &GetJobResponse) -> anyhow::Result<()> {
     print_json_value(&json!({
         "job_id": job.job_id,
@@ -640,6 +679,45 @@ fn job_matches_target(job: &GetJobResponse, target_state: Option<&str>) -> bool 
         Some(target) => job.state == target || job.current_state == target,
         None => matches!(job.state.as_str(), "completed" | "cancelled"),
     }
+}
+
+fn sort_jobs(jobs: &mut [GetJobResponse]) {
+    jobs.sort_by(|left, right| {
+        left.flow_id
+            .cmp(&right.flow_id)
+            .then_with(|| left.job_id.cmp(&right.job_id))
+    });
+}
+
+fn select_events(
+    mut events: Vec<EventRecord>,
+    kind_filters: &[String],
+    tail: Option<usize>,
+) -> Vec<EventRecord> {
+    if !kind_filters.is_empty() {
+        let allowed = kind_filters
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        events.retain(|event| {
+            event_kind_name(event)
+                .map(|kind| allowed.contains(kind.as_str()))
+                .unwrap_or(false)
+        });
+    }
+    if let Some(tail) = tail
+        && events.len() > tail
+    {
+        events = events.split_off(events.len() - tail);
+    }
+    events
+}
+
+fn event_kind_name(event: &EventRecord) -> Option<String> {
+    parse_json_value(&event.kind_json)?
+        .get("type")?
+        .as_str()
+        .map(ToString::to_string)
 }
 
 struct ManifestSummary {
@@ -657,6 +735,200 @@ fn manifest_summary(raw: &str) -> Option<ManifestSummary> {
         transition_count: value.get("transitions")?.as_array()?.len(),
         action_count: value.get("actions")?.as_array()?.len(),
     })
+}
+
+struct FlowTopologySummary {
+    initial_state: String,
+    states: Vec<FlowStateSummary>,
+    transitions: Vec<FlowTransitionSummary>,
+    actions: Vec<FlowActionSummary>,
+}
+
+struct FlowStateSummary {
+    name: String,
+    kind: String,
+    on_enter: Option<String>,
+    on_exit: Option<String>,
+    subprocess_flow_id: Option<String>,
+    completion_event: Option<String>,
+}
+
+struct FlowTransitionSummary {
+    from: String,
+    event: String,
+    to: String,
+    guard: Option<String>,
+    action: Option<String>,
+    timeout: Option<String>,
+}
+
+struct FlowActionSummary {
+    name: String,
+    dispatch: String,
+}
+
+fn print_flow_summary(flow_id: &str, version: &str, raw: &str) {
+    let Some(summary) = flow_topology_summary(raw) else {
+        println!("flow_id:  {flow_id}");
+        println!("version:  {version}");
+        println!("manifest:");
+        print_json_block(raw, true);
+        return;
+    };
+
+    println!("flow_id:       {flow_id}");
+    println!("version:       {version}");
+    println!("initial_state: {}", summary.initial_state);
+    println!("states:        {}", summary.states.len());
+    println!("transitions:   {}", summary.transitions.len());
+    println!("actions:       {}", summary.actions.len());
+    println!();
+    println!("states:");
+    for state in &summary.states {
+        let mut extras = Vec::new();
+        if let Some(on_enter) = state.on_enter.as_deref() {
+            extras.push(format!("on_enter={on_enter}"));
+        }
+        if let Some(on_exit) = state.on_exit.as_deref() {
+            extras.push(format!("on_exit={on_exit}"));
+        }
+        if let Some(subprocess_flow_id) = state.subprocess_flow_id.as_deref() {
+            let completion_event = state.completion_event.as_deref().unwrap_or("<missing>");
+            extras.push(format!(
+                "subprocess.flow_id={subprocess_flow_id} completion_event={completion_event}"
+            ));
+        }
+        if extras.is_empty() {
+            println!("  - {} [{}]", state.name, state.kind);
+        } else {
+            println!("  - {} [{}] {}", state.name, state.kind, extras.join(" "));
+        }
+    }
+    println!();
+    println!("transitions:");
+    for transition in &summary.transitions {
+        let mut extras = Vec::new();
+        if let Some(guard) = transition.guard.as_deref() {
+            extras.push(format!("guard={guard}"));
+        }
+        if let Some(action) = transition.action.as_deref() {
+            extras.push(format!("action={action}"));
+        }
+        if let Some(timeout) = transition.timeout.as_deref() {
+            extras.push(format!("timeout={timeout}"));
+        }
+        if extras.is_empty() {
+            println!(
+                "  - {} --{}--> {}",
+                transition.from, transition.event, transition.to
+            );
+        } else {
+            println!(
+                "  - {} --{}--> {} {}",
+                transition.from,
+                transition.event,
+                transition.to,
+                extras.join(" ")
+            );
+        }
+    }
+    println!();
+    println!("actions:");
+    for action in &summary.actions {
+        println!("  - {} dispatch={}", action.name, action.dispatch);
+    }
+}
+
+fn flow_topology_summary(raw: &str) -> Option<FlowTopologySummary> {
+    let value = parse_json_value(raw)?;
+    Some(FlowTopologySummary {
+        initial_state: value.get("initial_state")?.as_str()?.to_string(),
+        states: value
+            .get("states")?
+            .as_array()?
+            .iter()
+            .map(flow_state_summary)
+            .collect::<Option<Vec<_>>>()?,
+        transitions: value
+            .get("transitions")?
+            .as_array()?
+            .iter()
+            .map(flow_transition_summary)
+            .collect::<Option<Vec<_>>>()?,
+        actions: value
+            .get("actions")?
+            .as_array()?
+            .iter()
+            .map(flow_action_summary)
+            .collect::<Option<Vec<_>>>()?,
+    })
+}
+
+fn flow_state_summary(value: &Value) -> Option<FlowStateSummary> {
+    let subprocess = value.get("subprocess");
+    Some(FlowStateSummary {
+        name: value.get("name")?.as_str()?.to_string(),
+        kind: value.get("kind")?.as_str()?.to_string(),
+        on_enter: value
+            .get("on_enter")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        on_exit: value
+            .get("on_exit")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        subprocess_flow_id: subprocess
+            .and_then(|value| value.get("flow_id"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        completion_event: subprocess
+            .and_then(|value| value.get("completion_event"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+    })
+}
+
+fn flow_transition_summary(value: &Value) -> Option<FlowTransitionSummary> {
+    Some(FlowTransitionSummary {
+        from: value.get("from")?.as_str()?.to_string(),
+        event: value.get("event")?.as_str()?.to_string(),
+        to: value.get("to")?.as_str()?.to_string(),
+        guard: value
+            .get("guard")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        action: value
+            .get("action")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        timeout: value.get("timeout").and_then(format_timeout),
+    })
+}
+
+fn flow_action_summary(value: &Value) -> Option<FlowActionSummary> {
+    Some(FlowActionSummary {
+        name: value.get("name")?.as_str()?.to_string(),
+        dispatch: value
+            .get("dispatch")
+            .map(value_to_label)
+            .unwrap_or_else(|| "unknown".to_string()),
+    })
+}
+
+fn format_timeout(value: &Value) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    let duration_ms = value.get("duration_ms")?.as_u64()?;
+    let timeout_event = value.get("timeout_event")?.as_str()?;
+    Some(format!("{duration_ms}ms=>{timeout_event}"))
+}
+
+fn value_to_label(value: &Value) -> String {
+    value
+        .as_str()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| compact_json(&value.to_string()))
 }
 
 fn manifest_event_names(raw: &str) -> Vec<String> {
@@ -789,6 +1061,105 @@ mod tests {
         );
 
         assert_eq!(states, vec!["done", "idle"]);
+    }
+
+    #[test]
+    fn select_events_filters_and_tails() {
+        let selected = select_events(
+            vec![
+                EventRecord {
+                    id: "event-1".into(),
+                    job_id: "job-1".into(),
+                    timestamp_ms: 1,
+                    kind_json: r#"{"type":"created"}"#.into(),
+                },
+                EventRecord {
+                    id: "event-2".into(),
+                    job_id: "job-1".into(),
+                    timestamp_ms: 2,
+                    kind_json: r#"{"type":"transition"}"#.into(),
+                },
+                EventRecord {
+                    id: "event-3".into(),
+                    job_id: "job-1".into(),
+                    timestamp_ms: 3,
+                    kind_json: r#"{"type":"transition"}"#.into(),
+                },
+            ],
+            &[String::from("transition")],
+            Some(1),
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, "event-3");
+    }
+
+    #[test]
+    fn flow_topology_summary_extracts_hooks_and_subprocess() {
+        let summary = flow_topology_summary(
+            r#"{
+                "initial_state":"review",
+                "states":[
+                    {
+                        "name":"review",
+                        "kind":"subprocess",
+                        "on_enter":"enter-review",
+                        "subprocess":{
+                            "flow_id":"child-flow",
+                            "completion_event":"child-done"
+                        }
+                    }
+                ],
+                "transitions":[
+                    {
+                        "from":"review",
+                        "event":"child-done",
+                        "to":"approved",
+                        "action":"finalize",
+                        "timeout":{"duration_ms":5000,"timeout_event":"expire"}
+                    }
+                ],
+                "actions":[
+                    {"name":"finalize","dispatch":"local"}
+                ]
+            }"#,
+        )
+        .expect("summary should parse");
+
+        assert_eq!(summary.initial_state, "review");
+        assert_eq!(
+            summary.states[0].subprocess_flow_id.as_deref(),
+            Some("child-flow")
+        );
+        assert_eq!(
+            summary.states[0].completion_event.as_deref(),
+            Some("child-done")
+        );
+        assert_eq!(
+            summary.transitions[0].timeout.as_deref(),
+            Some("5000ms=>expire")
+        );
+        assert_eq!(summary.actions[0].dispatch, "local");
+    }
+
+    #[test]
+    fn jobs_to_json_value_returns_array() {
+        let value = jobs_to_json_value(&[GetJobResponse {
+            job_id: "job-1".into(),
+            flow_id: "flow-a".into(),
+            state: "running".into(),
+            current_state: "idle".into(),
+        }]);
+
+        assert_eq!(
+            value,
+            json!([{
+                "job_id": "job-1",
+                "flow_id": "flow-a",
+                "state": "running",
+                "current_state": "idle"
+            }])
+        );
     }
 
     #[test]

@@ -148,6 +148,9 @@ enum Commands {
             add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
         )]
         flow_id: String,
+        /// 以拓扑摘要视图展示状态、转移和 action
+        #[arg(long, conflicts_with = "json")]
+        summary: bool,
     },
     /// 输出 shell 补全脚本
     Complete(CompleteArgs),
@@ -173,12 +176,16 @@ enum Commands {
     },
     /// 列出 Flow 的所有 Job
     Jobs {
+        /// 聚合列出所有 Flow 下的 Job
+        #[arg(long, conflicts_with = "flow_id")]
+        all: bool,
         #[arg(
             short = 'i',
             long,
+            required_unless_present = "all",
             add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
         )]
-        flow_id: String,
+        flow_id: Option<String>,
     },
     /// 触发事件
     Trigger {
@@ -238,6 +245,16 @@ enum Commands {
         /// 持续轮询并打印新事件
         #[arg(long)]
         follow: bool,
+        /// 仅输出指定类型的事件；可重复传入多个值
+        #[arg(
+            long = "kind",
+            value_name = "TYPE",
+            add = clap_complete::engine::ArgValueCompleter::new(completion::event_kind_completer)
+        )]
+        kind: Vec<String>,
+        /// 仅输出最后 N 条事件；follow 模式下首批历史事件也会应用该限制
+        #[arg(long, value_name = "N", value_parser = parse_positive_usize)]
+        tail: Option<usize>,
         /// follow 模式下的轮询间隔（毫秒）；配合 --json 时每批新事件输出一个 JSON 数组
         #[arg(long, default_value_t = 500)]
         interval_ms: u64,
@@ -292,7 +309,7 @@ async fn async_main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Deploy { file, flow_id } => c.deploy(&flow_id, &file, cli.json).await?,
         Commands::Flows => c.list_flows(cli.json).await?,
-        Commands::Flow { flow_id } => c.get_flow(&flow_id, cli.json).await?,
+        Commands::Flow { flow_id, summary } => c.get_flow(&flow_id, summary, cli.json).await?,
         Commands::Complete(..) => unreachable!("complete command handled before gRPC connect"),
         Commands::Create { flow_id, context } => {
             c.create_job(
@@ -307,7 +324,7 @@ async fn async_main() -> anyhow::Result<()> {
             .await?
         }
         Commands::Get { job_id } => c.get_job(&job_id, cli.json).await?,
-        Commands::Jobs { flow_id } => c.list_jobs(&flow_id, cli.json).await?,
+        Commands::Jobs { all, flow_id } => c.list_jobs(flow_id.as_deref(), all, cli.json).await?,
         Commands::Trigger {
             job_id,
             event,
@@ -332,10 +349,22 @@ async fn async_main() -> anyhow::Result<()> {
             job_id,
             pretty,
             follow,
+            kind,
+            tail,
             interval_ms,
         } => {
-            c.get_job_events(&job_id, pretty, follow, interval_ms, cli.json)
-                .await?
+            c.get_job_events(
+                &job_id,
+                client::EventQueryOptions {
+                    pretty,
+                    follow,
+                    kind_filters: kind,
+                    tail,
+                    interval_ms,
+                    json_output: cli.json,
+                },
+            )
+            .await?
         }
         Commands::Wait {
             job_id,
@@ -428,6 +457,16 @@ fn write_completion_script(path: &Path, script: &[u8]) -> anyhow::Result<()> {
     }
     std::fs::write(path, script)?;
     Ok(())
+}
+
+fn parse_positive_usize(input: &str) -> Result<usize, String> {
+    let value = input
+        .parse::<usize>()
+        .map_err(|error| format!("invalid positive integer `{input}`: {error}"))?;
+    if value == 0 {
+        return Err("value must be greater than 0".to_string());
+    }
+    Ok(value)
 }
 
 #[cfg(test)]
