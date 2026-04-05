@@ -1,15 +1,12 @@
+use anyhow::Context;
 use serde_json::Value;
 
-pub(crate) fn parse_json_value(raw: &str) -> Option<Value> {
-    serde_json::from_str(raw).ok()
+pub(crate) fn parse_json_value_required(raw: &str, field_name: &str) -> anyhow::Result<Value> {
+    serde_json::from_str(raw).with_context(|| format!("failed to parse `{field_name}` as JSON"))
 }
 
-pub(crate) fn manifest_event_names(raw: &str) -> Vec<String> {
-    let Some(value) = parse_json_value(raw) else {
-        return Vec::new();
-    };
-
-    let mut events = value
+pub(crate) fn manifest_event_names(manifest: &Value) -> Vec<String> {
+    let mut events = manifest
         .get("transitions")
         .and_then(Value::as_array)
         .into_iter()
@@ -22,12 +19,8 @@ pub(crate) fn manifest_event_names(raw: &str) -> Vec<String> {
     events
 }
 
-pub(crate) fn manifest_state_names(raw: &str) -> Vec<String> {
-    let Some(value) = parse_json_value(raw) else {
-        return Vec::new();
-    };
-
-    let mut states = value
+pub(crate) fn manifest_state_names(manifest: &Value) -> Vec<String> {
+    let mut states = manifest
         .get("states")
         .and_then(Value::as_array)
         .into_iter()
@@ -51,9 +44,20 @@ mod tests {
             "states": [{"name": "idle"}, {"name": "done"}, {"name": "idle"}],
             "transitions": [{"event": "approve"}, {"event": "reject"}, {"event": "approve"}]
         });
-        let raw = serde_json::to_string(&manifest).expect("manifest json");
 
-        assert_eq!(manifest_state_names(&raw), vec!["done", "idle"]);
-        assert_eq!(manifest_event_names(&raw), vec!["approve", "reject"]);
+        assert_eq!(manifest_state_names(&manifest), vec!["done", "idle"]);
+        assert_eq!(manifest_event_names(&manifest), vec!["approve", "reject"]);
+    }
+
+    #[test]
+    fn parse_json_value_required_returns_contextful_error() {
+        let error =
+            parse_json_value_required("{", "manifest").expect_err("invalid JSON should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to parse `manifest` as JSON")
+        );
     }
 }
