@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-02 | Updated: 2026-04-03 -->
+<!-- Generated: 2026-04-02 | Updated: 2026-04-06 -->
 
 # shiroha-engine
 
@@ -26,6 +26,7 @@
 - `TimerWheel` 每个定时器是独立的 tokio::spawn 任务，暂停时 abort 并记录剩余时间；`register()` 现在是 async，确保定时器先进入索引再返回
 - 添加新调度策略：实现 `Scheduler` trait 即可
 - 状态级 hook（`on-enter` / `on-exit`）在 `shirohad` 层执行，不在 engine 层实现
+- `FlowValidator` 当前只产出 warning；真正“是否阻止部署”由上层 service 决定
 
 ### Testing Requirements
 
@@ -36,5 +37,6 @@
 
 - UUIDv7 用于所有 ID 生成（时间有序）
 - 事件溯源：每次状态变更调用 `make_event()` + `storage.append_event()`
+- `save_job_with_event()` 是 Job 快照与事件记录一致性的关键接口；后端若支持事务，应优先覆写它
 
 <!-- MANUAL: -->

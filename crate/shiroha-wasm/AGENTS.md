@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-02 | Updated: 2026-04-02 -->
+<!-- Generated: 2026-04-02 | Updated: 2026-04-06 -->
 
 # shiroha-wasm
 
@@ -22,8 +22,10 @@
 ### Working In This Directory
 
 - component guest 需按 `wit/flow.wit` 导出同名 typed functions；host 通过 `wasmtime::component::Instance::get_typed_func` 调用
+- 当前只实现单一 `world flow`；文档里提到的 `sandbox/network/storage/full` world 和权限匹配还没有落地
 - `WasmModule::compute_hash` 当前使用简易哈希（长度+首尾字节），生产应替换为 SHA-256
 - component guest 实例化时使用 `wasmtime_wasi::p2::add_to_linker_sync` 提供 WASI imports
+- `aggregate()` host 调用已打通，但 standalone 运行时还没有真正执行 fan-out 调度链路
 
 ### Testing Requirements
 
