@@ -6,8 +6,6 @@
 
 - `idle` / `loop` 两个可达状态都无法到达任何终态
 - `done` 是不可达终态
-- `idle.on-enter = "bootstrap"`，但 `bootstrap` 没有在 `actions` 列表中声明
-- `loop.on-exit = "cleanup"`，但 `cleanup` 也没有声明
 
 因此：
 
@@ -54,5 +52,3 @@ sctl flow deploy \
   - `state 'idle' cannot reach any terminal state`
   - `state 'loop' cannot reach any terminal state`
   - `state 'done' is unreachable from initial state`
-  - `action 'bootstrap' referenced ... not declared`
-  - `action 'cleanup' referenced ... not declared`

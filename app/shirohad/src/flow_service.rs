@@ -8,7 +8,7 @@ use std::sync::Arc;
 use shiroha_core::flow::FlowRegistration;
 use shiroha_core::storage::Storage;
 use shiroha_engine::engine::StateMachineEngine;
-use shiroha_engine::validator::FlowValidator;
+use shiroha_engine::validator::{FlowValidator, ValidationWarning};
 use shiroha_proto::shiroha_api::flow_service_server::FlowService;
 use shiroha_proto::shiroha_api::{
     DeleteFlowRequest, DeleteFlowResponse, DeployFlowRequest, DeployFlowResponse, FlowSummary,
@@ -37,6 +37,16 @@ impl FlowServiceImpl {
             initial_state: flow.manifest.initial_state.clone(),
             state_count: flow.manifest.states.len() as u32,
         }
+    }
+
+    fn is_fatal_validation_warning(warning: &ValidationWarning) -> bool {
+        matches!(
+            warning,
+            ValidationWarning::InvalidInitialState(_)
+                | ValidationWarning::MissingState { .. }
+                | ValidationWarning::MissingAction(_)
+                | ValidationWarning::MissingGuard(_)
+        )
     }
 }
 
@@ -75,8 +85,25 @@ impl FlowService for FlowServiceImpl {
 
         // 静态验证
         let warnings = FlowValidator::validate(&manifest);
-        let warning_messages: Vec<String> = warnings.iter().map(|w| w.to_string()).collect();
-        if !warnings.is_empty() {
+        let (fatal_warnings, nonfatal_warnings): (Vec<_>, Vec<_>) = warnings
+            .into_iter()
+            .partition(Self::is_fatal_validation_warning);
+        if !fatal_warnings.is_empty() {
+            let messages = fatal_warnings
+                .iter()
+                .map(ValidationWarning::to_string)
+                .collect::<Vec<_>>();
+            return Err(Status::invalid_argument(format!(
+                "flow validation failed: {}",
+                messages.join("; ")
+            )));
+        }
+
+        let warning_messages: Vec<String> = nonfatal_warnings
+            .iter()
+            .map(ValidationWarning::to_string)
+            .collect();
+        if !warning_messages.is_empty() {
             tracing::warn!(
                 flow_id,
                 warnings = ?warning_messages,
@@ -278,7 +305,7 @@ mod tests {
                 StateDef {
                     name: "idle".into(),
                     kind: StateKind::Normal,
-                    on_enter: Some("bootstrap".into()),
+                    on_enter: None,
                     on_exit: None,
                     subprocess: None,
                 },
@@ -286,7 +313,7 @@ mod tests {
                     name: "loop".into(),
                     kind: StateKind::Normal,
                     on_enter: None,
-                    on_exit: Some("cleanup".into()),
+                    on_exit: None,
                     subprocess: None,
                 },
                 StateDef {
@@ -315,6 +342,38 @@ mod tests {
                     timeout: None,
                 },
             ],
+            initial_state: "idle".into(),
+            actions: Vec::new(),
+        }
+    }
+
+    fn invalid_reference_manifest() -> FlowManifest {
+        FlowManifest {
+            id: "invalid-reference".into(),
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![TransitionDef {
+                from: "idle".into(),
+                to: "done".into(),
+                event: "approve".into(),
+                guard: Some("allow".into()),
+                action: Some("ship".into()),
+                timeout: None,
+            }],
             initial_state: "idle".into(),
             actions: Vec::new(),
         }
@@ -417,12 +476,24 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("cannot reach any terminal state"))
         );
-        assert!(
-            deploy
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("bootstrap"))
-        );
+    }
+
+    #[tokio::test]
+    async fn deploy_flow_rejects_fatal_validation_issues() {
+        let harness = TestHarness::new("flow-fatal-validation").await;
+        let service = FlowServiceImpl::new(harness.state.clone());
+
+        let error = service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "invalid-reference".into(),
+                wasm_bytes: wasm_for_manifest(&invalid_reference_manifest()),
+            }))
+            .await
+            .expect_err("fatal validation issues should fail deploy");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().contains("action `ship`"));
+        assert!(error.message().contains("guard `allow`"));
     }
 
     #[tokio::test]
