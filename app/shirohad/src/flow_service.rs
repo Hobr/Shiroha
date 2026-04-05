@@ -11,8 +11,8 @@ use shiroha_engine::engine::StateMachineEngine;
 use shiroha_engine::validator::FlowValidator;
 use shiroha_proto::shiroha_api::flow_service_server::FlowService;
 use shiroha_proto::shiroha_api::{
-    DeployFlowRequest, DeployFlowResponse, FlowSummary, GetFlowRequest, GetFlowResponse,
-    ListFlowsRequest, ListFlowsResponse,
+    DeleteFlowRequest, DeleteFlowResponse, DeployFlowRequest, DeployFlowResponse, FlowSummary,
+    GetFlowRequest, GetFlowResponse, ListFlowsRequest, ListFlowsResponse,
 };
 use shiroha_wasm::module_cache::WasmModule;
 use tonic::{Request, Response, Status};
@@ -167,12 +167,64 @@ impl FlowService for FlowServiceImpl {
             manifest_json,
         }))
     }
+
+    async fn delete_flow(
+        &self,
+        request: Request<DeleteFlowRequest>,
+    ) -> Result<Response<DeleteFlowResponse>, Status> {
+        let flow_id = request.into_inner().flow_id;
+        let flow = self
+            .state
+            .storage
+            .get_flow(&flow_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?
+            .ok_or_else(|| Status::not_found(format!("flow `{flow_id}` not found")))?;
+        let jobs = self
+            .state
+            .job_manager
+            .list_jobs(&flow_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        if !jobs.is_empty() {
+            return Err(Status::failed_precondition(format!(
+                "flow `{flow_id}` still has {} job(s)",
+                jobs.len()
+            )));
+        }
+
+        self.state
+            .storage
+            .delete_flow(&flow_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        self.state.flows.lock().await.remove(&flow_id);
+        self.state.engines.lock().await.remove(&flow_id);
+        self.state
+            .flow_versions
+            .lock()
+            .await
+            .retain(|(candidate, _), _| candidate != &flow_id);
+        self.state
+            .versioned_engines
+            .lock()
+            .await
+            .retain(|(candidate, _), _| candidate != &flow_id);
+
+        tracing::info!(flow_id, version = %flow.version, "flow deleted");
+
+        Ok(Response::new(DeleteFlowResponse { flow_id }))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::job_service::JobServiceImpl;
     use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
+    use shiroha_proto::shiroha_api::job_service_server::JobService;
+    use shiroha_proto::shiroha_api::{CreateJobRequest, DeleteFlowRequest};
 
     #[tokio::test]
     async fn deploy_list_and_get_flow_round_trip() {
@@ -247,5 +299,80 @@ mod tests {
             .expect_err("missing exports should fail");
 
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn delete_flow_removes_storage_and_memory_cache() {
+        let harness = TestHarness::new("flow-delete").await;
+        let service = FlowServiceImpl::new(harness.state.clone());
+        let manifest = approval_manifest("demo-flow", Some("allow"));
+
+        service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "demo-flow".into(),
+                wasm_bytes: wasm_for_manifest(&manifest),
+            }))
+            .await
+            .expect("deploy flow");
+
+        service
+            .delete_flow(Request::new(DeleteFlowRequest {
+                flow_id: "demo-flow".into(),
+            }))
+            .await
+            .expect("delete flow");
+
+        assert!(
+            harness
+                .state
+                .storage
+                .get_flow("demo-flow")
+                .await
+                .expect("get flow")
+                .is_none()
+        );
+        assert!(!harness.state.flows.lock().await.contains_key("demo-flow"));
+        assert!(!harness.state.engines.lock().await.contains_key("demo-flow"));
+        assert!(
+            !harness
+                .state
+                .flow_versions
+                .lock()
+                .await
+                .keys()
+                .any(|(flow_id, _)| flow_id == "demo-flow")
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_flow_rejects_when_jobs_still_exist() {
+        let harness = TestHarness::new("flow-delete-jobs").await;
+        let flow_service = FlowServiceImpl::new(harness.state.clone());
+        let job_service = JobServiceImpl::new(harness.state.clone());
+        let manifest = approval_manifest("demo-flow", Some("allow"));
+
+        flow_service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "demo-flow".into(),
+                wasm_bytes: wasm_for_manifest(&manifest),
+            }))
+            .await
+            .expect("deploy flow");
+        job_service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "demo-flow".into(),
+                context: None,
+            }))
+            .await
+            .expect("create job");
+
+        let error = flow_service
+            .delete_flow(Request::new(DeleteFlowRequest {
+                flow_id: "demo-flow".into(),
+            }))
+            .await
+            .expect_err("delete flow with jobs");
+
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
     }
 }

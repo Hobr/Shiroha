@@ -177,6 +177,25 @@ impl ShirohaClient {
         Ok(())
     }
 
+    pub async fn delete_flow(&mut self, flow_id: &str, json_output: bool) -> anyhow::Result<()> {
+        let resp = self
+            .flow
+            .delete_flow(DeleteFlowRequest {
+                flow_id: flow_id.to_string(),
+            })
+            .await?
+            .into_inner();
+        if json_output {
+            print_json_value(&json!({
+                "flow_id": resp.flow_id,
+                "operation": "delete_flow",
+            }))?;
+            return Ok(());
+        }
+        println!("flow {} deleted", resp.flow_id);
+        Ok(())
+    }
+
     pub async fn create_job(
         &mut self,
         flow_id: &str,
@@ -231,6 +250,25 @@ impl ShirohaClient {
         println!("flow_id:       {}", resp.flow_id);
         println!("state:         {}", resp.state);
         println!("current_state: {}", resp.current_state);
+        Ok(())
+    }
+
+    pub async fn delete_job(&mut self, job_id: &str, json_output: bool) -> anyhow::Result<()> {
+        let resp = self
+            .job
+            .delete_job(DeleteJobRequest {
+                job_id: job_id.to_string(),
+            })
+            .await?
+            .into_inner();
+        if json_output {
+            print_json_value(&json!({
+                "job_id": resp.job_id,
+                "operation": "delete_job",
+            }))?;
+            return Ok(());
+        }
+        println!("job {} deleted", resp.job_id);
         Ok(())
     }
 
