@@ -69,6 +69,138 @@ struct PayloadArgs {
     payload_file: Option<String>,
 }
 
+#[derive(Args)]
+struct FlowIdArgs {
+    #[arg(
+        short = 'i',
+        long,
+        add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
+    )]
+    flow_id: String,
+}
+
+#[derive(Args)]
+struct JobIdArgs {
+    #[arg(
+        short = 'i',
+        long,
+        add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
+    )]
+    job_id: String,
+}
+
+#[derive(Args)]
+struct FlowDeployArgs {
+    #[arg(short, long, value_hint = ValueHint::FilePath)]
+    file: String,
+    #[command(flatten)]
+    flow: FlowIdArgs,
+}
+
+#[derive(Args)]
+struct FlowGetArgs {
+    #[command(flatten)]
+    flow: FlowIdArgs,
+    /// 查询指定部署版本；默认返回 latest alias
+    #[arg(long, value_name = "VERSION")]
+    version: Option<String>,
+    /// 以拓扑摘要视图展示状态、转移和 action
+    #[arg(long, conflicts_with = "json")]
+    summary: bool,
+}
+
+#[derive(Args)]
+struct JobCreateArgs {
+    #[command(flatten)]
+    flow: FlowIdArgs,
+    #[command(flatten)]
+    context: ContextArgs,
+}
+
+#[derive(Args)]
+struct JobsListArgs {
+    /// 聚合列出所有 Flow 下的 Job
+    #[arg(long, conflicts_with = "flow_id")]
+    all: bool,
+    #[arg(
+        short = 'i',
+        long,
+        required_unless_present = "all",
+        add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
+    )]
+    flow_id: Option<String>,
+}
+
+#[derive(Args)]
+struct JobTriggerArgs {
+    #[command(flatten)]
+    job: JobIdArgs,
+    #[arg(
+        short,
+        long,
+        add = clap_complete::engine::ArgValueCompleter::new(completion::job_event_completer)
+    )]
+    event: String,
+    #[command(flatten)]
+    payload: PayloadArgs,
+}
+
+#[derive(Args)]
+struct JobEventsArgs {
+    #[command(flatten)]
+    job: JobIdArgs,
+    /// 以缩进 JSON 格式打印事件 kind
+    #[arg(long)]
+    pretty: bool,
+    /// 持续轮询并打印新事件
+    #[arg(long)]
+    follow: bool,
+    /// 仅返回给定事件 ID 之后的新事件
+    #[arg(
+        long,
+        value_name = "EVENT_ID",
+        add = clap_complete::engine::ArgValueCompleter::new(completion::job_event_id_completer)
+    )]
+    since_id: Option<String>,
+    /// 仅返回严格晚于该时间戳（毫秒）的事件
+    #[arg(long)]
+    since_timestamp_ms: Option<u64>,
+    /// 服务端最多返回前 N 条匹配事件
+    #[arg(long, value_name = "N", value_parser = parse_positive_u32)]
+    limit: Option<u32>,
+    /// 仅输出指定类型的事件；可重复传入多个值
+    #[arg(
+        long = "kind",
+        value_name = "TYPE",
+        add = clap_complete::engine::ArgValueCompleter::new(completion::event_kind_completer)
+    )]
+    kind: Vec<String>,
+    /// 仅输出最后 N 条事件；follow 模式下首批历史事件也会应用该限制
+    #[arg(long, value_name = "N", value_parser = parse_positive_usize)]
+    tail: Option<usize>,
+    /// follow 模式下的轮询间隔（毫秒）；配合 --json 时每批新事件输出一个 JSON 数组
+    #[arg(long, default_value_t = 500)]
+    interval_ms: u64,
+}
+
+#[derive(Args)]
+struct JobWaitArgs {
+    #[command(flatten)]
+    job: JobIdArgs,
+    /// 目标 lifecycle state 或 current_state，未指定时等待 completed/cancelled
+    #[arg(
+        long,
+        add = clap_complete::engine::ArgValueCompleter::new(completion::wait_state_completer)
+    )]
+    state: Option<String>,
+    /// 最大等待时间（毫秒），未指定则一直等待
+    #[arg(long)]
+    timeout_ms: Option<u64>,
+    /// 轮询间隔（毫秒）
+    #[arg(long, default_value_t = 500)]
+    interval_ms: u64,
+}
+
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionShell {
     Bash,
@@ -127,202 +259,56 @@ struct CompleteArgs {
 
 #[derive(clap::Subcommand)]
 enum Commands {
-    /// 部署 Flow（上传 WASM 文件）
-    Deploy {
-        #[arg(short, long, value_hint = ValueHint::FilePath)]
-        file: String,
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
-        )]
-        flow_id: String,
-    },
-    /// 列出所有 Flow
-    Flows,
-    /// 查询单个 Flow 详情和 manifest
+    /// Flow 管理
     Flow {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
-        )]
-        flow_id: String,
-        /// 查询指定部署版本；默认返回 latest alias
-        #[arg(long, value_name = "VERSION")]
-        version: Option<String>,
-        /// 以拓扑摘要视图展示状态、转移和 action
-        #[arg(long, conflicts_with = "json")]
-        summary: bool,
+        #[command(subcommand)]
+        command: FlowCommands,
     },
-    /// 列出某个 Flow 的历史部署版本
-    FlowVersions {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
-        )]
-        flow_id: String,
-    },
-    /// 删除 Flow；要求不存在关联 Job
-    DeleteFlow {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
-        )]
-        flow_id: String,
+    /// Job 管理
+    Job {
+        #[command(subcommand)]
+        command: JobCommands,
     },
     /// 输出 shell 补全脚本
     Complete(CompleteArgs),
+}
+
+#[derive(clap::Subcommand)]
+enum FlowCommands {
+    /// 部署 Flow（上传 WASM 文件）
+    Deploy(FlowDeployArgs),
+    /// 列出所有 Flow
+    Ls,
+    /// 查询单个 Flow 详情和 manifest
+    Get(FlowGetArgs),
+    /// 列出某个 Flow 的历史部署版本
+    Vers(FlowIdArgs),
+    /// 删除 Flow；要求不存在关联 Job
+    Rm(FlowIdArgs),
+}
+
+#[derive(clap::Subcommand)]
+enum JobCommands {
     /// 创建 Job
-    Create {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
-        )]
-        flow_id: String,
-        #[command(flatten)]
-        context: ContextArgs,
-    },
+    New(JobCreateArgs),
     /// 查询 Job 详情
-    Get {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
-        )]
-        job_id: String,
-    },
+    Get(JobIdArgs),
     /// 删除 Job；要求 Job 已 cancelled/completed
-    DeleteJob {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
-        )]
-        job_id: String,
-    },
-    /// 列出 Flow 的所有 Job
-    Jobs {
-        /// 聚合列出所有 Flow 下的 Job
-        #[arg(long, conflicts_with = "flow_id")]
-        all: bool,
-        #[arg(
-            short = 'i',
-            long,
-            required_unless_present = "all",
-            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
-        )]
-        flow_id: Option<String>,
-    },
+    Rm(JobIdArgs),
+    /// 列出 Job
+    Ls(JobsListArgs),
     /// 触发事件
-    Trigger {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
-        )]
-        job_id: String,
-        #[arg(
-            short,
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::job_event_completer)
-        )]
-        event: String,
-        #[command(flatten)]
-        payload: PayloadArgs,
-    },
+    Trig(JobTriggerArgs),
     /// 暂停 Job
-    Pause {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
-        )]
-        job_id: String,
-    },
+    Pause(JobIdArgs),
     /// 恢复 Job
-    Resume {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
-        )]
-        job_id: String,
-    },
+    Resume(JobIdArgs),
     /// 取消 Job
-    Cancel {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
-        )]
-        job_id: String,
-    },
+    Cancel(JobIdArgs),
     /// 查看 Job 事件日志
-    Events {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
-        )]
-        job_id: String,
-        /// 以缩进 JSON 格式打印事件 kind
-        #[arg(long)]
-        pretty: bool,
-        /// 持续轮询并打印新事件
-        #[arg(long)]
-        follow: bool,
-        /// 仅返回给定事件 ID 之后的新事件
-        #[arg(
-            long,
-            value_name = "EVENT_ID",
-            add = clap_complete::engine::ArgValueCompleter::new(completion::job_event_id_completer)
-        )]
-        since_id: Option<String>,
-        /// 仅返回严格晚于该时间戳（毫秒）的事件
-        #[arg(long)]
-        since_timestamp_ms: Option<u64>,
-        /// 服务端最多返回前 N 条匹配事件
-        #[arg(long, value_name = "N", value_parser = parse_positive_u32)]
-        limit: Option<u32>,
-        /// 仅输出指定类型的事件；可重复传入多个值
-        #[arg(
-            long = "kind",
-            value_name = "TYPE",
-            add = clap_complete::engine::ArgValueCompleter::new(completion::event_kind_completer)
-        )]
-        kind: Vec<String>,
-        /// 仅输出最后 N 条事件；follow 模式下首批历史事件也会应用该限制
-        #[arg(long, value_name = "N", value_parser = parse_positive_usize)]
-        tail: Option<usize>,
-        /// follow 模式下的轮询间隔（毫秒）；配合 --json 时每批新事件输出一个 JSON 数组
-        #[arg(long, default_value_t = 500)]
-        interval_ms: u64,
-    },
+    Logs(JobEventsArgs),
     /// 等待 Job 到达目标状态，未指定时等待到终态
-    Wait {
-        #[arg(
-            short = 'i',
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
-        )]
-        job_id: String,
-        /// 目标 lifecycle state 或 current_state，未指定时等待 completed/cancelled
-        #[arg(
-            long,
-            add = clap_complete::engine::ArgValueCompleter::new(completion::wait_state_completer)
-        )]
-        state: Option<String>,
-        /// 最大等待时间（毫秒），未指定则一直等待
-        #[arg(long)]
-        timeout_ms: Option<u64>,
-        /// 轮询间隔（毫秒）
-        #[arg(long, default_value_t = 500)]
-        interval_ms: u64,
-    },
+    Wait(JobWaitArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -350,93 +336,114 @@ async fn async_main() -> anyhow::Result<()> {
     let mut c = client::ShirohaClient::connect(&cli.server).await?;
 
     match cli.command {
-        Commands::Deploy { file, flow_id } => c.deploy(&flow_id, &file, cli.json).await?,
-        Commands::Flows => c.list_flows(cli.json).await?,
-        Commands::Flow {
-            flow_id,
-            version,
-            summary,
-        } => {
-            c.get_flow(&flow_id, version.as_deref(), summary, cli.json)
-                .await?
-        }
-        Commands::FlowVersions { flow_id } => c.list_flow_versions(&flow_id, cli.json).await?,
-        Commands::DeleteFlow { flow_id } => c.delete_flow(&flow_id, cli.json).await?,
+        Commands::Flow { command } => dispatch_flow_command(&mut c, command, cli.json).await?,
+        Commands::Job { command } => dispatch_job_command(&mut c, command, cli.json).await?,
         Commands::Complete(..) => unreachable!("complete command handled before gRPC connect"),
-        Commands::Create { flow_id, context } => {
-            c.create_job(
-                &flow_id,
-                client::decode_optional_bytes(
-                    context.context_text.as_deref(),
-                    context.context_hex.as_deref(),
-                    context.context_file.as_deref(),
-                )?,
-                cli.json,
-            )
-            .await?
-        }
-        Commands::Get { job_id } => c.get_job(&job_id, cli.json).await?,
-        Commands::DeleteJob { job_id } => c.delete_job(&job_id, cli.json).await?,
-        Commands::Jobs { all, flow_id } => c.list_jobs(flow_id.as_deref(), all, cli.json).await?,
-        Commands::Trigger {
-            job_id,
-            event,
-            payload,
-        } => {
-            c.trigger_event(
-                &job_id,
-                &event,
-                client::decode_optional_bytes(
-                    payload.payload_text.as_deref(),
-                    payload.payload_hex.as_deref(),
-                    payload.payload_file.as_deref(),
-                )?,
-                cli.json,
-            )
-            .await?
-        }
-        Commands::Pause { job_id } => c.pause_job(&job_id, cli.json).await?,
-        Commands::Resume { job_id } => c.resume_job(&job_id, cli.json).await?,
-        Commands::Cancel { job_id } => c.cancel_job(&job_id, cli.json).await?,
-        Commands::Events {
-            job_id,
-            pretty,
-            follow,
-            since_id,
-            since_timestamp_ms,
-            limit,
-            kind,
-            tail,
-            interval_ms,
-        } => {
-            c.get_job_events(
-                &job_id,
-                client::EventQueryOptions {
-                    pretty,
-                    follow,
-                    since_id,
-                    since_timestamp_ms,
-                    limit,
-                    kind_filters: kind,
-                    tail,
-                    interval_ms,
-                    json_output: cli.json,
-                },
-            )
-            .await?
-        }
-        Commands::Wait {
-            job_id,
-            state,
-            timeout_ms,
-            interval_ms,
-        } => {
-            c.wait_job(&job_id, state.as_deref(), timeout_ms, interval_ms, cli.json)
-                .await?
-        }
     }
 
     Ok(())
+}
+
+async fn dispatch_flow_command(
+    client: &mut client::ShirohaClient,
+    command: FlowCommands,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    match command {
+        FlowCommands::Deploy(args) => {
+            client
+                .deploy(&args.flow.flow_id, &args.file, json_output)
+                .await
+        }
+        FlowCommands::Ls => client.list_flows(json_output).await,
+        FlowCommands::Get(args) => {
+            client
+                .get_flow(
+                    &args.flow.flow_id,
+                    args.version.as_deref(),
+                    args.summary,
+                    json_output,
+                )
+                .await
+        }
+        FlowCommands::Vers(args) => client.list_flow_versions(&args.flow_id, json_output).await,
+        FlowCommands::Rm(args) => client.delete_flow(&args.flow_id, json_output).await,
+    }
+}
+
+async fn dispatch_job_command(
+    client: &mut client::ShirohaClient,
+    command: JobCommands,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    match command {
+        JobCommands::New(args) => {
+            client
+                .create_job(
+                    &args.flow.flow_id,
+                    client::decode_optional_bytes(
+                        args.context.context_text.as_deref(),
+                        args.context.context_hex.as_deref(),
+                        args.context.context_file.as_deref(),
+                    )?,
+                    json_output,
+                )
+                .await
+        }
+        JobCommands::Get(args) => client.get_job(&args.job_id, json_output).await,
+        JobCommands::Rm(args) => client.delete_job(&args.job_id, json_output).await,
+        JobCommands::Ls(args) => {
+            client
+                .list_jobs(args.flow_id.as_deref(), args.all, json_output)
+                .await
+        }
+        JobCommands::Trig(args) => {
+            client
+                .trigger_event(
+                    &args.job.job_id,
+                    &args.event,
+                    client::decode_optional_bytes(
+                        args.payload.payload_text.as_deref(),
+                        args.payload.payload_hex.as_deref(),
+                        args.payload.payload_file.as_deref(),
+                    )?,
+                    json_output,
+                )
+                .await
+        }
+        JobCommands::Pause(args) => client.pause_job(&args.job_id, json_output).await,
+        JobCommands::Resume(args) => client.resume_job(&args.job_id, json_output).await,
+        JobCommands::Cancel(args) => client.cancel_job(&args.job_id, json_output).await,
+        JobCommands::Logs(args) => {
+            client
+                .get_job_events(
+                    &args.job.job_id,
+                    client::EventQueryOptions {
+                        pretty: args.pretty,
+                        follow: args.follow,
+                        since_id: args.since_id,
+                        since_timestamp_ms: args.since_timestamp_ms,
+                        limit: args.limit,
+                        kind_filters: args.kind,
+                        tail: args.tail,
+                        interval_ms: args.interval_ms,
+                        json_output,
+                    },
+                )
+                .await
+        }
+        JobCommands::Wait(args) => {
+            client
+                .wait_job(
+                    &args.job.job_id,
+                    args.state.as_deref(),
+                    args.timeout_ms,
+                    args.interval_ms,
+                    json_output,
+                )
+                .await
+        }
+    }
 }
 
 fn handle_complete(args: CompleteArgs) -> anyhow::Result<()> {

@@ -12,7 +12,7 @@
 因此：
 
 - `cargo build` 会成功
-- `sctl deploy` 会成功
+- `sctl flow deploy` 会成功
 - `shirohad` 日志里会出现 validation warnings
 
 ## 构建
@@ -41,7 +41,7 @@ RUST_LOG=warn cargo run -p shirohad -- --listen 127.0.0.1:50051
 然后部署：
 
 ```bash
-sctl deploy \
+sctl flow deploy \
   --file example/warning-deadlock/target/wasm32-wasip2/release/warning_deadlock.wasm \
   --flow-id warning-deadlock
 ```
