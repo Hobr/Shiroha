@@ -190,6 +190,7 @@ fn delete_flow_help_mentions_flow_id() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--flow-id"));
+    assert!(stdout.contains("--force"));
 }
 
 #[test]
@@ -243,6 +244,7 @@ fn delete_job_help_mentions_job_id() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--job-id"));
+    assert!(stdout.contains("--force"));
 }
 
 #[test]
@@ -587,4 +589,105 @@ fn deploy_warning_example_reports_warnings_in_json() {
             .as_str()
             .is_some_and(|warning| warning.contains("cannot reach any terminal state"))
     }));
+}
+
+#[test]
+#[ignore = "requires spawning shirohad on a local TCP port"]
+fn force_delete_can_remove_running_job_and_flow_with_jobs() {
+    let server = RunningServer::start();
+    let example_wasm = build_example("example/simple/Cargo.toml", "simple");
+
+    let deploy = run_sctl(
+        &server.server_addr,
+        &[
+            "--json",
+            "flow",
+            "deploy",
+            "--file",
+            example_wasm.to_str().expect("utf-8 path"),
+            "--flow-id",
+            "simple",
+        ],
+    )
+    .expect("deploy simple flow");
+    expect_success(&deploy);
+
+    let create = run_sctl(
+        &server.server_addr,
+        &[
+            "--json",
+            "job",
+            "new",
+            "--flow-id",
+            "simple",
+            "--context-text",
+            "running-job",
+        ],
+    )
+    .expect("create running job");
+    expect_success(&create);
+    let create_json = parse_json(&create.stdout);
+    let job_id = create_json["job_id"]
+        .as_str()
+        .expect("job_id string")
+        .to_string();
+
+    let force_job_delete = run_sctl(
+        &server.server_addr,
+        &["--json", "job", "rm", "--job-id", &job_id, "--force"],
+    )
+    .expect("force delete job");
+    expect_success(&force_job_delete);
+    let force_job_delete_json = parse_json(&force_job_delete.stdout);
+    assert_eq!(force_job_delete_json["job_id"], job_id);
+    assert_eq!(force_job_delete_json["forced"], true);
+    assert_eq!(force_job_delete_json["previous_state"], "running");
+    assert_eq!(force_job_delete_json["cancelled_before_delete"], true);
+
+    let jobs_after_force_job =
+        run_sctl(&server.server_addr, &["--json", "job", "ls", "--all"]).expect("list jobs");
+    expect_success(&jobs_after_force_job);
+    assert_eq!(
+        parse_json(&jobs_after_force_job.stdout),
+        Value::Array(Vec::new())
+    );
+
+    let create_second = run_sctl(
+        &server.server_addr,
+        &[
+            "--json",
+            "job",
+            "new",
+            "--flow-id",
+            "simple",
+            "--context-text",
+            "job-for-flow-force",
+        ],
+    )
+    .expect("create second running job");
+    expect_success(&create_second);
+
+    let force_flow_delete = run_sctl(
+        &server.server_addr,
+        &["--json", "flow", "rm", "--flow-id", "simple", "--force"],
+    )
+    .expect("force delete flow");
+    expect_success(&force_flow_delete);
+    let force_flow_delete_json = parse_json(&force_flow_delete.stdout);
+    assert_eq!(force_flow_delete_json["flow_id"], "simple");
+    assert_eq!(force_flow_delete_json["forced"], true);
+    let deleted_jobs = force_flow_delete_json["deleted_jobs"]
+        .as_array()
+        .expect("deleted_jobs array");
+    assert_eq!(deleted_jobs.len(), 1);
+    assert_eq!(deleted_jobs[0]["previous_state"], "running");
+    assert_eq!(deleted_jobs[0]["cancelled_before_delete"], true);
+
+    let flows_after_force_flow =
+        run_sctl(&server.server_addr, &["--json", "flow", "ls"]).expect("list flows");
+    expect_success(&flows_after_force_flow);
+    assert_eq!(
+        parse_json(&flows_after_force_flow.stdout),
+        Value::Array(Vec::new())
+    );
 }

@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use sctl::control::{ControlClient, EventQuery};
+use sctl::control::{ControlClient, EventQuery, ForceDeleteFlowResult, ForceDeleteJobResult};
 use serde_json::{Value, json};
 use shiroha_proto::shiroha_api::*;
 use tokio::time::{Duration, sleep};
@@ -181,12 +181,33 @@ impl ShirohaClient {
         Ok(())
     }
 
-    pub async fn delete_flow(&mut self, flow_id: &str, json_output: bool) -> anyhow::Result<()> {
+    pub async fn delete_flow(
+        &mut self,
+        flow_id: &str,
+        force: bool,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
+        if force {
+            let result = self.api.force_delete_flow(flow_id).await?;
+            if json_output {
+                print_json_value(&json!({
+                    "flow_id": result.flow_id,
+                    "operation": "delete_flow",
+                    "forced": true,
+                    "deleted_jobs": result.deleted_jobs.iter().map(force_delete_job_to_json).collect::<Vec<_>>(),
+                }))?;
+                return Ok(());
+            }
+            print_force_delete_flow_text(&result);
+            return Ok(());
+        }
+
         let resp = self.api.delete_flow(flow_id).await?;
         if json_output {
             print_json_value(&json!({
                 "flow_id": resp.flow_id,
                 "operation": "delete_flow",
+                "forced": false,
             }))?;
             return Ok(());
         }
@@ -230,12 +251,34 @@ impl ShirohaClient {
         Ok(())
     }
 
-    pub async fn delete_job(&mut self, job_id: &str, json_output: bool) -> anyhow::Result<()> {
+    pub async fn delete_job(
+        &mut self,
+        job_id: &str,
+        force: bool,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
+        if force {
+            let result = self.api.force_delete_job(job_id).await?;
+            if json_output {
+                print_json_value(&json!({
+                    "job_id": result.job_id,
+                    "operation": "delete_job",
+                    "forced": true,
+                    "previous_state": result.previous_state,
+                    "cancelled_before_delete": result.cancelled_before_delete,
+                }))?;
+                return Ok(());
+            }
+            print_force_delete_job_text(&result);
+            return Ok(());
+        }
+
         let resp = self.api.delete_job(job_id).await?;
         if json_output {
             print_json_value(&json!({
                 "job_id": resp.job_id,
                 "operation": "delete_job",
+                "forced": false,
             }))?;
             return Ok(());
         }
@@ -587,6 +630,14 @@ fn events_to_json_value(events: &[EventRecord]) -> Value {
     Value::Array(events.iter().map(event_to_json_value).collect())
 }
 
+fn force_delete_job_to_json(result: &ForceDeleteJobResult) -> Value {
+    json!({
+        "job_id": result.job_id,
+        "previous_state": result.previous_state,
+        "cancelled_before_delete": result.cancelled_before_delete,
+    })
+}
+
 fn jobs_to_json_value(jobs: &[GetJobResponse]) -> Value {
     Value::Array(
         jobs.iter()
@@ -627,6 +678,39 @@ fn print_job_text(job: &GetJobResponse) {
             .map(|value| value.to_string())
             .unwrap_or_else(|| "-".to_string())
     );
+}
+
+fn print_force_delete_job_text(result: &ForceDeleteJobResult) {
+    if result.cancelled_before_delete {
+        println!(
+            "job {} force-deleted (previous_state={} auto_cancelled=true)",
+            result.job_id, result.previous_state
+        );
+    } else {
+        println!(
+            "job {} force-deleted (previous_state={} auto_cancelled=false)",
+            result.job_id, result.previous_state
+        );
+    }
+}
+
+fn print_force_delete_flow_text(result: &ForceDeleteFlowResult) {
+    if result.deleted_jobs.is_empty() {
+        println!("flow {} force-deleted (no jobs)", result.flow_id);
+        return;
+    }
+
+    println!(
+        "flow {} force-deleted after deleting {} job(s):",
+        result.flow_id,
+        result.deleted_jobs.len()
+    );
+    for job in &result.deleted_jobs {
+        println!(
+            "  {} previous_state={} auto_cancelled={}",
+            job.job_id, job.previous_state, job.cancelled_before_delete
+        );
+    }
 }
 
 fn job_matches_target(job: &GetJobResponse, target_state: Option<&str>) -> bool {
