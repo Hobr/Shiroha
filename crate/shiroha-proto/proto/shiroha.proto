@@ -31,6 +31,7 @@ message DeployFlowRequest {
 message DeployFlowResponse {
   string flow_id = 1;
   string version = 2;
+  repeated string warnings = 3;
 }
 
 message ListFlowsRequest {}

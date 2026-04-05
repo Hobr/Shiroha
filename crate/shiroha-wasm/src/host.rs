@@ -441,6 +441,20 @@ impl WasmHost {
         ComponentGuest::new(&self.engine, &self.component)
     }
 
+    pub fn validate_required_exports(&self) -> Result<(), WasmError> {
+        let mut guest = self.guest()?;
+        let _ = guest.get_typed_func::<(), (ComponentFlowManifest,)>(GET_MANIFEST_EXPORTS)?;
+        let _ = guest.get_typed_func::<(String, ActionContext), (ComponentActionResult,)>(
+            INVOKE_ACTION_EXPORTS,
+        )?;
+        let _ = guest.get_typed_func::<(String, GuardContext), (bool,)>(INVOKE_GUARD_EXPORTS)?;
+        let _ = guest
+            .get_typed_func::<(String, Vec<ComponentNodeResult>), (ComponentAggregateDecision,)>(
+                AGGREGATE_EXPORTS,
+            )?;
+        Ok(())
+    }
+
     pub fn get_manifest(&mut self) -> Result<FlowManifest, WasmError> {
         let mut guest = self.guest()?;
         let get_manifest =
@@ -494,5 +508,26 @@ impl WasmHost {
             .call(&mut guest.store, (name.to_string(), typed_results))
             .map_err(|e| WasmError::Execution(e.to_string()))?;
         Ok(decision.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::WasmRuntime;
+
+    #[test]
+    fn validate_required_exports_rejects_components_without_flow_world_exports() {
+        let runtime = WasmRuntime::new().expect("runtime");
+        let component = runtime
+            .load_component(b"(component)")
+            .expect("component should compile");
+        let host = WasmHost::new(runtime.engine(), &component).expect("host");
+
+        let error = host
+            .validate_required_exports()
+            .expect_err("missing required exports should fail");
+
+        assert!(matches!(error, WasmError::Instantiation(_)));
     }
 }

@@ -46,7 +46,7 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     dir
 }
 
-fn build_example(manifest_path: &str) -> PathBuf {
+fn build_example(manifest_path: &str, package_name: &str) -> PathBuf {
     let root = workspace_root();
     let manifest = root.join(manifest_path);
     let status = Command::new("cargo")
@@ -65,7 +65,7 @@ fn build_example(manifest_path: &str) -> PathBuf {
     manifest
         .parent()
         .expect("example dir")
-        .join("target/wasm32-wasip2/release/simple.wasm")
+        .join(format!("target/wasm32-wasip2/release/{package_name}.wasm"))
 }
 
 struct RunningServer {
@@ -287,7 +287,7 @@ fn expect_success(output: &std::process::Output) {
 #[ignore = "requires spawning shirohad on a local TCP port"]
 fn cli_json_round_trip_against_real_server() {
     let server = RunningServer::start();
-    let example_wasm = build_example("example/simple/Cargo.toml");
+    let example_wasm = build_example("example/simple/Cargo.toml", "simple");
     assert!(
         Path::new(&example_wasm).exists(),
         "simple example wasm should exist"
@@ -321,6 +321,7 @@ fn cli_json_round_trip_against_real_server() {
     let deploy_json = parse_json(&deploy.stdout);
     assert_eq!(deploy_json["flow_id"], "simple");
     assert!(deploy_json["manifest"].is_object());
+    assert_eq!(deploy_json["warnings"], Value::Array(Vec::new()));
 
     let flow = run_sctl(
         &server.server_addr,
@@ -467,4 +468,40 @@ fn cli_json_round_trip_against_real_server() {
         parse_json(&flows_after_delete.stdout),
         Value::Array(Vec::new())
     );
+}
+
+#[test]
+#[ignore = "requires spawning shirohad on a local TCP port"]
+fn deploy_warning_example_reports_warnings_in_json() {
+    let server = RunningServer::start();
+    let example_wasm = build_example("example/warning-deadlock/Cargo.toml", "warning_deadlock");
+    assert!(
+        Path::new(&example_wasm).exists(),
+        "warning example wasm should exist"
+    );
+
+    let deploy = run_sctl(
+        &server.server_addr,
+        &[
+            "--json",
+            "deploy",
+            "--file",
+            example_wasm.to_str().expect("utf-8 path"),
+            "--flow-id",
+            "warning-deadlock",
+        ],
+    )
+    .expect("deploy warning example");
+    expect_success(&deploy);
+
+    let deploy_json = parse_json(&deploy.stdout);
+    let warnings = deploy_json["warnings"]
+        .as_array()
+        .expect("warnings array should exist");
+    assert!(!warnings.is_empty(), "expected validator warnings");
+    assert!(warnings.iter().any(|warning| {
+        warning
+            .as_str()
+            .is_some_and(|warning| warning.contains("cannot reach any terminal state"))
+    }));
 }
