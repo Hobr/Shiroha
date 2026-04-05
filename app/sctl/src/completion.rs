@@ -135,7 +135,7 @@ fn sort_dedup(values: &mut Vec<String>) {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct CompletionContext {
     server: String,
-    command: Option<CompletionCommand>,
+    command_path: Vec<String>,
     job_id: Option<String>,
 }
 
@@ -151,7 +151,7 @@ impl CompletionContext {
         let args = extract_completion_args(args);
         let mut context = Self {
             server: DEFAULT_SERVER.to_string(),
-            command: None,
+            command_path: Vec::new(),
             job_id: None,
         };
         let mut pending = PendingValue::None;
@@ -188,12 +188,12 @@ impl CompletionContext {
             match token {
                 "--server" | "-s" => pending = PendingValue::Server,
                 "--job-id" => pending = PendingValue::JobId,
-                "-i" if context.command.is_some_and(CompletionCommand::uses_job_id) => {
+                "-i" if command_path_uses_job_id(&context.command_path) => {
                     pending = PendingValue::JobId
                 }
                 "--json" => {}
-                _ if context.command.is_none() && !token.starts_with('-') => {
-                    context.command = CompletionCommand::parse(token);
+                _ if !token.starts_with('-') => {
+                    push_command_path(&mut context.command_path, token);
                 }
                 _ => pending = PendingValue::None,
             }
@@ -203,35 +203,24 @@ impl CompletionContext {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CompletionCommand {
-    Get,
-    DeleteJob,
-    Trigger,
-    Pause,
-    Resume,
-    Cancel,
-    Events,
-    Wait,
+fn push_command_path(path: &mut Vec<String>, token: &str) {
+    match path.as_slice() {
+        [] => path.push(token.to_string()),
+        [root] if matches!(root.as_str(), "flow" | "job") => path.push(token.to_string()),
+        _ => {}
+    }
 }
 
-impl CompletionCommand {
-    fn parse(token: &str) -> Option<Self> {
-        match token {
-            "get" => Some(Self::Get),
-            "delete-job" => Some(Self::DeleteJob),
-            "trigger" => Some(Self::Trigger),
-            "pause" => Some(Self::Pause),
-            "resume" => Some(Self::Resume),
-            "cancel" => Some(Self::Cancel),
-            "events" => Some(Self::Events),
-            "wait" => Some(Self::Wait),
-            _ => None,
+fn command_path_uses_job_id(path: &[String]) -> bool {
+    match path {
+        [root, leaf] => {
+            root == "job"
+                && matches!(
+                    leaf.as_str(),
+                    "get" | "rm" | "trig" | "pause" | "resume" | "cancel" | "logs" | "wait"
+                )
         }
-    }
-
-    fn uses_job_id(self) -> bool {
-        true
+        _ => false,
     }
 }
 
@@ -288,7 +277,8 @@ mod tests {
             OsString::from("--"),
             OsString::from("sctl"),
             OsString::from("--server=http://127.0.0.1:50051"),
-            OsString::from("trigger"),
+            OsString::from("job"),
+            OsString::from("trig"),
             OsString::from("--job-id"),
             OsString::from("job-42"),
             OsString::from("--event"),
@@ -296,7 +286,7 @@ mod tests {
         ]);
 
         assert_eq!(context.server, "http://127.0.0.1:50051");
-        assert_eq!(context.command, Some(CompletionCommand::Trigger));
+        assert_eq!(context.command_path, vec!["job", "trig"]);
         assert_eq!(context.job_id.as_deref(), Some("job-42"));
     }
 

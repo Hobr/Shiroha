@@ -82,7 +82,7 @@ example/advanced/target/wasm32-wasip2/release/advanced.wasm
 ## 部署
 
 ```bash
-sctl deploy \
+sctl flow deploy \
   --file example/advanced/target/wasm32-wasip2/release/advanced.wasm \
   --flow-id advanced
 ```
@@ -92,13 +92,13 @@ sctl deploy \
 虽然 `fan-out` 和自动 `subprocess` 编排还没落地，但这份 component 里前半段链路已经能在当前 runtime 上真实执行：
 
 ```bash
-sctl create --flow-id advanced --context-text "quote-request"
-sctl trigger --job-id <job-id> --event submit --payload-text "draft-ready"
+sctl job new --flow-id advanced --context-text "quote-request"
+sctl job trig --job-id <job-id> --event submit --payload-text "draft-ready"
 ```
 
 此时 Job 会从 `draft` 进入 `legal-review`，并执行 `normalize-request` action。可以用下面命令确认：
 
 ```bash
-sctl get --job-id <job-id>
-sctl events --job-id <job-id> --pretty
+sctl job get --job-id <job-id>
+sctl job logs --job-id <job-id> --pretty
 ```

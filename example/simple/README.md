@@ -41,7 +41,7 @@ example/simple/target/wasm32-wasip2/release/simple.wasm
 ## 部署
 
 ```bash
-sctl deploy \
+sctl flow deploy \
   --file example/simple/target/wasm32-wasip2/release/simple.wasm \
   --flow-id simple
 ```
@@ -49,7 +49,7 @@ sctl deploy \
 部署后可以先确认服务端看到的 manifest：
 
 ```bash
-sctl flow --flow-id simple
+sctl flow get --flow-id simple
 ```
 
 ## 触发测试
@@ -57,13 +57,13 @@ sctl flow --flow-id simple
 创建一个带上下文的 Job，然后用带 payload 的事件推进：
 
 ```bash
-sctl create --flow-id simple --context-text "demo-request"
-sctl trigger --job-id <job-id> --event approve --payload-text "approved-by-cli"
+sctl job new --flow-id simple --context-text "demo-request"
+sctl job trig --job-id <job-id> --event approve --payload-text "approved-by-cli"
 ```
 
 等待进入终态并查看事件日志：
 
 ```bash
-sctl wait --job-id <job-id> --state completed
-sctl events --job-id <job-id> --pretty
+sctl job wait --job-id <job-id> --state completed
+sctl job logs --job-id <job-id> --pretty
 ```

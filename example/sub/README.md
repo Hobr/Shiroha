@@ -54,11 +54,11 @@ cargo build \
 先部署子流程，再部署父流程：
 
 ```bash
-sctl deploy \
+sctl flow deploy \
   --file example/sub/child/target/wasm32-wasip2/release/child.wasm \
   --flow-id legal-review-demo
 
-sctl deploy \
+sctl flow deploy \
   --file example/sub/parent/target/wasm32-wasip2/release/parent.wasm \
   --flow-id purchase-parent-demo
 ```
@@ -81,15 +81,15 @@ sctl deploy \
 示例命令：
 
 ```bash
-sctl create --flow-id legal-review-demo
-sctl trigger --job-id <child-job-id> --event approve
+sctl job new --flow-id legal-review-demo
+sctl job trig --job-id <child-job-id> --event approve
 
-sctl create --flow-id purchase-parent-demo
-sctl trigger --job-id <parent-job-id> --event submit --payload-text "legal-review-request"
-sctl get --job-id <parent-job-id>
-sctl trigger --job-id <parent-job-id> --event legal-review-complete
-sctl wait --job-id <parent-job-id> --state completed
-sctl events --job-id <parent-job-id> --pretty
+sctl job new --flow-id purchase-parent-demo
+sctl job trig --job-id <parent-job-id> --event submit --payload-text "legal-review-request"
+sctl job get --job-id <parent-job-id>
+sctl job trig --job-id <parent-job-id> --event legal-review-complete
+sctl job wait --job-id <parent-job-id> --state completed
+sctl job logs --job-id <parent-job-id> --pretty
 ```
 
 也就是说，这是一组“真实可编译 component + 真实父子流程建模示例”，但自动父子联动本身还需要继续开发。

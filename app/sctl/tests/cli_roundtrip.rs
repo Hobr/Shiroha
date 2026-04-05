@@ -104,7 +104,7 @@ impl RunningServer {
     fn wait_until_ready(&self) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            if let Ok(output) = run_sctl(&self.server_addr, &["--json", "flows"])
+            if let Ok(output) = run_sctl(&self.server_addr, &["--json", "flow", "ls"])
                 && output.status.success()
             {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -170,9 +170,9 @@ fn complete_command_emits_fish_script() {
 #[test]
 fn flow_help_mentions_summary_flag() {
     let output = Command::new(sctl_binary())
-        .args(["flow", "--help"])
+        .args(["flow", "get", "--help"])
         .output()
-        .expect("flow help command");
+        .expect("flow get help command");
     expect_success(&output);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -183,9 +183,9 @@ fn flow_help_mentions_summary_flag() {
 #[test]
 fn delete_flow_help_mentions_flow_id() {
     let output = Command::new(sctl_binary())
-        .args(["delete-flow", "--help"])
+        .args(["flow", "rm", "--help"])
         .output()
-        .expect("delete-flow help command");
+        .expect("flow delete help command");
     expect_success(&output);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -195,9 +195,9 @@ fn delete_flow_help_mentions_flow_id() {
 #[test]
 fn flow_versions_help_mentions_flow_id() {
     let output = Command::new(sctl_binary())
-        .args(["flow-versions", "--help"])
+        .args(["flow", "vers", "--help"])
         .output()
-        .expect("flow-versions help command");
+        .expect("flow versions help command");
     expect_success(&output);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -207,9 +207,9 @@ fn flow_versions_help_mentions_flow_id() {
 #[test]
 fn jobs_help_mentions_all_flag() {
     let output = Command::new(sctl_binary())
-        .args(["jobs", "--help"])
+        .args(["job", "ls", "--help"])
         .output()
-        .expect("jobs help command");
+        .expect("job list help command");
     expect_success(&output);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -220,9 +220,9 @@ fn jobs_help_mentions_all_flag() {
 #[test]
 fn events_help_mentions_kind_and_tail_flags() {
     let output = Command::new(sctl_binary())
-        .args(["events", "--help"])
+        .args(["job", "logs", "--help"])
         .output()
-        .expect("events help command");
+        .expect("job events help command");
     expect_success(&output);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -236,9 +236,9 @@ fn events_help_mentions_kind_and_tail_flags() {
 #[test]
 fn delete_job_help_mentions_job_id() {
     let output = Command::new(sctl_binary())
-        .args(["delete-job", "--help"])
+        .args(["job", "rm", "--help"])
         .output()
-        .expect("delete-job help command");
+        .expect("job delete help command");
     expect_success(&output);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -309,13 +309,13 @@ fn cli_json_round_trip_against_real_server() {
         "simple example wasm should exist"
     );
 
-    let flows = run_sctl(&server.server_addr, &["--json", "flows"]).expect("flows command");
+    let flows = run_sctl(&server.server_addr, &["--json", "flow", "ls"]).expect("flows command");
     expect_success(&flows);
     assert_eq!(parse_json(&flows.stdout), Value::Array(Vec::new()));
 
     let jobs = run_sctl(
         &server.server_addr,
-        &["--json", "jobs", "--flow-id", "simple"],
+        &["--json", "job", "ls", "--flow-id", "simple"],
     )
     .expect("jobs command");
     expect_success(&jobs);
@@ -325,6 +325,7 @@ fn cli_json_round_trip_against_real_server() {
         &server.server_addr,
         &[
             "--json",
+            "flow",
             "deploy",
             "--file",
             example_wasm.to_str().expect("utf-8 path"),
@@ -341,7 +342,7 @@ fn cli_json_round_trip_against_real_server() {
 
     let flow = run_sctl(
         &server.server_addr,
-        &["--json", "flow", "--flow-id", "simple"],
+        &["--json", "flow", "get", "--flow-id", "simple"],
     )
     .expect("flow command");
     expect_success(&flow);
@@ -353,7 +354,8 @@ fn cli_json_round_trip_against_real_server() {
         &server.server_addr,
         &[
             "--json",
-            "create",
+            "job",
+            "new",
             "--flow-id",
             "simple",
             "--context-text",
@@ -372,7 +374,8 @@ fn cli_json_round_trip_against_real_server() {
         &server.server_addr,
         &[
             "--json",
-            "trigger",
+            "job",
+            "trig",
             "--job-id",
             &job_id,
             "--event",
@@ -390,6 +393,7 @@ fn cli_json_round_trip_against_real_server() {
         &server.server_addr,
         &[
             "--json",
+            "job",
             "wait",
             "--job-id",
             &job_id,
@@ -410,7 +414,7 @@ fn cli_json_round_trip_against_real_server() {
     assert_eq!(wait_json["context_bytes"], 12);
 
     let jobs_all =
-        run_sctl(&server.server_addr, &["--json", "jobs", "--all"]).expect("jobs all command");
+        run_sctl(&server.server_addr, &["--json", "job", "ls", "--all"]).expect("jobs all command");
     expect_success(&jobs_all);
     let jobs_all_json = parse_json(&jobs_all.stdout);
     let jobs_all = jobs_all_json.as_array().expect("jobs array");
@@ -421,7 +425,7 @@ fn cli_json_round_trip_against_real_server() {
 
     let flow_versions = run_sctl(
         &server.server_addr,
-        &["--json", "flow-versions", "--flow-id", "simple"],
+        &["--json", "flow", "vers", "--flow-id", "simple"],
     )
     .expect("flow versions command");
     expect_success(&flow_versions);
@@ -438,6 +442,7 @@ fn cli_json_round_trip_against_real_server() {
         &[
             "--json",
             "flow",
+            "get",
             "--flow-id",
             "simple",
             "--version",
@@ -451,7 +456,7 @@ fn cli_json_round_trip_against_real_server() {
 
     let events = run_sctl(
         &server.server_addr,
-        &["--json", "events", "--job-id", &job_id],
+        &["--json", "job", "logs", "--job-id", &job_id],
     )
     .expect("events command");
     expect_success(&events);
@@ -467,7 +472,8 @@ fn cli_json_round_trip_against_real_server() {
         &server.server_addr,
         &[
             "--json",
-            "events",
+            "job",
+            "logs",
             "--job-id",
             &job_id,
             "--kind",
@@ -490,7 +496,8 @@ fn cli_json_round_trip_against_real_server() {
         &server.server_addr,
         &[
             "--json",
-            "events",
+            "job",
+            "logs",
             "--job-id",
             &job_id,
             "--since-id",
@@ -512,7 +519,7 @@ fn cli_json_round_trip_against_real_server() {
 
     let delete_job = run_sctl(
         &server.server_addr,
-        &["--json", "delete-job", "--job-id", &job_id],
+        &["--json", "job", "rm", "--job-id", &job_id],
     )
     .expect("delete job command");
     expect_success(&delete_job);
@@ -520,7 +527,7 @@ fn cli_json_round_trip_against_real_server() {
     assert_eq!(delete_job_json["job_id"], job_id);
 
     let jobs_after_delete =
-        run_sctl(&server.server_addr, &["--json", "jobs", "--all"]).expect("jobs all command");
+        run_sctl(&server.server_addr, &["--json", "job", "ls", "--all"]).expect("jobs all command");
     expect_success(&jobs_after_delete);
     assert_eq!(
         parse_json(&jobs_after_delete.stdout),
@@ -529,7 +536,7 @@ fn cli_json_round_trip_against_real_server() {
 
     let delete_flow = run_sctl(
         &server.server_addr,
-        &["--json", "delete-flow", "--flow-id", "simple"],
+        &["--json", "flow", "rm", "--flow-id", "simple"],
     )
     .expect("delete flow command");
     expect_success(&delete_flow);
@@ -537,7 +544,7 @@ fn cli_json_round_trip_against_real_server() {
     assert_eq!(delete_flow_json["flow_id"], "simple");
 
     let flows_after_delete =
-        run_sctl(&server.server_addr, &["--json", "flows"]).expect("flows command");
+        run_sctl(&server.server_addr, &["--json", "flow", "ls"]).expect("flows command");
     expect_success(&flows_after_delete);
     assert_eq!(
         parse_json(&flows_after_delete.stdout),
@@ -559,6 +566,7 @@ fn deploy_warning_example_reports_warnings_in_json() {
         &server.server_addr,
         &[
             "--json",
+            "flow",
             "deploy",
             "--file",
             example_wasm.to_str().expect("utf-8 path"),
