@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-04-02 | Updated: 2026-04-03 -->
+<!-- Generated: 2026-04-02 | Updated: 2026-04-06 -->
 
 # docs
 
@@ -29,5 +29,6 @@
 - 修改架构决策后同步更新相关文档
 - `architecture.md` 是入口索引，保持子文档链接有效
 - 设计文档需要区分“当前已实现”与“后续阶段目标”，避免把未来能力写成现状
+- 如果实现存在已知缺口（例如 standalone 的 fan-out、subprocess 自动编排、WASM 权限 world、完整重启恢复），文档必须明确标注为“未完成/后续阶段”
 
 <!-- MANUAL: -->

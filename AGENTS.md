@@ -1,4 +1,4 @@
-<!-- Generated: 2026-04-02 | Updated: 2026-04-03 -->
+<!-- Generated: 2026-04-02 | Updated: 2026-04-06 -->
 
 # Shiroha
 
@@ -11,7 +11,8 @@
 | File | Description |
 | ---- | ----------- |
 | `Cargo.toml` | Workspace 根配置，定义所有 crate 成员和共享依赖 |
-| `justfile` | 构建/格式化/测试/发布的任务脚本 |
+| `README.md` | 项目入口说明，包含 Phase 1 当前能力、Quick Start 和常用命令 |
+| `justfile` | 构建/运行/格式化/测试/发布的任务脚本 |
 | `flake.nix` | Nix 开发环境配置（Rust 工具链、protoc） |
 | `deny.toml` | cargo-deny 依赖审计配置 |
 | `.pre-commit-config.yaml` | Pre-commit hooks（fmt、clippy、deny、test） |
@@ -22,9 +23,9 @@
 | Directory | Purpose |
 | --------- | ------- |
 | `app/` | 可执行文件：shirohad 守护进程和 sctl CLI（见 `app/AGENTS.md`） |
-| `crate/` | 库 crate：核心类型、引擎、WASM、存储、协议（见 `crate/AGENTS.md`） |
+| `crate/` | 库 crate：核心类型、引擎、WASM、存储、协议、客户端抽象（见 `crate/AGENTS.md`） |
 | `docs/` | 架构设计文档（见 `docs/AGENTS.md`） |
-| `example/` | 可编译的 `wasm32-wasip2` Flow component 示例（simple / advanced / sub） |
+| `example/` | 可编译的 `wasm32-wasip2` Flow component 示例（simple / advanced / warning-deadlock / sub） |
 
 ## For AI Agents
 
@@ -33,6 +34,7 @@
 - 修改 workspace 依赖后运行 `cargo check --workspace` 确认全局编译通过
 - 添加新 crate 需同时更新 `Cargo.toml` 的 `members` 和 `workspace.dependencies`
 - 使用 `just fmt` 运行格式化 + pre-commit 全套检查
+- 面向用户的启动/命令入口优先写进 `README.md` 和 `justfile`，避免只留在测试或示例目录里
 
 ### Testing Requirements
 
@@ -65,7 +67,7 @@ shirohad ──┬── shiroha-engine ── shiroha-core
            ├── shiroha-store-redb ── shiroha-core
            └── shiroha-proto
 
-sctl ────── shiroha-proto
+sctl ────── shiroha-client ───── shiroha-proto
 ```
 
 <!-- MANUAL: -->
