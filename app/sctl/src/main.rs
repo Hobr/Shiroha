@@ -6,9 +6,9 @@ mod client;
 mod completion;
 
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, CommandFactory, Parser, ValueHint};
-use clap_complete::aot::Shell;
 use clap_complete::env::CompleteEnv;
 use tracing_subscriber::EnvFilter;
 
@@ -69,6 +69,62 @@ struct PayloadArgs {
     payload_file: Option<String>,
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Eq, PartialEq)]
+enum CompletionShell {
+    Bash,
+    Elvish,
+    Fish,
+    PowerShell,
+    Zsh,
+}
+
+impl CompletionShell {
+    fn env_name(self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+            Self::Elvish => "elvish",
+            Self::Fish => "fish",
+            Self::PowerShell => "powershell",
+            Self::Zsh => "zsh",
+        }
+    }
+
+    fn default_output_path(self, home: &Path) -> Option<PathBuf> {
+        match self {
+            Self::Bash => Some(home.join(".local/share/bash-completion/completions/sctl")),
+            Self::Elvish => Some(home.join(".config/elvish/lib/sctl.elv")),
+            Self::Fish => Some(home.join(".config/fish/completions/sctl.fish")),
+            Self::PowerShell => None,
+            Self::Zsh => Some(home.join(".zfunc/_sctl")),
+        }
+    }
+}
+
+impl std::fmt::Display for CompletionShell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.env_name())
+    }
+}
+
+#[derive(Args)]
+struct CompleteArgs {
+    /// 目标 shell；未指定时尝试从 $SHELL 自动探测
+    #[arg(value_enum)]
+    shell: Option<CompletionShell>,
+
+    /// 将补全脚本写入 shell 的默认补全目录
+    #[arg(long)]
+    install: bool,
+
+    /// 将补全脚本写到指定路径
+    #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
+    output: Option<PathBuf>,
+
+    /// 打印默认安装路径
+    #[arg(long, conflicts_with_all = ["install", "output"])]
+    print_path: bool,
+}
+
 #[derive(clap::Subcommand)]
 enum Commands {
     /// 部署 Flow（上传 WASM 文件）
@@ -94,10 +150,7 @@ enum Commands {
         flow_id: String,
     },
     /// 输出 shell 补全脚本
-    Complete {
-        #[arg(value_enum)]
-        shell: Shell,
-    },
+    Complete(CompleteArgs),
     /// 创建 Job
     Create {
         #[arg(
@@ -228,17 +281,8 @@ fn main() -> anyhow::Result<()> {
 async fn async_main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    if let Commands::Complete { shell } = cli.command {
-        let output = std::process::Command::new(std::env::current_exe()?)
-            .env("COMPLETE", shell.to_string())
-            .output()?;
-        std::io::stdout().write_all(&output.stdout)?;
-        std::io::stderr().write_all(&output.stderr)?;
-        anyhow::ensure!(
-            output.status.success(),
-            "failed to generate {} completion script",
-            shell
-        );
+    if let Commands::Complete(args) = cli.command {
+        handle_complete(args)?;
         return Ok(());
     }
 
@@ -249,7 +293,7 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Deploy { file, flow_id } => c.deploy(&flow_id, &file, cli.json).await?,
         Commands::Flows => c.list_flows(cli.json).await?,
         Commands::Flow { flow_id } => c.get_flow(&flow_id, cli.json).await?,
-        Commands::Complete { .. } => unreachable!("complete command handled before gRPC connect"),
+        Commands::Complete(..) => unreachable!("complete command handled before gRPC connect"),
         Commands::Create { flow_id, context } => {
             c.create_job(
                 &flow_id,
@@ -305,4 +349,116 @@ async fn async_main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn handle_complete(args: CompleteArgs) -> anyhow::Result<()> {
+    let shell = resolve_completion_shell(args.shell)?;
+    if args.print_path {
+        let path = default_completion_path(shell)?;
+        println!("{}", path.display());
+        return Ok(());
+    }
+
+    let script = generate_completion_script(shell)?;
+    if let Some(path) = args.output.as_deref() {
+        write_completion_script(path, &script)?;
+        println!("{}", path.display());
+        return Ok(());
+    }
+    if args.install {
+        let path = default_completion_path(shell)?;
+        write_completion_script(&path, &script)?;
+        println!("{}", path.display());
+        return Ok(());
+    }
+
+    std::io::stdout().write_all(&script)?;
+    Ok(())
+}
+
+fn resolve_completion_shell(shell: Option<CompletionShell>) -> anyhow::Result<CompletionShell> {
+    shell.or_else(detect_shell_from_env).ok_or_else(|| {
+        anyhow::anyhow!(
+            "failed to detect shell from $SHELL; pass one explicitly, e.g. `sctl complete fish`"
+        )
+    })
+}
+
+fn detect_shell_from_env() -> Option<CompletionShell> {
+    let shell = std::env::var_os("SHELL")?;
+    let shell = Path::new(&shell).file_name()?.to_str()?;
+    match shell {
+        "bash" => Some(CompletionShell::Bash),
+        "elvish" => Some(CompletionShell::Elvish),
+        "fish" => Some(CompletionShell::Fish),
+        "pwsh" | "powershell" => Some(CompletionShell::PowerShell),
+        "zsh" => Some(CompletionShell::Zsh),
+        _ => None,
+    }
+}
+
+fn default_completion_path(shell: CompletionShell) -> anyhow::Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("$HOME is not set"))?;
+    shell.default_output_path(&home).ok_or_else(|| {
+        anyhow::anyhow!("shell `{shell}` has no default install path; use `--output <PATH>`")
+    })
+}
+
+fn generate_completion_script(shell: CompletionShell) -> anyhow::Result<Vec<u8>> {
+    let output = std::process::Command::new(std::env::current_exe()?)
+        .env("COMPLETE", shell.env_name())
+        .output()?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    anyhow::bail!(
+        "failed to generate {} completion script: {}",
+        shell,
+        stderr.trim()
+    )
+}
+
+fn write_completion_script(path: &Path, script: &[u8]) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, script)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_shell_from_path_basename() {
+        assert_eq!(
+            Path::new("/usr/bin/fish")
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| match name {
+                    "fish" => Some(CompletionShell::Fish),
+                    _ => None,
+                }),
+            Some(CompletionShell::Fish)
+        );
+    }
+
+    #[test]
+    fn default_output_path_matches_shell_convention() {
+        let home = Path::new("/tmp/demo-home");
+        assert_eq!(
+            CompletionShell::Fish.default_output_path(home),
+            Some(home.join(".config/fish/completions/sctl.fish"))
+        );
+        assert_eq!(
+            CompletionShell::Bash.default_output_path(home),
+            Some(home.join(".local/share/bash-completion/completions/sctl"))
+        );
+        assert_eq!(CompletionShell::PowerShell.default_output_path(home), None);
+    }
 }
