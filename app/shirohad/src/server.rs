@@ -1,6 +1,6 @@
 //! 服务器核心：初始化共享状态，启动 gRPC 服务
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 #[cfg(test)]
 use std::future::Future;
 use std::sync::Arc;
@@ -40,9 +40,6 @@ pub struct ShirohaState {
     pub versioned_engines: Arc<Mutex<HashMap<(String, Uuid), StateMachineEngine>>>,
     /// Job 级串行化锁，保证同一 Job 任一时刻只处理一个事件/生命周期操作
     pub(crate) job_locks: Arc<Mutex<HashMap<uuid::Uuid, Arc<Mutex<()>>>>>,
-    /// 暂停期间缓存的待处理事件，恢复后按 FIFO 继续处理
-    pub(crate) pending_events:
-        Arc<Mutex<HashMap<uuid::Uuid, VecDeque<crate::job_service::QueuedJobEvent>>>>,
     pub job_manager: Arc<JobManager<RedbStorage>>,
     pub timer_wheel: Arc<TimerWheel>,
 }
@@ -99,7 +96,6 @@ impl ShirohaServer {
             engines: Arc::new(Mutex::new(HashMap::new())),
             versioned_engines: Arc::new(Mutex::new(HashMap::new())),
             job_locks: Arc::new(Mutex::new(HashMap::new())),
-            pending_events: Arc::new(Mutex::new(HashMap::new())),
             job_manager,
             timer_wheel: Arc::new(timer_wheel),
         });
@@ -342,6 +338,94 @@ mod tests {
             }))
             .await
             .expect("get job")
+            .into_inner();
+        assert_eq!(job.state, "completed");
+        assert_eq!(job.current_state, "done");
+    }
+
+    #[tokio::test]
+    async fn reloaded_server_preserves_paused_job_pending_events() {
+        let harness = TestHarness::new("server-reload-paused-job").await;
+        let data_dir = harness.data_dir.clone();
+        let flow_service = FlowServiceImpl::new(harness.state.clone());
+        let job_service = JobServiceImpl::new(harness.state.clone());
+
+        flow_service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "persisted".into(),
+                wasm_bytes: wasm_for_manifest(&approval_manifest("persisted", Some("allow"))),
+            }))
+            .await
+            .expect("deploy flow");
+        let created = job_service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "persisted".into(),
+                context: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+        job_service
+            .pause_job(Request::new(shiroha_proto::shiroha_api::PauseJobRequest {
+                job_id: created.job_id.clone(),
+            }))
+            .await
+            .expect("pause job");
+        job_service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "approve".into(),
+                payload: Some(b"persist-me".to_vec()),
+            }))
+            .await
+            .expect("queue event while paused");
+
+        drop(job_service);
+        drop(flow_service);
+        drop(harness);
+
+        let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
+            .await
+            .expect("reload server");
+        let job_service = JobServiceImpl::new(reloaded.state.clone());
+
+        let paused = job_service
+            .get_job(Request::new(GetJobRequest {
+                job_id: created.job_id.clone(),
+            }))
+            .await
+            .expect("get paused job")
+            .into_inner();
+        assert_eq!(paused.state, "paused");
+        assert_eq!(paused.current_state, "idle");
+
+        let stored = reloaded
+            .state
+            .job_manager
+            .get_job(created.job_id.parse::<Uuid>().expect("uuid"))
+            .await
+            .expect("get stored job")
+            .expect("job exists");
+        assert_eq!(stored.pending_events.len(), 1);
+        assert_eq!(stored.pending_events[0].event, "approve");
+        assert_eq!(
+            stored.pending_events[0].payload.as_deref(),
+            Some(&b"persist-me"[..])
+        );
+
+        job_service
+            .resume_job(Request::new(shiroha_proto::shiroha_api::ResumeJobRequest {
+                job_id: created.job_id.clone(),
+            }))
+            .await
+            .expect("resume job");
+
+        let job = job_service
+            .get_job(Request::new(GetJobRequest {
+                job_id: created.job_id,
+            }))
+            .await
+            .expect("get resumed job")
             .into_inner();
         assert_eq!(job.state, "completed");
         assert_eq!(job.current_state, "done");

@@ -378,6 +378,7 @@ mod tests {
             state: JobState::Running,
             current_state: flow.manifest.initial_state.clone(),
             context: Some(vec![1, 2, 3]),
+            pending_events: Vec::new(),
         }
     }
 
