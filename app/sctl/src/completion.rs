@@ -8,6 +8,15 @@ use crate::client::ShirohaClient;
 const DEFAULT_SERVER: &str = "http://[::1]:50051";
 const COMPLETION_TIMEOUT: Duration = Duration::from_millis(500);
 const LIFECYCLE_STATES: &[&str] = &["running", "paused", "cancelled", "completed"];
+const EVENT_KIND_NAMES: &[&str] = &[
+    "created",
+    "transition",
+    "action_complete",
+    "paused",
+    "resumed",
+    "cancelled",
+    "completed",
+];
 
 pub fn flow_id_completer(current: &OsStr) -> Vec<CompletionCandidate> {
     let context = CompletionContext::from_process_args();
@@ -65,6 +74,16 @@ pub fn wait_state_completer(current: &OsStr) -> Vec<CompletionCandidate> {
     .unwrap_or_default();
 
     filter_candidates(current, candidates)
+}
+
+pub fn event_kind_completer(current: &OsStr) -> Vec<CompletionCandidate> {
+    filter_candidates(
+        current,
+        EVENT_KIND_NAMES
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn run_query<F>(future: F) -> anyhow::Result<Vec<String>>
@@ -273,5 +292,13 @@ mod tests {
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].get_value(), OsStr::new("approve"));
+    }
+
+    #[test]
+    fn event_kind_completer_returns_known_kinds() {
+        let candidates = event_kind_completer(OsStr::new("co"));
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].get_value(), OsStr::new("completed"));
     }
 }

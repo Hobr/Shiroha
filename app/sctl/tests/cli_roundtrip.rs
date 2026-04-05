@@ -170,6 +170,44 @@ fn complete_command_emits_fish_script() {
 }
 
 #[test]
+fn flow_help_mentions_summary_flag() {
+    let output = Command::new(sctl_binary())
+        .args(["flow", "--help"])
+        .output()
+        .expect("flow help command");
+    expect_success(&output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--summary"));
+}
+
+#[test]
+fn jobs_help_mentions_all_flag() {
+    let output = Command::new(sctl_binary())
+        .args(["jobs", "--help"])
+        .output()
+        .expect("jobs help command");
+    expect_success(&output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--all"));
+    assert!(stdout.contains("--flow-id"));
+}
+
+#[test]
+fn events_help_mentions_kind_and_tail_flags() {
+    let output = Command::new(sctl_binary())
+        .args(["events", "--help"])
+        .output()
+        .expect("events help command");
+    expect_success(&output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--kind"));
+    assert!(stdout.contains("--tail"));
+}
+
+#[test]
 fn complete_command_prints_default_fish_path() {
     let output = Command::new(sctl_binary())
         .env("HOME", "/tmp/sctl-home")
@@ -330,6 +368,14 @@ fn cli_json_round_trip_against_real_server() {
     assert_eq!(wait_json["state"], "completed");
     assert_eq!(wait_json["current_state"], "approved");
 
+    let jobs_all =
+        run_sctl(&server.server_addr, &["--json", "jobs", "--all"]).expect("jobs all command");
+    expect_success(&jobs_all);
+    let jobs_all_json = parse_json(&jobs_all.stdout);
+    let jobs_all = jobs_all_json.as_array().expect("jobs array");
+    assert_eq!(jobs_all.len(), 1);
+    assert_eq!(jobs_all[0]["job_id"].as_str(), Some(job_id.as_str()));
+
     let events = run_sctl(
         &server.server_addr,
         &["--json", "events", "--job-id", &job_id],
@@ -343,4 +389,26 @@ fn cli_json_round_trip_against_real_server() {
     assert_eq!(events[1]["kind"]["type"], "transition");
     assert_eq!(events[2]["kind"]["type"], "action_complete");
     assert_eq!(events[3]["kind"]["type"], "completed");
+
+    let filtered_events = run_sctl(
+        &server.server_addr,
+        &[
+            "--json",
+            "events",
+            "--job-id",
+            &job_id,
+            "--kind",
+            "transition",
+            "--tail",
+            "1",
+        ],
+    )
+    .expect("filtered events command");
+    expect_success(&filtered_events);
+    let filtered_events_json = parse_json(&filtered_events.stdout);
+    let filtered_events = filtered_events_json
+        .as_array()
+        .expect("filtered events array");
+    assert_eq!(filtered_events.len(), 1);
+    assert_eq!(filtered_events[0]["kind"]["type"], "transition");
 }
