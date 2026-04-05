@@ -45,6 +45,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # CLI
 clap = { version = "4.6", features = ["derive", "env", "string", "unicode"] }
+clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 
 # gRPC
 tonic = { version = "0.14", features = ["gzip", "deflate", "zstd"] }

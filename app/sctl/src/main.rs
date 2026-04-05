@@ -3,8 +3,13 @@
 //! 通过 gRPC 连接 shirohad，提供 Flow 部署和 Job 管理的命令行操作。
 
 mod client;
+mod completion;
 
-use clap::{Args, Parser};
+use std::io::Write;
+
+use clap::{Args, CommandFactory, Parser, ValueHint};
+use clap_complete::aot::Shell;
+use clap_complete::env::CompleteEnv;
 use tracing_subscriber::EnvFilter;
 
 shadow_rs::shadow!(build);
@@ -35,7 +40,12 @@ struct ContextArgs {
     context_hex: Option<String>,
 
     /// 从文件读取原始字节作为 Job context
-    #[arg(long, value_name = "PATH", conflicts_with_all = ["context_text", "context_hex"])]
+    #[arg(
+        long,
+        value_name = "PATH",
+        value_hint = ValueHint::FilePath,
+        conflicts_with_all = ["context_text", "context_hex"]
+    )]
     context_file: Option<String>,
 }
 
@@ -50,7 +60,12 @@ struct PayloadArgs {
     payload_hex: Option<String>,
 
     /// 从文件读取原始字节作为事件 payload
-    #[arg(long, value_name = "PATH", conflicts_with_all = ["payload_text", "payload_hex"])]
+    #[arg(
+        long,
+        value_name = "PATH",
+        value_hint = ValueHint::FilePath,
+        conflicts_with_all = ["payload_text", "payload_hex"]
+    )]
     payload_file: Option<String>,
 }
 
@@ -58,62 +73,111 @@ struct PayloadArgs {
 enum Commands {
     /// 部署 Flow（上传 WASM 文件）
     Deploy {
-        #[arg(short, long)]
+        #[arg(short, long, value_hint = ValueHint::FilePath)]
         file: String,
-        #[arg(short = 'i', long)]
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
+        )]
         flow_id: String,
     },
     /// 列出所有 Flow
     Flows,
     /// 查询单个 Flow 详情和 manifest
     Flow {
-        #[arg(short = 'i', long)]
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
+        )]
         flow_id: String,
+    },
+    /// 输出 shell 补全脚本
+    Complete {
+        #[arg(value_enum)]
+        shell: Shell,
     },
     /// 创建 Job
     Create {
-        #[arg(short = 'i', long)]
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
+        )]
         flow_id: String,
         #[command(flatten)]
         context: ContextArgs,
     },
     /// 查询 Job 详情
     Get {
-        #[arg(short = 'i', long)]
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
+        )]
         job_id: String,
     },
     /// 列出 Flow 的所有 Job
     Jobs {
-        #[arg(short = 'i', long)]
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
+        )]
         flow_id: String,
     },
     /// 触发事件
     Trigger {
-        #[arg(short = 'i', long)]
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
+        )]
         job_id: String,
-        #[arg(short, long)]
+        #[arg(
+            short,
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::job_event_completer)
+        )]
         event: String,
         #[command(flatten)]
         payload: PayloadArgs,
     },
     /// 暂停 Job
     Pause {
-        #[arg(short = 'i', long)]
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
+        )]
         job_id: String,
     },
     /// 恢复 Job
     Resume {
-        #[arg(short = 'i', long)]
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
+        )]
         job_id: String,
     },
     /// 取消 Job
     Cancel {
-        #[arg(short = 'i', long)]
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
+        )]
         job_id: String,
     },
     /// 查看 Job 事件日志
     Events {
-        #[arg(short = 'i', long)]
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
+        )]
         job_id: String,
         /// 以缩进 JSON 格式打印事件 kind
         #[arg(long)]
@@ -127,10 +191,17 @@ enum Commands {
     },
     /// 等待 Job 到达目标状态，未指定时等待到终态
     Wait {
-        #[arg(short = 'i', long)]
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
+        )]
         job_id: String,
         /// 目标 lifecycle state 或 current_state，未指定时等待 completed/cancelled
-        #[arg(long)]
+        #[arg(
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::wait_state_completer)
+        )]
         state: Option<String>,
         /// 最大等待时间（毫秒），未指定则一直等待
         #[arg(long)]
@@ -141,13 +212,36 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    CompleteEnv::with_factory(Cli::command).complete();
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    if let Commands::Complete { shell } = cli.command {
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .env("COMPLETE", shell.to_string())
+            .output()?;
+        std::io::stdout().write_all(&output.stdout)?;
+        std::io::stderr().write_all(&output.stderr)?;
+        anyhow::ensure!(
+            output.status.success(),
+            "failed to generate {} completion script",
+            shell
+        );
+        return Ok(());
+    }
+
     // 整个 CLI 生命周期只建立一次 channel，然后把子命令分派给薄封装客户端。
     let mut c = client::ShirohaClient::connect(&cli.server).await?;
 
@@ -155,6 +249,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Deploy { file, flow_id } => c.deploy(&flow_id, &file, cli.json).await?,
         Commands::Flows => c.list_flows(cli.json).await?,
         Commands::Flow { flow_id } => c.get_flow(&flow_id, cli.json).await?,
+        Commands::Complete { .. } => unreachable!("complete command handled before gRPC connect"),
         Commands::Create { flow_id, context } => {
             c.create_job(
                 &flow_id,

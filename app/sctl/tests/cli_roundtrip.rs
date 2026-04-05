@@ -139,6 +139,32 @@ fn parse_json(stdout: &[u8]) -> Value {
     serde_json::from_slice(stdout).expect("stdout should be valid json")
 }
 
+#[test]
+fn complete_command_emits_bash_script() {
+    let output = Command::new(sctl_binary())
+        .args(["complete", "bash"])
+        .output()
+        .expect("complete bash command");
+    expect_success(&output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("_clap_complete_sctl"));
+    assert!(stdout.contains("COMPLETE=\"bash\""));
+}
+
+#[test]
+fn complete_command_emits_fish_script() {
+    let output = Command::new(sctl_binary())
+        .args(["complete", "fish"])
+        .output()
+        .expect("complete fish command");
+    expect_success(&output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("complete --keep-order --exclusive --command sctl"));
+    assert!(stdout.contains("COMPLETE=fish"));
+}
+
 fn expect_success(output: &std::process::Output) {
     assert!(
         output.status.success(),
