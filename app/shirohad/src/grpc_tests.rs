@@ -90,6 +90,7 @@ async fn grpc_round_trip_flow_and_job_execution() {
     let fetched = flow
         .get_flow(GetFlowRequest {
             flow_id: "grpc-approval".into(),
+            version: None,
         })
         .await
         .expect("get flow")
@@ -118,6 +119,10 @@ async fn grpc_round_trip_flow_and_job_execution() {
     let events = job
         .get_job_events(GetJobEventsRequest {
             job_id: created.job_id,
+            since_id: None,
+            since_timestamp_ms: None,
+            limit: None,
+            kind: Vec::new(),
         })
         .await
         .expect("get events")
@@ -214,6 +219,10 @@ async fn grpc_timer_event_completes_job() {
     let events = job
         .get_job_events(GetJobEventsRequest {
             job_id: created.job_id,
+            since_id: None,
+            since_timestamp_ms: None,
+            limit: None,
+            kind: Vec::new(),
         })
         .await
         .expect("get events")
@@ -297,6 +306,10 @@ async fn grpc_advanced_example_runs_supported_submit_path() {
     let events = job
         .get_job_events(GetJobEventsRequest {
             job_id: created.job_id,
+            since_id: None,
+            since_timestamp_ms: None,
+            limit: None,
+            kind: Vec::new(),
         })
         .await
         .expect("get events")

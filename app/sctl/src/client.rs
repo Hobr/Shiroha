@@ -2,7 +2,6 @@
 //!
 //! 封装 FlowServiceClient 和 JobServiceClient，为每个 CLI 子命令提供对应方法。
 
-use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, bail};
@@ -22,6 +21,9 @@ pub struct ShirohaClient {
 pub struct EventQueryOptions {
     pub pretty: bool,
     pub follow: bool,
+    pub since_id: Option<String>,
+    pub since_timestamp_ms: Option<u64>,
+    pub limit: Option<u32>,
     pub kind_filters: Vec<String>,
     pub tail: Option<usize>,
     pub interval_ms: u64,
@@ -59,6 +61,7 @@ impl ShirohaClient {
             .flow
             .get_flow(GetFlowRequest {
                 flow_id: resp.flow_id.clone(),
+                version: None,
             })
             .await
             .ok()
@@ -152,6 +155,7 @@ impl ShirohaClient {
     pub async fn get_flow(
         &mut self,
         flow_id: &str,
+        version: Option<&str>,
         summary: bool,
         json_output: bool,
     ) -> anyhow::Result<()> {
@@ -159,6 +163,7 @@ impl ShirohaClient {
             .flow
             .get_flow(GetFlowRequest {
                 flow_id: flow_id.to_string(),
+                version: version.map(ToString::to_string),
             })
             .await?
             .into_inner();
@@ -178,6 +183,54 @@ impl ShirohaClient {
         println!("version:  {}", resp.version);
         println!("manifest:");
         print_json_block(&resp.manifest_json, true);
+        Ok(())
+    }
+
+    pub async fn list_flow_versions(
+        &mut self,
+        flow_id: &str,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
+        let mut resp = self
+            .flow
+            .list_flow_versions(ListFlowVersionsRequest {
+                flow_id: flow_id.to_string(),
+            })
+            .await?
+            .into_inner();
+        if resp.flows.is_empty() {
+            if json_output {
+                return print_json_value(&Value::Array(Vec::new()));
+            }
+            println!("no historical versions");
+            return Ok(());
+        }
+        resp.flows
+            .sort_by(|left, right| right.version.cmp(&left.version));
+        if json_output {
+            print_json_value(&json!(
+                resp.flows
+                    .iter()
+                    .map(|flow| json!({
+                        "flow_id": flow.flow_id,
+                        "version": flow.version,
+                        "initial_state": flow.initial_state,
+                        "state_count": flow.state_count,
+                    }))
+                    .collect::<Vec<_>>()
+            ))?;
+            return Ok(());
+        }
+        println!(
+            "{:<20} {:<38} {:<15} STATES",
+            "FLOW_ID", "VERSION", "INITIAL"
+        );
+        for flow in &resp.flows {
+            println!(
+                "{:<20} {:<38} {:<15} {}",
+                flow.flow_id, flow.version, flow.initial_state, flow.state_count
+            );
+        }
         Ok(())
     }
 
@@ -242,18 +295,10 @@ impl ShirohaClient {
             .await?
             .into_inner();
         if json_output {
-            print_json_value(&json!({
-                "job_id": resp.job_id,
-                "flow_id": resp.flow_id,
-                "state": resp.state,
-                "current_state": resp.current_state,
-            }))?;
+            print_job_json(&resp)?;
             return Ok(());
         }
-        println!("job_id:        {}", resp.job_id);
-        println!("flow_id:       {}", resp.flow_id);
-        println!("state:         {}", resp.state);
-        println!("current_state: {}", resp.current_state);
+        print_job_text(&resp);
         Ok(())
     }
 
@@ -302,11 +347,21 @@ impl ShirohaClient {
             print_json_value(&jobs_to_json_value(&jobs))?;
             return Ok(());
         }
-        println!("{:<38} {:<20} {:<12} CURRENT", "JOB_ID", "FLOW_ID", "STATE");
+        println!(
+            "{:<38} {:<20} {:<38} {:<12} {:<13} CURRENT",
+            "JOB_ID", "FLOW_ID", "FLOW_VERSION", "STATE", "CONTEXT_BYTES"
+        );
         for j in &jobs {
             println!(
-                "{:<38} {:<20} {:<12} {}",
-                j.job_id, j.flow_id, j.state, j.current_state
+                "{:<38} {:<20} {:<38} {:<12} {:<13} {}",
+                j.job_id,
+                j.flow_id,
+                j.flow_version,
+                j.state,
+                j.context_bytes
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                j.current_state
             );
         }
         Ok(())
@@ -428,9 +483,15 @@ impl ShirohaClient {
             return self.follow_job_events(job_id, &options).await;
         }
 
-        let events = select_events(
-            self.fetch_job_events(job_id).await?,
-            &options.kind_filters,
+        let events = apply_tail(
+            self.fetch_job_events(
+                job_id,
+                options.since_id.as_deref(),
+                options.since_timestamp_ms,
+                options.limit,
+                &options.kind_filters,
+            )
+            .await?,
             options.tail,
         );
         if events.is_empty() {
@@ -478,10 +539,7 @@ impl ShirohaClient {
         if json_output {
             print_job_json(&job)?;
         } else {
-            println!("job_id:        {}", job.job_id);
-            println!("flow_id:       {}", job.flow_id);
-            println!("state:         {}", job.state);
-            println!("current_state: {}", job.current_state);
+            print_job_text(&job);
         }
         Ok(())
     }
@@ -491,19 +549,21 @@ impl ShirohaClient {
         job_id: &str,
         options: &EventQueryOptions,
     ) -> anyhow::Result<()> {
-        let mut seen_ids = HashSet::new();
+        let mut since_id = options.since_id.clone();
+        let mut since_timestamp_ms = options.since_timestamp_ms;
         loop {
-            let events = self.fetch_job_events(job_id).await?;
-            let new_events = select_events(
-                events
-                    .into_iter()
-                    .filter(|event| seen_ids.insert(event.id.clone()))
-                    .collect(),
+            let new_events = self.fetch_job_events(
+                job_id,
+                since_id.as_deref(),
+                since_timestamp_ms,
+                options.limit,
                 &options.kind_filters,
-                options.tail,
             );
+            let new_events = apply_tail(new_events.await?, options.tail);
 
             if !new_events.is_empty() {
+                since_id = new_events.last().map(|event| event.id.clone());
+                since_timestamp_ms = None;
                 if options.json_output {
                     print_json_value(&events_to_json_value(&new_events))?;
                 } else {
@@ -520,11 +580,22 @@ impl ShirohaClient {
         }
     }
 
-    async fn fetch_job_events(&mut self, job_id: &str) -> anyhow::Result<Vec<EventRecord>> {
+    async fn fetch_job_events(
+        &mut self,
+        job_id: &str,
+        since_id: Option<&str>,
+        since_timestamp_ms: Option<u64>,
+        limit: Option<u32>,
+        kind_filters: &[String],
+    ) -> anyhow::Result<Vec<EventRecord>> {
         let mut events = self
             .job
             .get_job_events(GetJobEventsRequest {
                 job_id: job_id.to_string(),
+                since_id: since_id.map(ToString::to_string),
+                since_timestamp_ms,
+                limit,
+                kind: kind_filters.to_vec(),
             })
             .await?
             .into_inner()
@@ -535,6 +606,15 @@ impl ShirohaClient {
                 .then_with(|| left.id.cmp(&right.id))
         });
         Ok(events)
+    }
+
+    pub async fn list_job_event_ids(&mut self, job_id: &str) -> anyhow::Result<Vec<String>> {
+        Ok(self
+            .fetch_job_events(job_id, None, None, None, &[])
+            .await?
+            .into_iter()
+            .map(|event| event.id)
+            .collect())
     }
 
     async fn fetch_job(&mut self, job_id: &str) -> anyhow::Result<GetJobResponse> {
@@ -571,6 +651,7 @@ impl ShirohaClient {
             .flow
             .get_flow(GetFlowRequest {
                 flow_id: flow_id.to_string(),
+                version: None,
             })
             .await?
             .into_inner())
@@ -701,6 +782,8 @@ fn jobs_to_json_value(jobs: &[GetJobResponse]) -> Value {
                     "flow_id": job.flow_id,
                     "state": job.state,
                     "current_state": job.current_state,
+                    "flow_version": job.flow_version,
+                    "context_bytes": job.context_bytes,
                 })
             })
             .collect(),
@@ -713,7 +796,23 @@ fn print_job_json(job: &GetJobResponse) -> anyhow::Result<()> {
         "flow_id": job.flow_id,
         "state": job.state,
         "current_state": job.current_state,
+        "flow_version": job.flow_version,
+        "context_bytes": job.context_bytes,
     }))
+}
+
+fn print_job_text(job: &GetJobResponse) {
+    println!("job_id:        {}", job.job_id);
+    println!("flow_id:       {}", job.flow_id);
+    println!("flow_version:  {}", job.flow_version);
+    println!("state:         {}", job.state);
+    println!("current_state: {}", job.current_state);
+    println!(
+        "context_bytes: {}",
+        job.context_bytes
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    );
 }
 
 fn job_matches_target(job: &GetJobResponse, target_state: Option<&str>) -> bool {
@@ -731,35 +830,13 @@ fn sort_jobs(jobs: &mut [GetJobResponse]) {
     });
 }
 
-fn select_events(
-    mut events: Vec<EventRecord>,
-    kind_filters: &[String],
-    tail: Option<usize>,
-) -> Vec<EventRecord> {
-    if !kind_filters.is_empty() {
-        let allowed = kind_filters
-            .iter()
-            .map(String::as_str)
-            .collect::<HashSet<_>>();
-        events.retain(|event| {
-            event_kind_name(event)
-                .map(|kind| allowed.contains(kind.as_str()))
-                .unwrap_or(false)
-        });
-    }
+fn apply_tail(mut events: Vec<EventRecord>, tail: Option<usize>) -> Vec<EventRecord> {
     if let Some(tail) = tail
         && events.len() > tail
     {
         events = events.split_off(events.len() - tail);
     }
     events
-}
-
-fn event_kind_name(event: &EventRecord) -> Option<String> {
-    parse_json_value(&event.kind_json)?
-        .get("type")?
-        .as_str()
-        .map(ToString::to_string)
 }
 
 struct ManifestSummary {
@@ -1041,18 +1118,24 @@ mod tests {
             flow_id: "flow".into(),
             state: "completed".into(),
             current_state: "approved".into(),
+            flow_version: "version-1".into(),
+            context_bytes: None,
         };
         let cancelled = GetJobResponse {
             job_id: "job-2".into(),
             flow_id: "flow".into(),
             state: "cancelled".into(),
             current_state: "idle".into(),
+            flow_version: "version-1".into(),
+            context_bytes: Some(0),
         };
         let running = GetJobResponse {
             job_id: "job-3".into(),
             flow_id: "flow".into(),
             state: "running".into(),
             current_state: "waiting-approval".into(),
+            flow_version: "version-2".into(),
+            context_bytes: Some(12),
         };
 
         assert!(job_matches_target(&completed, None));
@@ -1106,8 +1189,8 @@ mod tests {
     }
 
     #[test]
-    fn select_events_filters_and_tails() {
-        let selected = select_events(
+    fn apply_tail_trims_latest_events() {
+        let selected = apply_tail(
             vec![
                 EventRecord {
                     id: "event-1".into(),
@@ -1128,7 +1211,6 @@ mod tests {
                     kind_json: r#"{"type":"transition"}"#.into(),
                 },
             ],
-            &[String::from("transition")],
             Some(1),
         );
 
@@ -1191,6 +1273,8 @@ mod tests {
             flow_id: "flow-a".into(),
             state: "running".into(),
             current_state: "idle".into(),
+            flow_version: "version-a".into(),
+            context_bytes: Some(42),
         }]);
 
         assert_eq!(
@@ -1199,7 +1283,9 @@ mod tests {
                 "job_id": "job-1",
                 "flow_id": "flow-a",
                 "state": "running",
-                "current_state": "idle"
+                "current_state": "idle",
+                "flow_version": "version-a",
+                "context_bytes": 42
             }])
         );
     }

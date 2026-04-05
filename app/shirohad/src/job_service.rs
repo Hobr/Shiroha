@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use shiroha_core::error::ShirohaError;
+use shiroha_core::event::EventKind;
 use shiroha_core::flow::{DispatchMode, FlowRegistration, TimeoutDef};
 use shiroha_core::job::{ActionResult, ExecutionStatus, Job, JobState};
 use shiroha_proto::shiroha_api::job_service_server::JobService;
@@ -38,6 +39,17 @@ pub struct JobServiceImpl {
 impl JobServiceImpl {
     pub fn new(state: Arc<ShirohaState>) -> Self {
         Self { state }
+    }
+
+    fn job_response(job: &Job) -> GetJobResponse {
+        GetJobResponse {
+            job_id: job.id.to_string(),
+            flow_id: job.flow_id.clone(),
+            state: job.state.to_string(),
+            current_state: job.current_state.clone(),
+            flow_version: job.flow_version.to_string(),
+            context_bytes: job.context.as_ref().map(|context| context.len() as u64),
+        }
     }
 
     pub async fn enqueue_event(
@@ -421,6 +433,18 @@ fn parse_uuid(s: &str) -> Result<Uuid, Status> {
         .map_err(|_| Status::invalid_argument(format!("invalid UUID: {s}")))
 }
 
+fn event_kind_name(kind: &EventKind) -> &'static str {
+    match kind {
+        EventKind::Created { .. } => "created",
+        EventKind::Transition { .. } => "transition",
+        EventKind::ActionComplete { .. } => "action_complete",
+        EventKind::Paused => "paused",
+        EventKind::Resumed => "resumed",
+        EventKind::Cancelled => "cancelled",
+        EventKind::Completed { .. } => "completed",
+    }
+}
+
 #[tonic::async_trait]
 impl JobService for JobServiceImpl {
     /// 创建 Job：查找 Flow → 创建运行实例 → 注册初始状态的定时器
@@ -485,12 +509,7 @@ impl JobService for JobServiceImpl {
         let job_id = parse_uuid(&request.into_inner().job_id)?;
         let job = self.load_job(job_id).await?;
 
-        Ok(Response::new(GetJobResponse {
-            job_id: job.id.to_string(),
-            flow_id: job.flow_id,
-            state: job.state.to_string(),
-            current_state: job.current_state,
-        }))
+        Ok(Response::new(Self::job_response(&job)))
     }
 
     async fn list_jobs(
@@ -505,15 +524,7 @@ impl JobService for JobServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let resp = jobs
-            .iter()
-            .map(|j| GetJobResponse {
-                job_id: j.id.to_string(),
-                flow_id: j.flow_id.clone(),
-                state: j.state.to_string(),
-                current_state: j.current_state.clone(),
-            })
-            .collect();
+        let resp = jobs.iter().map(Self::job_response).collect();
 
         Ok(Response::new(ListJobsResponse { jobs: resp }))
     }
@@ -617,13 +628,63 @@ impl JobService for JobServiceImpl {
         &self,
         request: Request<GetJobEventsRequest>,
     ) -> Result<Response<GetJobEventsResponse>, Status> {
-        let job_id = parse_uuid(&request.into_inner().job_id)?;
-        let events = self
+        let req = request.into_inner();
+        let job_id = parse_uuid(&req.job_id)?;
+        if req.since_id.is_some() && req.since_timestamp_ms.is_some() {
+            return Err(Status::invalid_argument(
+                "`since_id` and `since_timestamp_ms` cannot be used together",
+            ));
+        }
+        if req.limit == Some(0) {
+            return Err(Status::invalid_argument("`limit` must be greater than 0"));
+        }
+        if let Some(kind) = req.kind.iter().find(|kind| {
+            !matches!(
+                kind.as_str(),
+                "created"
+                    | "transition"
+                    | "action_complete"
+                    | "paused"
+                    | "resumed"
+                    | "cancelled"
+                    | "completed"
+            )
+        }) {
+            return Err(Status::invalid_argument(format!(
+                "unknown event kind filter: {kind}"
+            )));
+        }
+
+        let mut events = self
             .state
             .job_manager
             .get_events(job_id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
+        if let Some(since_id) = req.since_id {
+            let cursor = parse_uuid(&since_id)?;
+            let Some(index) = events.iter().position(|event| event.id == cursor) else {
+                return Err(Status::invalid_argument(format!(
+                    "event `{since_id}` not found for job `{}`",
+                    req.job_id
+                )));
+            };
+            events.drain(..=index);
+        }
+        if let Some(since_timestamp_ms) = req.since_timestamp_ms {
+            events.retain(|event| event.timestamp_ms > since_timestamp_ms);
+        }
+        if !req.kind.is_empty() {
+            let kinds = req
+                .kind
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::HashSet<_>>();
+            events.retain(|event| kinds.contains(event_kind_name(&event.kind)));
+        }
+        if let Some(limit) = req.limit {
+            events.truncate(limit as usize);
+        }
 
         let records = events
             .iter()
@@ -824,6 +885,8 @@ mod tests {
             .into_inner();
         assert_eq!(initial.state, "running");
         assert_eq!(initial.current_state, "idle");
+        assert!(!initial.flow_version.is_empty());
+        assert_eq!(initial.context_bytes, Some(2));
 
         service
             .trigger_event(Request::new(TriggerEventRequest {
@@ -856,6 +919,10 @@ mod tests {
         let events = service
             .get_job_events(Request::new(GetJobEventsRequest {
                 job_id: created.job_id.clone(),
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
             }))
             .await
             .expect("job events")
@@ -957,6 +1024,10 @@ mod tests {
         let events = service
             .get_job_events(Request::new(GetJobEventsRequest {
                 job_id: resumed.job_id.clone(),
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
             }))
             .await
             .expect("job events")
@@ -1013,6 +1084,10 @@ mod tests {
         let events = service
             .get_job_events(Request::new(GetJobEventsRequest {
                 job_id: created.job_id,
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
             }))
             .await
             .expect("job events")
@@ -1133,6 +1208,10 @@ mod tests {
         let events = service
             .get_job_events(Request::new(GetJobEventsRequest {
                 job_id: created.job_id,
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
             }))
             .await
             .expect("job events")
@@ -1228,6 +1307,10 @@ mod tests {
         let events = service
             .get_job_events(Request::new(GetJobEventsRequest {
                 job_id: created.job_id,
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
             }))
             .await
             .expect("job events")
@@ -1278,6 +1361,10 @@ mod tests {
         let events = service
             .get_job_events(Request::new(GetJobEventsRequest {
                 job_id: created.job_id,
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
             }))
             .await
             .expect("job events")
@@ -1300,5 +1387,66 @@ mod tests {
             EventKind::ActionComplete { action, .. } if action == "enter"
         ));
         assert!(matches!(kinds[4], EventKind::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn get_job_events_supports_cursor_kind_and_limit() {
+        let harness = TestHarness::new("job-service-events-query").await;
+        deploy_flow(
+            harness.state.clone(),
+            "approval",
+            &approval_manifest("approval", Some("allow")),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect("trigger event");
+
+        let all_events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id.clone(),
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
+            }))
+            .await
+            .expect("all events")
+            .into_inner()
+            .events;
+        assert_eq!(all_events.len(), 4);
+
+        let filtered = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id,
+                since_id: Some(all_events[0].id.clone()),
+                since_timestamp_ms: None,
+                limit: Some(1),
+                kind: vec!["transition".into()],
+            }))
+            .await
+            .expect("filtered events")
+            .into_inner()
+            .events;
+        assert_eq!(filtered.len(), 1);
+        let kind: EventKind =
+            serde_json::from_str(&filtered[0].kind_json).expect("event kind json");
+        assert!(matches!(kind, EventKind::Transition { .. }));
     }
 }

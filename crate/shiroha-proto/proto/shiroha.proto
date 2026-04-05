@@ -5,6 +5,7 @@ package shiroha.api.v1;
 service FlowService {
   rpc DeployFlow(DeployFlowRequest) returns (DeployFlowResponse);
   rpc ListFlows(ListFlowsRequest) returns (ListFlowsResponse);
+  rpc ListFlowVersions(ListFlowVersionsRequest) returns (ListFlowVersionsResponse);
   rpc GetFlow(GetFlowRequest) returns (GetFlowResponse);
   rpc DeleteFlow(DeleteFlowRequest) returns (DeleteFlowResponse);
 }
@@ -47,8 +48,17 @@ message FlowSummary {
   uint32 state_count = 4;
 }
 
+message ListFlowVersionsRequest {
+  string flow_id = 1;
+}
+
+message ListFlowVersionsResponse {
+  repeated FlowSummary flows = 1;
+}
+
 message GetFlowRequest {
   string flow_id = 1;
+  optional string version = 2;
 }
 
 message GetFlowResponse {
@@ -85,6 +95,8 @@ message GetJobResponse {
   string flow_id = 2;
   string state = 3;
   string current_state = 4;
+  string flow_version = 5;
+  optional uint64 context_bytes = 6;
 }
 
 message ListJobsRequest {
@@ -131,6 +143,10 @@ message CancelJobResponse {}
 
 message GetJobEventsRequest {
   string job_id = 1;
+  optional string since_id = 2;
+  optional uint64 since_timestamp_ms = 3;
+  optional uint32 limit = 4;
+  repeated string kind = 5;
 }
 
 message GetJobEventsResponse {

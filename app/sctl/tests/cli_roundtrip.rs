@@ -177,6 +177,7 @@ fn flow_help_mentions_summary_flag() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--summary"));
+    assert!(stdout.contains("--version"));
 }
 
 #[test]
@@ -185,6 +186,18 @@ fn delete_flow_help_mentions_flow_id() {
         .args(["delete-flow", "--help"])
         .output()
         .expect("delete-flow help command");
+    expect_success(&output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--flow-id"));
+}
+
+#[test]
+fn flow_versions_help_mentions_flow_id() {
+    let output = Command::new(sctl_binary())
+        .args(["flow-versions", "--help"])
+        .output()
+        .expect("flow-versions help command");
     expect_success(&output);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -215,6 +228,9 @@ fn events_help_mentions_kind_and_tail_flags() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--kind"));
     assert!(stdout.contains("--tail"));
+    assert!(stdout.contains("--since-id"));
+    assert!(stdout.contains("--since-timestamp-ms"));
+    assert!(stdout.contains("--limit"));
 }
 
 #[test]
@@ -390,6 +406,8 @@ fn cli_json_round_trip_against_real_server() {
     let wait_json = parse_json(&wait.stdout);
     assert_eq!(wait_json["state"], "completed");
     assert_eq!(wait_json["current_state"], "approved");
+    assert!(wait_json["flow_version"].is_string());
+    assert_eq!(wait_json["context_bytes"], 12);
 
     let jobs_all =
         run_sctl(&server.server_addr, &["--json", "jobs", "--all"]).expect("jobs all command");
@@ -398,6 +416,38 @@ fn cli_json_round_trip_against_real_server() {
     let jobs_all = jobs_all_json.as_array().expect("jobs array");
     assert_eq!(jobs_all.len(), 1);
     assert_eq!(jobs_all[0]["job_id"].as_str(), Some(job_id.as_str()));
+    assert!(jobs_all[0]["flow_version"].is_string());
+    assert_eq!(jobs_all[0]["context_bytes"], 12);
+
+    let flow_versions = run_sctl(
+        &server.server_addr,
+        &["--json", "flow-versions", "--flow-id", "simple"],
+    )
+    .expect("flow versions command");
+    expect_success(&flow_versions);
+    let flow_versions_json = parse_json(&flow_versions.stdout);
+    let flow_versions = flow_versions_json.as_array().expect("flow versions array");
+    assert_eq!(flow_versions.len(), 1);
+    let deployed_version = deploy_json["version"]
+        .as_str()
+        .expect("deployed version string");
+    assert_eq!(flow_versions[0]["version"], deployed_version);
+
+    let flow_by_version = run_sctl(
+        &server.server_addr,
+        &[
+            "--json",
+            "flow",
+            "--flow-id",
+            "simple",
+            "--version",
+            deployed_version,
+        ],
+    )
+    .expect("flow by version command");
+    expect_success(&flow_by_version);
+    let flow_by_version_json = parse_json(&flow_by_version.stdout);
+    assert_eq!(flow_by_version_json["version"], deployed_version);
 
     let events = run_sctl(
         &server.server_addr,
@@ -434,6 +484,31 @@ fn cli_json_round_trip_against_real_server() {
         .expect("filtered events array");
     assert_eq!(filtered_events.len(), 1);
     assert_eq!(filtered_events[0]["kind"]["type"], "transition");
+
+    let since_id = events[0]["id"].as_str().expect("first event id");
+    let incremental_events = run_sctl(
+        &server.server_addr,
+        &[
+            "--json",
+            "events",
+            "--job-id",
+            &job_id,
+            "--since-id",
+            since_id,
+            "--kind",
+            "transition",
+            "--limit",
+            "1",
+        ],
+    )
+    .expect("incremental events command");
+    expect_success(&incremental_events);
+    let incremental_events_json = parse_json(&incremental_events.stdout);
+    let incremental_events = incremental_events_json
+        .as_array()
+        .expect("incremental events array");
+    assert_eq!(incremental_events.len(), 1);
+    assert_eq!(incremental_events[0]["kind"]["type"], "transition");
 
     let delete_job = run_sctl(
         &server.server_addr,
