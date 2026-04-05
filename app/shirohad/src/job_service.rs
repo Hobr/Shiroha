@@ -10,10 +10,10 @@ use shiroha_core::flow::{DispatchMode, FlowRegistration, TimeoutDef};
 use shiroha_core::job::{ActionResult, ExecutionStatus, Job, JobState};
 use shiroha_proto::shiroha_api::job_service_server::JobService;
 use shiroha_proto::shiroha_api::{
-    CancelJobRequest, CancelJobResponse, CreateJobRequest, CreateJobResponse, GetJobEventsRequest,
-    GetJobEventsResponse, GetJobRequest, GetJobResponse, ListJobsRequest, ListJobsResponse,
-    PauseJobRequest, PauseJobResponse, ResumeJobRequest, ResumeJobResponse, TriggerEventRequest,
-    TriggerEventResponse,
+    CancelJobRequest, CancelJobResponse, CreateJobRequest, CreateJobResponse, DeleteJobRequest,
+    DeleteJobResponse, GetJobEventsRequest, GetJobEventsResponse, GetJobRequest, GetJobResponse,
+    ListJobsRequest, ListJobsResponse, PauseJobRequest, PauseJobResponse, ResumeJobRequest,
+    ResumeJobResponse, TriggerEventRequest, TriggerEventResponse,
 };
 use shiroha_wasm::host::{ActionContext, GuardContext, WasmHost};
 use tonic::{Request, Response, Status};
@@ -126,6 +126,10 @@ impl JobServiceImpl {
 
     async fn clear_queued_events(&self, job_id: Uuid) {
         self.state.pending_events.lock().await.remove(&job_id);
+    }
+
+    async fn remove_job_lock(&self, job_id: Uuid) {
+        self.state.job_locks.lock().await.remove(&job_id);
     }
 
     async fn handle_event_locked(
@@ -514,6 +518,32 @@ impl JobService for JobServiceImpl {
         Ok(Response::new(ListJobsResponse { jobs: resp }))
     }
 
+    async fn delete_job(
+        &self,
+        request: Request<DeleteJobRequest>,
+    ) -> Result<Response<DeleteJobResponse>, Status> {
+        let job_id = parse_uuid(&request.into_inner().job_id)?;
+        let lock = self.job_lock(job_id).await;
+        let _guard = lock.lock().await;
+
+        self.state
+            .job_manager
+            .delete_job(job_id)
+            .await
+            .map_err(|e| match e {
+                ShirohaError::JobNotFound(_) => Status::not_found(e.to_string()),
+                ShirohaError::InvalidJobState { .. } => Status::failed_precondition(e.to_string()),
+                _ => Status::internal(e.to_string()),
+            })?;
+        self.state.timer_wheel.cancel_all_job_timers(job_id).await;
+        self.clear_queued_events(job_id).await;
+        self.remove_job_lock(job_id).await;
+
+        Ok(Response::new(DeleteJobResponse {
+            job_id: job_id.to_string(),
+        }))
+    }
+
     async fn trigger_event(
         &self,
         request: Request<TriggerEventRequest>,
@@ -625,6 +655,7 @@ mod tests {
     use shiroha_core::flow::{
         ActionDef, DispatchMode, FlowManifest, StateDef, StateKind, TransitionDef,
     };
+    use shiroha_proto::shiroha_api::DeleteJobRequest;
     use shiroha_proto::shiroha_api::flow_service_server::FlowService;
 
     async fn deploy_flow(
@@ -987,6 +1018,93 @@ mod tests {
             .expect("job events")
             .into_inner();
         assert_eq!(events.events.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_job_removes_terminal_job_and_events() {
+        let harness = TestHarness::new("job-service-delete").await;
+        deploy_flow(
+            harness.state.clone(),
+            "approval",
+            &approval_manifest("approval", Some("allow")),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect("trigger event");
+
+        service
+            .delete_job(Request::new(DeleteJobRequest {
+                job_id: created.job_id.clone(),
+            }))
+            .await
+            .expect("delete job");
+
+        let job_uuid = created.job_id.parse::<Uuid>().expect("uuid");
+        assert!(
+            harness
+                .state
+                .job_manager
+                .get_job(job_uuid)
+                .await
+                .expect("get job")
+                .is_none()
+        );
+        assert!(
+            harness
+                .state
+                .job_manager
+                .get_events(job_uuid)
+                .await
+                .expect("get events")
+                .is_empty()
+        );
+        assert!(!harness.state.job_locks.lock().await.contains_key(&job_uuid));
+    }
+
+    #[tokio::test]
+    async fn delete_job_rejects_running_job() {
+        let harness = TestHarness::new("job-service-delete-running").await;
+        deploy_flow(
+            harness.state.clone(),
+            "approval",
+            &approval_manifest("approval", Some("allow")),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        let error = service
+            .delete_job(Request::new(DeleteJobRequest {
+                job_id: created.job_id,
+            }))
+            .await
+            .expect_err("delete running job");
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
     }
 
     #[tokio::test]

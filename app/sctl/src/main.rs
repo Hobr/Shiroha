@@ -152,6 +152,15 @@ enum Commands {
         #[arg(long, conflicts_with = "json")]
         summary: bool,
     },
+    /// 删除 Flow；要求不存在关联 Job
+    DeleteFlow {
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::flow_id_completer)
+        )]
+        flow_id: String,
+    },
     /// 输出 shell 补全脚本
     Complete(CompleteArgs),
     /// 创建 Job
@@ -167,6 +176,15 @@ enum Commands {
     },
     /// 查询 Job 详情
     Get {
+        #[arg(
+            short = 'i',
+            long,
+            add = clap_complete::engine::ArgValueCompleter::new(completion::job_id_completer)
+        )]
+        job_id: String,
+    },
+    /// 删除 Job；要求 Job 已 cancelled/completed
+    DeleteJob {
         #[arg(
             short = 'i',
             long,
@@ -310,6 +328,7 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Deploy { file, flow_id } => c.deploy(&flow_id, &file, cli.json).await?,
         Commands::Flows => c.list_flows(cli.json).await?,
         Commands::Flow { flow_id, summary } => c.get_flow(&flow_id, summary, cli.json).await?,
+        Commands::DeleteFlow { flow_id } => c.delete_flow(&flow_id, cli.json).await?,
         Commands::Complete(..) => unreachable!("complete command handled before gRPC connect"),
         Commands::Create { flow_id, context } => {
             c.create_job(
@@ -324,6 +343,7 @@ async fn async_main() -> anyhow::Result<()> {
             .await?
         }
         Commands::Get { job_id } => c.get_job(&job_id, cli.json).await?,
+        Commands::DeleteJob { job_id } => c.delete_job(&job_id, cli.json).await?,
         Commands::Jobs { all, flow_id } => c.list_jobs(flow_id.as_deref(), all, cli.json).await?,
         Commands::Trigger {
             job_id,

@@ -19,10 +19,8 @@ fn shirohad_binary() -> PathBuf {
         .join("target")
         .join("debug")
         .join(format!("shirohad{}", std::env::consts::EXE_SUFFIX));
-    if binary.exists() {
-        return binary;
-    }
-
+    // 这里始终重建一次，避免 ignored round-trip 复用过期的 `target/debug/shirohad`
+    // 导致新增 RPC 没有进入真实服务进程。
     let status = Command::new("cargo")
         .arg("build")
         .arg("-p")
@@ -182,6 +180,18 @@ fn flow_help_mentions_summary_flag() {
 }
 
 #[test]
+fn delete_flow_help_mentions_flow_id() {
+    let output = Command::new(sctl_binary())
+        .args(["delete-flow", "--help"])
+        .output()
+        .expect("delete-flow help command");
+    expect_success(&output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--flow-id"));
+}
+
+#[test]
 fn jobs_help_mentions_all_flag() {
     let output = Command::new(sctl_binary())
         .args(["jobs", "--help"])
@@ -205,6 +215,18 @@ fn events_help_mentions_kind_and_tail_flags() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--kind"));
     assert!(stdout.contains("--tail"));
+}
+
+#[test]
+fn delete_job_help_mentions_job_id() {
+    let output = Command::new(sctl_binary())
+        .args(["delete-job", "--help"])
+        .output()
+        .expect("delete-job help command");
+    expect_success(&output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--job-id"));
 }
 
 #[test]
@@ -411,4 +433,38 @@ fn cli_json_round_trip_against_real_server() {
         .expect("filtered events array");
     assert_eq!(filtered_events.len(), 1);
     assert_eq!(filtered_events[0]["kind"]["type"], "transition");
+
+    let delete_job = run_sctl(
+        &server.server_addr,
+        &["--json", "delete-job", "--job-id", &job_id],
+    )
+    .expect("delete job command");
+    expect_success(&delete_job);
+    let delete_job_json = parse_json(&delete_job.stdout);
+    assert_eq!(delete_job_json["job_id"], job_id);
+
+    let jobs_after_delete =
+        run_sctl(&server.server_addr, &["--json", "jobs", "--all"]).expect("jobs all command");
+    expect_success(&jobs_after_delete);
+    assert_eq!(
+        parse_json(&jobs_after_delete.stdout),
+        Value::Array(Vec::new())
+    );
+
+    let delete_flow = run_sctl(
+        &server.server_addr,
+        &["--json", "delete-flow", "--flow-id", "simple"],
+    )
+    .expect("delete flow command");
+    expect_success(&delete_flow);
+    let delete_flow_json = parse_json(&delete_flow.stdout);
+    assert_eq!(delete_flow_json["flow_id"], "simple");
+
+    let flows_after_delete =
+        run_sctl(&server.server_addr, &["--json", "flows"]).expect("flows command");
+    expect_success(&flows_after_delete);
+    assert_eq!(
+        parse_json(&flows_after_delete.stdout),
+        Value::Array(Vec::new())
+    );
 }

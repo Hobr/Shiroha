@@ -191,6 +191,7 @@ impl CompletionContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompletionCommand {
     Get,
+    DeleteJob,
     Trigger,
     Pause,
     Resume,
@@ -203,6 +204,7 @@ impl CompletionCommand {
     fn parse(token: &str) -> Option<Self> {
         match token {
             "get" => Some(Self::Get),
+            "delete-job" => Some(Self::DeleteJob),
             "trigger" => Some(Self::Trigger),
             "pause" => Some(Self::Pause),
             "resume" => Some(Self::Resume),

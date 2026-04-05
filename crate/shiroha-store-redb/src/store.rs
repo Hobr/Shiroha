@@ -250,6 +250,36 @@ impl Storage for RedbStorage {
         Ok(jobs)
     }
 
+    async fn delete_job(&self, job_id: Uuid) -> Result<()> {
+        let txn = self.db.begin_write().map_err(s)?;
+        {
+            let mut table = txn.open_table(JOBS_TABLE).map_err(s)?;
+            table.remove(job_id.as_bytes().as_slice()).map_err(s)?;
+        }
+
+        let event_keys = {
+            let table = txn.open_table(EVENTS_TABLE).map_err(s)?;
+            let mut keys = Vec::new();
+            let prefix = job_id.as_bytes();
+            for entry in table.iter().map_err(s)? {
+                let (k, _) = entry.map_err(s)?;
+                let key_bytes: &[u8] = k.value();
+                if key_bytes.len() >= 16 && key_bytes[..16] == *prefix.as_slice() {
+                    keys.push(key_bytes.to_vec());
+                }
+            }
+            keys
+        };
+        {
+            let mut table = txn.open_table(EVENTS_TABLE).map_err(s)?;
+            for key in event_keys {
+                table.remove(key.as_slice()).map_err(s)?;
+            }
+        }
+        txn.commit().map_err(s)?;
+        Ok(())
+    }
+
     async fn append_event(&self, event: &EventRecord) -> Result<()> {
         let data = serde_json::to_vec(event).map_err(s)?;
         let key = Self::event_key(event.job_id, event.id);
@@ -504,6 +534,81 @@ mod tests {
         assert!(events[0].timestamp_ms < events[1].timestamp_ms);
         assert!(matches!(events[0].kind, EventKind::Transition { .. }));
         assert!(matches!(events[1].kind, EventKind::Completed { .. }));
+
+        drop(storage);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn delete_flow_removes_latest_and_version_history() {
+        let path = temp_db_path("delete-flow");
+        let first = sample_flow_registration();
+        let second = FlowRegistration {
+            version: Uuid::now_v7(),
+            wasm_hash: "hash-demo-v2".into(),
+            ..first.clone()
+        };
+        let storage = RedbStorage::new(&path).expect("open db");
+
+        storage.save_flow(&first).await.expect("save first flow");
+        storage.save_flow(&second).await.expect("save second flow");
+        storage
+            .delete_flow(&first.flow_id)
+            .await
+            .expect("delete flow");
+
+        assert!(
+            storage
+                .get_flow(&first.flow_id)
+                .await
+                .expect("get latest")
+                .is_none()
+        );
+        assert!(storage.list_flows().await.expect("list flows").is_empty());
+        assert!(
+            storage
+                .list_flow_versions()
+                .await
+                .expect("list versions")
+                .is_empty()
+        );
+
+        drop(storage);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn delete_job_removes_snapshot_and_events() {
+        let path = temp_db_path("delete-job");
+        let flow = sample_flow_registration();
+        let job = sample_job(&flow);
+        let storage = RedbStorage::new(&path).expect("open db");
+
+        storage.save_job(&job).await.expect("save job");
+        storage
+            .append_event(&EventRecord {
+                id: Uuid::now_v7(),
+                job_id: job.id,
+                timestamp_ms: 100,
+                kind: EventKind::Created {
+                    flow_id: flow.flow_id.clone(),
+                    flow_version: flow.version,
+                    initial_state: flow.manifest.initial_state.clone(),
+                },
+            })
+            .await
+            .expect("append event");
+
+        storage.delete_job(job.id).await.expect("delete job");
+
+        assert!(storage.get_job(job.id).await.expect("get job").is_none());
+        assert!(
+            storage
+                .get_events(job.id)
+                .await
+                .expect("get events")
+                .is_empty()
+        );
 
         drop(storage);
         let _ = std::fs::remove_file(path);

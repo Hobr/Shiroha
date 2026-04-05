@@ -6,12 +6,14 @@ service FlowService {
   rpc DeployFlow(DeployFlowRequest) returns (DeployFlowResponse);
   rpc ListFlows(ListFlowsRequest) returns (ListFlowsResponse);
   rpc GetFlow(GetFlowRequest) returns (GetFlowResponse);
+  rpc DeleteFlow(DeleteFlowRequest) returns (DeleteFlowResponse);
 }
 
 service JobService {
   rpc CreateJob(CreateJobRequest) returns (CreateJobResponse);
   rpc GetJob(GetJobRequest) returns (GetJobResponse);
   rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc DeleteJob(DeleteJobRequest) returns (DeleteJobResponse);
   rpc TriggerEvent(TriggerEventRequest) returns (TriggerEventResponse);
   rpc PauseJob(PauseJobRequest) returns (PauseJobResponse);
   rpc ResumeJob(ResumeJobRequest) returns (ResumeJobResponse);
@@ -54,6 +56,14 @@ message GetFlowResponse {
   string manifest_json = 3;
 }
 
+message DeleteFlowRequest {
+  string flow_id = 1;
+}
+
+message DeleteFlowResponse {
+  string flow_id = 1;
+}
+
 // === Job ===
 
 message CreateJobRequest {
@@ -82,6 +92,14 @@ message ListJobsRequest {
 
 message ListJobsResponse {
   repeated GetJobResponse jobs = 1;
+}
+
+message DeleteJobRequest {
+  string job_id = 1;
+}
+
+message DeleteJobResponse {
+  string job_id = 1;
 }
 
 message TriggerEventRequest {

@@ -85,6 +85,17 @@ impl<S: Storage> JobManager<S> {
         self.storage.get_events(job_id).await
     }
 
+    pub async fn delete_job(&self, job_id: Uuid) -> Result<()> {
+        let job = self.load_job(job_id).await?;
+        if matches!(job.state, JobState::Running | JobState::Paused) {
+            return Err(ShirohaError::InvalidJobState {
+                expected: "cancelled or completed".into(),
+                actual: job.state.to_string(),
+            });
+        }
+        self.storage.delete_job(job_id).await
+    }
+
     /// 暂停 Job（Running → Paused）
     pub async fn pause_job(&self, job_id: Uuid) -> Result<()> {
         let mut job = self.load_job(job_id).await?;
@@ -327,5 +338,30 @@ mod tests {
             }
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    #[tokio::test]
+    async fn delete_job_requires_terminal_state() {
+        let storage = Arc::new(MemoryStorage::new());
+        let manager = JobManager::new(storage.clone());
+        let job = manager
+            .create_job("demo", Uuid::now_v7(), "idle", None)
+            .await
+            .expect("job created");
+
+        let error = manager.delete_job(job.id).await.expect_err("running job");
+        assert!(matches!(error, ShirohaError::InvalidJobState { .. }));
+
+        manager.cancel_job(job.id).await.expect("cancel");
+        manager.delete_job(job.id).await.expect("delete");
+
+        assert!(storage.get_job(job.id).await.expect("get job").is_none());
+        assert!(
+            storage
+                .get_events(job.id)
+                .await
+                .expect("get events")
+                .is_empty()
+        );
     }
 }
