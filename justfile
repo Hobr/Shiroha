@@ -56,6 +56,10 @@ fmt:
     cargo fmt
     pre-commit run --all-files
 
+test:
+    cargo test --workspace
+    cargo test -p sctl --test cli_roundtrip -- --ignored
+
 doc:
     cargo doc --open --workspace
 
