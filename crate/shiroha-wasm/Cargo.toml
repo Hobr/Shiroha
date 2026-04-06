@@ -12,6 +12,7 @@ shiroha-core.workspace = true
 
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
+reqwest.workspace = true
 
 tokio.workspace = true
 
@@ -21,3 +22,4 @@ thiserror.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
