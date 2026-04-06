@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use shiroha_core::flow::{FlowRegistration, FlowWorld};
 use shiroha_core::storage::Storage;
-use shiroha_engine::engine::StateMachineEngine;
 use shiroha_engine::validator::{FlowValidator, ValidationWarning};
 use shiroha_proto::shiroha_api::flow_service_server::FlowService;
 use shiroha_proto::shiroha_api::{
@@ -20,6 +19,7 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::server::ShirohaState;
+use crate::service_support::parse_uuid;
 
 pub struct FlowServiceImpl {
     state: Arc<ShirohaState>,
@@ -216,27 +216,7 @@ impl FlowService for FlowServiceImpl {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         self.state.module_cache.insert(wasm_module);
-        self.state
-            .flows
-            .lock()
-            .await
-            .insert(flow_id.clone(), registration.clone());
-        self.state
-            .flow_versions
-            .lock()
-            .await
-            .insert((flow_id.clone(), version), registration);
-        let versioned_engine = StateMachineEngine::new(manifest.clone());
-        self.state
-            .engines
-            .lock()
-            .await
-            .insert(flow_id.clone(), StateMachineEngine::new(manifest));
-        self.state
-            .versioned_engines
-            .lock()
-            .await
-            .insert((flow_id.clone(), version), versioned_engine);
+        self.state.flow_registry.register(registration).await;
 
         tracing::info!(flow_id, %version, "flow deployed");
 
@@ -268,13 +248,12 @@ impl FlowService for FlowServiceImpl {
         request: Request<ListFlowVersionsRequest>,
     ) -> Result<Response<ListFlowVersionsResponse>, Status> {
         let flow_id = request.into_inner().flow_id;
-        let mut flows = self
+        let flows = self
             .state
             .storage
-            .list_flow_versions()
+            .list_flow_versions_for(&flow_id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
-        flows.retain(|flow| flow.flow_id == flow_id);
 
         Ok(Response::new(ListFlowVersionsResponse {
             flows: flows.iter().map(Self::flow_summary).collect(),
@@ -288,9 +267,7 @@ impl FlowService for FlowServiceImpl {
         let req = request.into_inner();
         let flow_id = req.flow_id;
         let flow = if let Some(version) = req.version {
-            let version = version
-                .parse::<Uuid>()
-                .map_err(|_| Status::invalid_argument(format!("invalid UUID: {version}")))?;
+            let version = parse_uuid(&version)?;
             self.state
                 .storage
                 .get_flow_version(&flow_id, version)
@@ -349,18 +326,7 @@ impl FlowService for FlowServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        self.state.flows.lock().await.remove(&flow_id);
-        self.state.engines.lock().await.remove(&flow_id);
-        self.state
-            .flow_versions
-            .lock()
-            .await
-            .retain(|(candidate, _), _| candidate != &flow_id);
-        self.state
-            .versioned_engines
-            .lock()
-            .await
-            .retain(|(candidate, _), _| candidate != &flow_id);
+        self.state.flow_registry.remove_flow(&flow_id).await;
 
         tracing::info!(flow_id, version = %flow.version, "flow deleted");
 
@@ -372,65 +338,16 @@ impl FlowService for FlowServiceImpl {
 mod tests {
     use super::*;
     use crate::job_service::JobServiceImpl;
-    use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
+    use crate::test_support::{
+        TestHarness, approval_manifest, register_flow_version, warning_manifest, wasm_for_manifest,
+    };
     use shiroha_core::flow::{FlowManifest, FlowWorld, StateDef, StateKind, TransitionDef};
     use shiroha_core::storage::Storage;
-    use shiroha_engine::engine::StateMachineEngine;
     use shiroha_proto::shiroha_api::job_service_server::JobService;
     use shiroha_proto::shiroha_api::{
         CreateJobRequest, DeleteFlowRequest, GetFlowRequest, ListFlowVersionsRequest,
         ListFlowsRequest,
     };
-
-    fn warning_manifest() -> FlowManifest {
-        FlowManifest {
-            id: "warning-demo".into(),
-            host_world: FlowWorld::Sandbox,
-            states: vec![
-                StateDef {
-                    name: "idle".into(),
-                    kind: StateKind::Normal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-                StateDef {
-                    name: "loop".into(),
-                    kind: StateKind::Normal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-                StateDef {
-                    name: "done".into(),
-                    kind: StateKind::Terminal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-            ],
-            transitions: vec![
-                TransitionDef {
-                    from: "idle".into(),
-                    to: "loop".into(),
-                    event: "start".into(),
-                    guard: None,
-                    action: None,
-                    timeout: None,
-                },
-                TransitionDef {
-                    from: "loop".into(),
-                    to: "loop".into(),
-                    event: "spin".into(),
-                    guard: None,
-                    action: None,
-                    timeout: None,
-                },
-            ],
-            initial_state: "idle".into(),
-            actions: Vec::new(),
-        }
-    }
 
     fn invalid_reference_manifest() -> FlowManifest {
         FlowManifest {
@@ -463,58 +380,6 @@ mod tests {
             initial_state: "idle".into(),
             actions: Vec::new(),
         }
-    }
-
-    async fn register_flow_version(
-        state: &Arc<crate::server::ShirohaState>,
-        flow_id: &str,
-        version: Uuid,
-        manifest: FlowManifest,
-    ) -> FlowRegistration {
-        let registration = FlowRegistration {
-            flow_id: flow_id.to_string(),
-            version,
-            manifest: manifest.clone(),
-            // 这组查询测试只验证 flow 元数据读路径，不走真实 wasm 执行。
-            wasm_hash: format!("test-{flow_id}-{version}"),
-        };
-
-        state
-            .storage
-            .save_flow(&registration)
-            .await
-            .expect("save flow version");
-
-        state
-            .flow_versions
-            .lock()
-            .await
-            .insert((flow_id.to_string(), version), registration.clone());
-        state.versioned_engines.lock().await.insert(
-            (flow_id.to_string(), version),
-            StateMachineEngine::new(manifest.clone()),
-        );
-
-        let replace_latest = state
-            .flows
-            .lock()
-            .await
-            .get(flow_id)
-            .is_none_or(|existing| version > existing.version);
-        if replace_latest {
-            state
-                .flows
-                .lock()
-                .await
-                .insert(flow_id.to_string(), registration.clone());
-            state
-                .engines
-                .lock()
-                .await
-                .insert(flow_id.to_string(), StateMachineEngine::new(manifest));
-        }
-
-        registration
     }
 
     #[tokio::test]
@@ -745,16 +610,21 @@ mod tests {
                 .expect("get flow")
                 .is_none()
         );
-        assert!(!harness.state.flows.lock().await.contains_key("demo-flow"));
-        assert!(!harness.state.engines.lock().await.contains_key("demo-flow"));
         assert!(
-            !harness
+            harness
                 .state
-                .flow_versions
-                .lock()
+                .flow_registry
+                .latest_registration("demo-flow")
                 .await
-                .keys()
-                .any(|(flow_id, _)| flow_id == "demo-flow")
+                .is_none()
+        );
+        assert!(
+            harness
+                .state
+                .flow_registry
+                .latest_engine("demo-flow")
+                .await
+                .is_none()
         );
     }
 

@@ -9,10 +9,14 @@ use tracing_subscriber::EnvFilter;
 
 pub mod job_service;
 
+mod flow_registry;
 mod flow_service;
 #[cfg(test)]
 mod grpc_tests;
+mod job_events;
+mod job_runtime;
 mod server;
+mod service_support;
 #[cfg(test)]
 mod test_support;
 shadow_rs::shadow!(build);

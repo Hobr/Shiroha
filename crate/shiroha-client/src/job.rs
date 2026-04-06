@@ -3,6 +3,7 @@ use serde_json::Value;
 use shiroha_proto::shiroha_api::*;
 
 use crate::client::ControlClient;
+use crate::job_support::{bound_flow_request, sort_job_details, sort_jobs};
 use crate::manifest::{manifest_event_names, manifest_state_names, parse_json_value_required};
 
 #[derive(Debug, Clone, Default)]
@@ -246,29 +247,6 @@ impl ControlClient {
         self.get_flow(&request.flow_id, request.version.as_deref())
             .await
     }
-}
-
-fn bound_flow_request(job: &JobDetails) -> GetFlowRequest {
-    GetFlowRequest {
-        flow_id: job.flow_id.clone(),
-        version: Some(job.flow_version.clone()),
-    }
-}
-
-fn sort_jobs(jobs: &mut [GetJobResponse]) {
-    jobs.sort_by(|left, right| {
-        left.flow_id
-            .cmp(&right.flow_id)
-            .then_with(|| left.job_id.cmp(&right.job_id))
-    });
-}
-
-fn sort_job_details(jobs: &mut [JobDetails]) {
-    jobs.sort_by(|left, right| {
-        left.flow_id
-            .cmp(&right.flow_id)
-            .then_with(|| left.job_id.cmp(&right.job_id))
-    });
 }
 
 #[cfg(test)]

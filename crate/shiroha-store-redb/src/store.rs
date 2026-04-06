@@ -5,10 +5,15 @@
 //!
 //! 数据以 JSON 序列化存储，表结构：
 //! - `flows`: flow_id (str) → 最新 FlowRegistration (JSON bytes)
-//! - `flow_versions`: flow_id + version → 指定版本 FlowRegistration (JSON bytes)
+//! - `flow_versions`: hex(flow_id bytes) + `\0` + version → 指定版本 FlowRegistration (JSON bytes)
 //! - `wasm_modules`: wasm_hash (str) → 原始 wasm bytes
 //! - `jobs`: job_id (16 bytes UUID) → Job (JSON bytes)
 //! - `events`: job_id+event_id (32 bytes) → EventRecord (JSON bytes)
+//!
+//! ## 升级兼容性
+//!
+//! `flow_versions` 表的键格式在引入十六进制编码前曾直接拼接原始 flow_id 字符串。
+//! 打开数据库时会自动将旧格式键迁移到新格式，不需要手动操作。
 
 use std::path::Path;
 use std::sync::Arc;
@@ -19,6 +24,7 @@ use shiroha_core::event::EventRecord;
 use shiroha_core::flow::FlowRegistration;
 use shiroha_core::job::Job;
 use shiroha_core::storage::{CapabilityStore, Storage};
+use tracing::warn;
 use uuid::Uuid;
 
 const FLOWS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("flows");
@@ -39,7 +45,7 @@ pub struct RedbStorage {
 }
 
 impl RedbStorage {
-    /// 打开或创建数据库，自动建表
+    /// 打开或创建数据库，自动建表，并执行必要的 schema 迁移
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         let db = Database::create(path).map_err(s)?;
         // 首次启动时确保所有表存在
@@ -51,7 +57,62 @@ impl RedbStorage {
         let _ = txn.open_table(EVENTS_TABLE).map_err(s)?;
         let _ = txn.open_table(KV_TABLE).map_err(s)?;
         txn.commit().map_err(s)?;
-        Ok(Self { db: Arc::new(db) })
+
+        let storage = Self { db: Arc::new(db) };
+        storage.migrate_flow_version_keys()?;
+        Ok(storage)
+    }
+
+    /// 将 flow_versions 表中旧格式键（`flow_id\0version`）迁移到新格式（`hex(flow_id)\0version`）。
+    ///
+    /// 旧格式直接拼接 flow_id 字符串，存在前缀冲突风险（如 `ab\0` 与 `a\0` 的 range scan 会互相干扰）。
+    /// 新格式先对 flow_id 进行十六进制编码，保证任意 flow_id 值都能安全区间扫描。
+    ///
+    /// 迁移逻辑：扫描全表，解码 JSON 值取出 `flow_id` 和 `version`，
+    /// 若当前键与预期的新格式键不一致，则删除旧键并写入新键。
+    fn migrate_flow_version_keys(&self) -> Result<()> {
+        // First pass: collect all entries that need migration (read-only).
+        // We keep the decoded FlowRegistration alongside the raw bytes to avoid
+        // a redundant deserialization in the write pass.
+        let to_migrate: Vec<(String, FlowRegistration, Vec<u8>)> = {
+            let txn = self.db.begin_read().map_err(s)?;
+            let table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+            let mut entries = Vec::new();
+            for item in table.iter().map_err(s)? {
+                let (k, v) = item.map_err(s)?;
+                let stored_key = k.value().to_string();
+                let data = v.value().to_vec();
+                let flow: FlowRegistration = match serde_json::from_slice(&data) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        warn!(key = %stored_key, error = %e, "skipping flow_versions entry with unreadable value during migration");
+                        continue;
+                    }
+                };
+                let expected_key = Self::flow_version_key(&flow.flow_id, flow.version);
+                if stored_key != expected_key {
+                    entries.push((stored_key, flow, data));
+                }
+            }
+            entries
+        };
+
+        if to_migrate.is_empty() {
+            return Ok(());
+        }
+
+        // Second pass: rewrite keys in a single write transaction.
+        let txn = self.db.begin_write().map_err(s)?;
+        {
+            let mut table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+            for (old_key, flow, data) in to_migrate {
+                let new_key = Self::flow_version_key(&flow.flow_id, flow.version);
+                table.remove(old_key.as_str()).map_err(s)?;
+                table.insert(new_key.as_str(), data.as_slice()).map_err(s)?;
+            }
+        }
+        txn.commit().map_err(s)?;
+        Ok(())
     }
 
     /// 事件表的复合键：job_id (16B) + event_id (16B) = 32B
@@ -65,7 +126,33 @@ impl RedbStorage {
     }
 
     fn flow_version_key(flow_id: &str, version: Uuid) -> String {
-        format!("{flow_id}\u{0}{version}")
+        format!("{}\u{0}{version}", Self::encode_flow_id(flow_id))
+    }
+
+    fn flow_version_prefix_bounds(flow_id: &str) -> (String, String) {
+        let encoded_flow_id = Self::encode_flow_id(flow_id);
+        (
+            format!("{encoded_flow_id}\u{0}"),
+            format!("{encoded_flow_id}\u{1}"),
+        )
+    }
+
+    fn encode_flow_id(flow_id: &str) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut encoded = String::with_capacity(flow_id.len() * 2);
+        for byte in flow_id.as_bytes() {
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        encoded
+    }
+
+    fn event_key_range(job_id: Uuid) -> ([u8; 32], [u8; 32]) {
+        let mut start = [0u8; 32];
+        let mut end = [0xFFu8; 32];
+        start[..16].copy_from_slice(job_id.as_bytes());
+        end[..16].copy_from_slice(job_id.as_bytes());
+        (start, end)
     }
 
     fn kv_key(namespace: &str, key: &str) -> String {
@@ -135,6 +222,20 @@ impl Storage for RedbStorage {
         Ok(flows)
     }
 
+    async fn list_flow_versions_for(&self, flow_id: &str) -> Result<Vec<FlowRegistration>> {
+        let txn = self.db.begin_read().map_err(s)?;
+        let table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+        let (start, end) = Self::flow_version_prefix_bounds(flow_id);
+        let mut flows = Vec::new();
+        for entry in table.range(start.as_str()..end.as_str()).map_err(s)? {
+            let (_, v) = entry.map_err(s)?;
+            let flow: FlowRegistration = serde_json::from_slice(v.value()).map_err(s)?;
+            flows.push(flow);
+        }
+        flows.sort_by_key(|flow| flow.version.as_u128());
+        Ok(flows)
+    }
+
     async fn list_flows(&self) -> Result<Vec<FlowRegistration>> {
         let txn = self.db.begin_read().map_err(s)?;
         let table = txn.open_table(FLOWS_TABLE).map_err(s)?;
@@ -153,16 +254,13 @@ impl Storage for RedbStorage {
             let mut table = txn.open_table(FLOWS_TABLE).map_err(s)?;
             table.remove(flow_id).map_err(s)?;
         }
-        let version_prefix = format!("{flow_id}\u{0}");
+        let (start, end) = Self::flow_version_prefix_bounds(flow_id);
         let version_keys = {
             let table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
             let mut keys = Vec::new();
-            for entry in table.iter().map_err(s)? {
+            for entry in table.range(start.as_str()..end.as_str()).map_err(s)? {
                 let (k, _) = entry.map_err(s)?;
-                let key = k.value();
-                if key.starts_with(&version_prefix) {
-                    keys.push(key.to_string());
-                }
+                keys.push(k.value().to_string());
             }
             keys
         };
@@ -301,17 +399,12 @@ impl Storage for RedbStorage {
     async fn get_events(&self, job_id: Uuid) -> Result<Vec<EventRecord>> {
         let txn = self.db.begin_read().map_err(s)?;
         let table = txn.open_table(EVENTS_TABLE).map_err(s)?;
-        let prefix = job_id.as_bytes();
+        let (start, end) = Self::event_key_range(job_id);
         let mut events = Vec::new();
-        // 当前实现没有额外的 job_id 二级索引，因此直接扫描 events 表，
-        // 再利用复合键前 16 字节等于 job_id 的特性做过滤。
-        for entry in table.iter().map_err(s)? {
-            let (k, v) = entry.map_err(s)?;
-            let key_bytes: &[u8] = k.value();
-            if key_bytes.len() >= 16 && key_bytes[..16] == *prefix.as_slice() {
-                let event: EventRecord = serde_json::from_slice(v.value()).map_err(s)?;
-                events.push(event);
-            }
+        for entry in table.range(start.as_slice()..=end.as_slice()).map_err(s)? {
+            let (_, v) = entry.map_err(s)?;
+            let event: EventRecord = serde_json::from_slice(v.value()).map_err(s)?;
+            events.push(event);
         }
         // 对外统一按事件发生时间返回，避免上层依赖底层 B-tree 迭代顺序。
         events.sort_by_key(|e: &EventRecord| e.timestamp_ms);
@@ -444,6 +537,13 @@ mod tests {
                 }],
             },
             wasm_hash: "hash-demo".into(),
+        }
+    }
+
+    fn sample_flow_registration_with_id(flow_id: &str) -> FlowRegistration {
+        FlowRegistration {
+            flow_id: flow_id.to_string(),
+            ..sample_flow_registration()
         }
     }
 
@@ -580,6 +680,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_flow_versions_for_returns_only_matching_flow() {
+        let path = temp_db_path("flow-versions-for");
+        let alpha_v1 = FlowRegistration {
+            version: Uuid::from_u128(2),
+            ..sample_flow_registration_with_id("alpha")
+        };
+        let alpha_v2 = FlowRegistration {
+            version: Uuid::from_u128(1),
+            wasm_hash: "hash-alpha-v2".into(),
+            ..alpha_v1.clone()
+        };
+        let beta_v1 = FlowRegistration {
+            version: Uuid::from_u128(9),
+            ..sample_flow_registration_with_id("beta")
+        };
+        let alpha_null_beta_v1 = FlowRegistration {
+            version: Uuid::from_u128(8),
+            ..sample_flow_registration_with_id("alpha\0beta")
+        };
+        let storage = RedbStorage::new(&path).expect("open db");
+
+        storage.save_flow(&alpha_v1).await.expect("save alpha v1");
+        storage.save_flow(&alpha_v2).await.expect("save alpha v2");
+        storage.save_flow(&beta_v1).await.expect("save beta v1");
+        storage
+            .save_flow(&alpha_null_beta_v1)
+            .await
+            .expect("save alpha\\0beta v1");
+
+        let versions = storage
+            .list_flow_versions_for("alpha")
+            .await
+            .expect("list alpha versions");
+
+        assert_eq!(versions.len(), 2);
+        assert!(versions.iter().all(|flow| flow.flow_id == "alpha"));
+        assert_eq!(
+            versions.iter().map(|flow| flow.version).collect::<Vec<_>>(),
+            vec![alpha_v2.version, alpha_v1.version]
+        );
+
+        drop(storage);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn get_events_returns_timestamp_sorted_records() {
         let path = temp_db_path("event-order");
         let flow = sample_flow_registration();
@@ -619,6 +765,68 @@ mod tests {
         assert!(events[0].timestamp_ms < events[1].timestamp_ms);
         assert!(matches!(events[0].kind, EventKind::Transition { .. }));
         assert!(matches!(events[1].kind, EventKind::Completed { .. }));
+
+        drop(storage);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn get_events_ignores_records_for_other_jobs_with_neighboring_keys() {
+        let path = temp_db_path("event-neighboring-keys");
+        let flow = sample_flow_registration();
+        let target_job = Job {
+            id: Uuid::from_u128(42),
+            ..sample_job(&flow)
+        };
+        let neighbor_job = Job {
+            id: Uuid::from_u128(43),
+            ..target_job.clone()
+        };
+        let storage = RedbStorage::new(&path).expect("open db");
+
+        storage
+            .save_job(&target_job)
+            .await
+            .expect("save target job");
+        storage
+            .save_job(&neighbor_job)
+            .await
+            .expect("save neighbor job");
+
+        storage
+            .append_event(&EventRecord {
+                id: Uuid::now_v7(),
+                job_id: target_job.id,
+                timestamp_ms: 200,
+                kind: EventKind::Completed {
+                    final_state: "done".into(),
+                },
+            })
+            .await
+            .expect("append target event");
+        storage
+            .append_event(&EventRecord {
+                id: Uuid::now_v7(),
+                job_id: neighbor_job.id,
+                timestamp_ms: 100,
+                kind: EventKind::Transition {
+                    event: "finish".into(),
+                    from: "idle".into(),
+                    to: "done".into(),
+                    action: Some("ship".into()),
+                },
+            })
+            .await
+            .expect("append neighbor event");
+
+        let events = storage
+            .get_events(target_job.id)
+            .await
+            .expect("get target events");
+
+        assert_eq!(events.len(), 1);
+        assert!(events.iter().all(|event| event.job_id == target_job.id));
+        assert!(matches!(events[0].kind, EventKind::Completed { .. }));
 
         drop(storage);
         let _ = std::fs::remove_file(path);
@@ -731,6 +939,57 @@ mod tests {
             None
         );
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// 验证旧格式键（`flow_id\0version`）在重新打开数据库时被自动迁移到新格式。
+    ///
+    /// 模拟升级前写入的数据：直接向 flow_versions 表写入旧格式键，
+    /// 重新打开数据库后应能通过新格式正常读取。
+    #[tokio::test]
+    async fn migrate_flow_version_keys_on_reopen() {
+        let path = temp_db_path("migrate-keys");
+        let flow = sample_flow_registration();
+        let data = serde_json::to_vec(&flow).expect("serialize flow");
+
+        // Write an entry with the old key format (plain flow_id + \0 + version)
+        {
+            let db = redb::Database::create(&path).expect("create db");
+            let txn = db.begin_write().expect("begin write");
+            let _ = txn.open_table(FLOWS_TABLE).expect("open flows");
+            {
+                let mut table = txn.open_table(FLOW_VERSIONS_TABLE).expect("open versions");
+                let old_key = format!("{}\u{0}{}", flow.flow_id, flow.version);
+                table
+                    .insert(old_key.as_str(), data.as_slice())
+                    .expect("insert old key");
+            }
+            let _ = txn.open_table(WASM_MODULES_TABLE).expect("open wasm");
+            let _ = txn.open_table(JOBS_TABLE).expect("open jobs");
+            let _ = txn.open_table(EVENTS_TABLE).expect("open events");
+            let _ = txn.open_table(KV_TABLE).expect("open kv");
+            txn.commit().expect("commit");
+        }
+
+        // Reopen via RedbStorage — migration should run automatically
+        let storage = RedbStorage::new(&path).expect("reopen db");
+
+        // The record must be findable under the new key format
+        let found = storage
+            .get_flow_version(&flow.flow_id, flow.version)
+            .await
+            .expect("get flow version after migration")
+            .expect("flow version should exist after migration");
+        assert_eq!(found.flow_id, flow.flow_id);
+        assert_eq!(found.version, flow.version);
+
+        let versions = storage
+            .list_flow_versions_for(&flow.flow_id)
+            .await
+            .expect("list versions after migration");
+        assert_eq!(versions.len(), 1);
+
+        drop(storage);
         let _ = std::fs::remove_file(path);
     }
 }

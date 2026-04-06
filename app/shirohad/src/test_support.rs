@@ -2,6 +2,8 @@
 //!
 //! 这里集中放 server harness、临时数据目录、WASM fixture 构造和
 //! UDS gRPC 连接逻辑，避免各测试文件重复搭基础设施。
+//! 其中 runtime helper 的 flow metadata 注册路径会复用生产侧同一个
+//! `FlowRegistry` 入口，避免测试代码旁路内存 registry 更新逻辑。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,10 +11,7 @@ use std::sync::{Mutex as StdMutex, OnceLock};
 use std::{fs, process::Command};
 
 use hyper_util::rt::TokioIo;
-use shiroha_core::flow::{
-    ActionDef, DispatchMode, FlowManifest, FlowWorld, StateDef, StateKind, TimeoutDef,
-    TransitionDef,
-};
+use shiroha_core::flow::FlowManifest;
 use shiroha_proto::shiroha_api::ListFlowsRequest;
 use shiroha_proto::shiroha_api::flow_service_client::FlowServiceClient;
 use shiroha_proto::shiroha_api::job_service_client::JobServiceClient;
@@ -24,6 +23,14 @@ use tower::service_fn;
 use uuid::Uuid;
 
 use crate::server::{ShirohaServer, ShirohaState, spawn_timer_forwarder};
+
+mod flow_builders;
+mod runtime_helpers;
+
+pub(crate) use flow_builders::{
+    approval_manifest, approval_manifest_to, timeout_manifest, warning_manifest,
+};
+pub(crate) use runtime_helpers::{deploy_flow, register_flow_version, wait_for_job};
 
 pub(crate) struct TestHarness {
     pub(crate) state: Arc<ShirohaState>,
@@ -166,93 +173,6 @@ impl Drop for LiveGrpcServer {
         }
         let _ = std::fs::remove_file(&self.socket_path);
         let _ = std::fs::remove_dir_all(&self.data_dir);
-    }
-}
-
-pub(crate) fn approval_manifest(flow_id: &str, guard: Option<&str>) -> FlowManifest {
-    // 最小 happy-path flow：一次 approve 事件驱动一次转移和一次 action。
-    FlowManifest {
-        id: flow_id.to_string(),
-        host_world: FlowWorld::Sandbox,
-        states: vec![
-            StateDef {
-                name: "idle".into(),
-                kind: StateKind::Normal,
-                on_enter: None,
-                on_exit: None,
-                subprocess: None,
-            },
-            StateDef {
-                name: "done".into(),
-                kind: StateKind::Terminal,
-                on_enter: None,
-                on_exit: None,
-                subprocess: None,
-            },
-        ],
-        transitions: vec![TransitionDef {
-            from: "idle".into(),
-            to: "done".into(),
-            event: "approve".into(),
-            guard: guard.map(str::to_string),
-            action: Some("ship".into()),
-            timeout: None,
-        }],
-        initial_state: "idle".into(),
-        actions: vec![
-            ActionDef {
-                name: "ship".into(),
-                dispatch: DispatchMode::Local,
-                capabilities: Vec::new(),
-            },
-            ActionDef {
-                name: "allow".into(),
-                dispatch: DispatchMode::Local,
-                capabilities: Vec::new(),
-            },
-            ActionDef {
-                name: "deny".into(),
-                dispatch: DispatchMode::Local,
-                capabilities: Vec::new(),
-            },
-        ],
-    }
-}
-
-pub(crate) fn timeout_manifest(flow_id: &str) -> FlowManifest {
-    // 专门用于覆盖 timeout -> enqueue_event -> terminal transition 这条链路。
-    FlowManifest {
-        id: flow_id.to_string(),
-        host_world: FlowWorld::Sandbox,
-        states: vec![
-            StateDef {
-                name: "waiting".into(),
-                kind: StateKind::Normal,
-                on_enter: None,
-                on_exit: None,
-                subprocess: None,
-            },
-            StateDef {
-                name: "timed_out".into(),
-                kind: StateKind::Terminal,
-                on_enter: None,
-                on_exit: None,
-                subprocess: None,
-            },
-        ],
-        transitions: vec![TransitionDef {
-            from: "waiting".into(),
-            to: "timed_out".into(),
-            event: "expire".into(),
-            guard: None,
-            action: None,
-            timeout: Some(TimeoutDef {
-                duration_ms: 25,
-                timeout_event: "expire".into(),
-            }),
-        }],
-        initial_state: "waiting".into(),
-        actions: Vec::new(),
     }
 }
 
@@ -404,4 +324,47 @@ async fn try_connect_channel(
             async move { UnixStream::connect(socket_path).await.map(TokioIo::new) }
         }))
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{approval_manifest_to, warning_manifest};
+    use shiroha_core::flow::StateKind;
+
+    #[test]
+    fn approval_manifest_to_uses_requested_terminal_state() {
+        let manifest = approval_manifest_to("demo", "approved");
+
+        assert_eq!(manifest.initial_state, "idle");
+        assert!(
+            manifest
+                .states
+                .iter()
+                .any(|state| state.name == "approved" && state.kind == StateKind::Terminal)
+        );
+        assert!(
+            manifest
+                .transitions
+                .iter()
+                .any(|transition| transition.from == "idle" && transition.to == "approved")
+        );
+    }
+
+    #[test]
+    fn warning_manifest_has_looping_non_terminal_state() {
+        let manifest = warning_manifest();
+
+        assert!(
+            manifest
+                .states
+                .iter()
+                .any(|state| state.name == "loop" && state.kind != StateKind::Terminal)
+        );
+        assert!(
+            manifest
+                .transitions
+                .iter()
+                .any(|transition| transition.from == "loop" && transition.to == "loop")
+        );
+    }
 }

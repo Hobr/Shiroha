@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use shiroha_core::error::ShirohaError;
-use shiroha_core::event::EventKind;
 use shiroha_core::flow::{ActionCapability, DispatchMode, FlowRegistration, TimeoutDef};
 use shiroha_core::job::{ActionResult, ExecutionStatus, Job, JobState, ScheduledTimeout};
 use shiroha_proto::shiroha_api::job_service_server::JobService;
@@ -20,7 +19,10 @@ use shiroha_wasm::host::{ActionContext, GuardContext, WasmHost};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
+use crate::job_events::{filter_events, validate_query};
+use crate::job_runtime::action_sequence;
 use crate::server::ShirohaState;
+use crate::service_support::parse_uuid;
 
 /// JobService 的 standalone 实现。
 ///
@@ -77,21 +79,17 @@ impl JobServiceImpl {
 
     async fn flow_registration(&self, flow_id: &str) -> Result<FlowRegistration, Status> {
         self.state
-            .flows
-            .lock()
+            .flow_registry
+            .latest_registration(flow_id)
             .await
-            .get(flow_id)
-            .cloned()
             .ok_or_else(|| Status::internal(format!("flow `{flow_id}` not loaded in memory")))
     }
 
     async fn flow_registration_for_job(&self, job: &Job) -> Result<FlowRegistration, Status> {
         self.state
-            .flow_versions
-            .lock()
+            .flow_registry
+            .versioned_registration(&job.flow_id, job.flow_version)
             .await
-            .get(&(job.flow_id.clone(), job.flow_version))
-            .cloned()
             .ok_or_else(|| {
                 Status::internal(format!(
                     "flow `{}` version {} not loaded in memory",
@@ -139,9 +137,11 @@ impl JobServiceImpl {
         // 只在 engine 锁里完成“查拓扑、算下一步”这类纯读操作，
         // 拿到执行计划后立刻释放锁，避免后续 WASM 调用阻塞其他 Job 读取同一个 Flow。
         let (from, to, action, guard, on_exit, on_enter, is_terminal, timeouts) = {
-            let engines = self.state.versioned_engines.lock().await;
-            let engine = engines
-                .get(&(job.flow_id.clone(), job.flow_version))
+            let engine = self
+                .state
+                .flow_registry
+                .versioned_engine(&job.flow_id, job.flow_version)
+                .await
                 .ok_or_else(|| Status::internal("engine not found for flow"))?;
             let result = engine
                 .process_event(&job.current_state, &event)
@@ -202,16 +202,21 @@ impl JobServiceImpl {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let mut action_failures = Vec::new();
-        for (action_name, action_state) in [
-            on_exit.as_deref().map(|name| (name, from.as_str())),
-            action.as_deref().map(|name| (name, to.as_str())),
-            on_enter.as_deref().map(|name| (name, to.as_str())),
-        ]
-        .into_iter()
-        .flatten()
-        {
+        for scheduled in action_sequence(
+            from.as_str(),
+            to.as_str(),
+            on_exit.as_deref(),
+            action.as_deref(),
+            on_enter.as_deref(),
+        ) {
             if let Some(message) = self
-                .run_declared_action(&flow, action_name, job.id, action_state, payload.clone())
+                .run_declared_action(
+                    &flow,
+                    scheduled.action_name(),
+                    job.id,
+                    scheduled.action_state(),
+                    payload.clone(),
+                )
                 .await?
             {
                 action_failures.push(message);
@@ -450,20 +455,11 @@ fn execution_status_name(status: ExecutionStatus) -> &'static str {
     }
 }
 
-fn parse_uuid(s: &str) -> Result<Uuid, Status> {
-    s.parse::<Uuid>()
-        .map_err(|_| Status::invalid_argument(format!("invalid UUID: {s}")))
-}
-
-fn event_kind_name(kind: &EventKind) -> &'static str {
-    match kind {
-        EventKind::Created { .. } => "created",
-        EventKind::Transition { .. } => "transition",
-        EventKind::ActionComplete { .. } => "action_complete",
-        EventKind::Paused => "paused",
-        EventKind::Resumed => "resumed",
-        EventKind::Cancelled => "cancelled",
-        EventKind::Completed { .. } => "completed",
+fn map_delete_job_error(error: ShirohaError) -> Status {
+    match error {
+        ShirohaError::JobNotFound(_) => Status::not_found(error.to_string()),
+        ShirohaError::InvalidJobState { .. } => Status::failed_precondition(error.to_string()),
+        _ => Status::internal(error.to_string()),
     }
 }
 
@@ -565,11 +561,7 @@ impl JobService for JobServiceImpl {
             .job_manager
             .delete_job(job_id)
             .await
-            .map_err(|e| match e {
-                ShirohaError::JobNotFound(_) => Status::not_found(e.to_string()),
-                ShirohaError::InvalidJobState { .. } => Status::failed_precondition(e.to_string()),
-                _ => Status::internal(e.to_string()),
-            })?;
+            .map_err(map_delete_job_error)?;
         self.state.timer_wheel.cancel_all_job_timers(job_id).await;
         self.remove_job_lock(job_id).await;
 
@@ -651,63 +643,15 @@ impl JobService for JobServiceImpl {
         &self,
         request: Request<GetJobEventsRequest>,
     ) -> Result<Response<GetJobEventsResponse>, Status> {
-        let req = request.into_inner();
-        let job_id = parse_uuid(&req.job_id)?;
-        if req.since_id.is_some() && req.since_timestamp_ms.is_some() {
-            return Err(Status::invalid_argument(
-                "`since_id` and `since_timestamp_ms` cannot be used together",
-            ));
-        }
-        if req.limit == Some(0) {
-            return Err(Status::invalid_argument("`limit` must be greater than 0"));
-        }
-        if let Some(kind) = req.kind.iter().find(|kind| {
-            !matches!(
-                kind.as_str(),
-                "created"
-                    | "transition"
-                    | "action_complete"
-                    | "paused"
-                    | "resumed"
-                    | "cancelled"
-                    | "completed"
-            )
-        }) {
-            return Err(Status::invalid_argument(format!(
-                "unknown event kind filter: {kind}"
-            )));
-        }
+        let query = validate_query(request.into_inner())?;
 
-        let mut events = self
+        let events = self
             .state
             .job_manager
-            .get_events(job_id)
+            .get_events(query.job_id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
-        if let Some(since_id) = req.since_id {
-            let cursor = parse_uuid(&since_id)?;
-            let Some(index) = events.iter().position(|event| event.id == cursor) else {
-                return Err(Status::invalid_argument(format!(
-                    "event `{since_id}` not found for job `{}`",
-                    req.job_id
-                )));
-            };
-            events.drain(..=index);
-        }
-        if let Some(since_timestamp_ms) = req.since_timestamp_ms {
-            events.retain(|event| event.timestamp_ms > since_timestamp_ms);
-        }
-        if !req.kind.is_empty() {
-            let kinds = req
-                .kind
-                .iter()
-                .map(String::as_str)
-                .collect::<std::collections::HashSet<_>>();
-            events.retain(|event| kinds.contains(event_kind_name(&event.kind)));
-        }
-        if let Some(limit) = req.limit {
-            events.truncate(limit as usize);
-        }
+        let events = filter_events(events, &query)?;
 
         let records = events
             .iter()
@@ -728,152 +672,16 @@ impl JobService for JobServiceImpl {
 
 #[cfg(test)]
 mod tests {
-    use tokio::time::{Duration, sleep, timeout};
-
     use super::*;
-    use crate::flow_service::FlowServiceImpl;
     use crate::test_support::{
-        TestHarness, approval_manifest, timeout_manifest, wasm_for_manifest,
+        TestHarness, approval_manifest, approval_manifest_to, deploy_flow, register_flow_version,
+        timeout_manifest, wait_for_job,
     };
     use shiroha_core::event::EventKind;
     use shiroha_core::flow::{
-        ActionDef, DispatchMode, FlowManifest, FlowRegistration, FlowWorld, StateDef, StateKind,
-        TransitionDef,
+        ActionDef, DispatchMode, FlowManifest, FlowWorld, StateDef, StateKind, TransitionDef,
     };
-    use shiroha_core::storage::Storage;
-    use shiroha_engine::engine::StateMachineEngine;
     use shiroha_proto::shiroha_api::DeleteJobRequest;
-    use shiroha_proto::shiroha_api::flow_service_server::FlowService;
-
-    async fn deploy_flow(
-        state: Arc<ShirohaState>,
-        flow_id: &str,
-        manifest: &shiroha_core::flow::FlowManifest,
-    ) {
-        let flow_service = FlowServiceImpl::new(state);
-        flow_service
-            .deploy_flow(Request::new(
-                shiroha_proto::shiroha_api::DeployFlowRequest {
-                    flow_id: flow_id.to_string(),
-                    wasm_bytes: wasm_for_manifest(manifest),
-                },
-            ))
-            .await
-            .expect("deploy flow");
-    }
-
-    async fn register_flow_version(
-        state: Arc<ShirohaState>,
-        flow_id: &str,
-        version: Uuid,
-        manifest: FlowManifest,
-    ) -> FlowRegistration {
-        let registration = FlowRegistration {
-            flow_id: flow_id.to_string(),
-            version,
-            manifest: manifest.clone(),
-            // 版本绑定测试只需要 flow/engine 选择，不需要真实 wasm 调用。
-            wasm_hash: format!("test-{flow_id}-{version}"),
-        };
-
-        state
-            .storage
-            .save_flow(&registration)
-            .await
-            .expect("save flow");
-        state
-            .flow_versions
-            .lock()
-            .await
-            .insert((flow_id.to_string(), version), registration.clone());
-        state.versioned_engines.lock().await.insert(
-            (flow_id.to_string(), version),
-            StateMachineEngine::new(manifest.clone()),
-        );
-
-        let replace_latest = state
-            .flows
-            .lock()
-            .await
-            .get(flow_id)
-            .is_none_or(|existing| version > existing.version);
-        if replace_latest {
-            state
-                .flows
-                .lock()
-                .await
-                .insert(flow_id.to_string(), registration.clone());
-            state
-                .engines
-                .lock()
-                .await
-                .insert(flow_id.to_string(), StateMachineEngine::new(manifest));
-        }
-
-        registration
-    }
-
-    async fn wait_for_job(
-        service: &JobServiceImpl,
-        job_id: &str,
-        expected_state: &str,
-        expected_current_state: &str,
-    ) -> GetJobResponse {
-        timeout(Duration::from_millis(400), async {
-            loop {
-                let job = service
-                    .get_job(Request::new(GetJobRequest {
-                        job_id: job_id.to_string(),
-                    }))
-                    .await
-                    .expect("get job")
-                    .into_inner();
-                if job.state == expected_state && job.current_state == expected_current_state {
-                    break job;
-                }
-                sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("job should reach expected state")
-    }
-
-    fn approval_manifest_to(flow_id: &str, terminal_state: &str) -> FlowManifest {
-        FlowManifest {
-            id: flow_id.to_string(),
-            host_world: FlowWorld::Sandbox,
-            states: vec![
-                StateDef {
-                    name: "idle".into(),
-                    kind: StateKind::Normal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-                StateDef {
-                    name: terminal_state.into(),
-                    kind: StateKind::Terminal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-            ],
-            transitions: vec![TransitionDef {
-                from: "idle".into(),
-                to: terminal_state.into(),
-                event: "approve".into(),
-                guard: None,
-                action: Some("ship".into()),
-                timeout: None,
-            }],
-            initial_state: "idle".into(),
-            actions: vec![ActionDef {
-                name: "ship".into(),
-                dispatch: DispatchMode::Local,
-                capabilities: Vec::new(),
-            }],
-        }
-    }
 
     fn initial_on_enter_manifest(flow_id: &str) -> FlowManifest {
         FlowManifest {
@@ -1317,7 +1125,7 @@ mod tests {
         let mut first = approval_manifest_to("approval", "done");
         first.transitions[0].action = None;
         first.actions.clear();
-        register_flow_version(harness.state.clone(), "approval", Uuid::now_v7(), first).await;
+        register_flow_version(&harness.state, "approval", Uuid::now_v7(), first).await;
 
         let service = JobServiceImpl::new(harness.state.clone());
         let old_job = service
@@ -1332,7 +1140,7 @@ mod tests {
         let mut second = approval_manifest_to("approval", "rerouted");
         second.transitions[0].action = None;
         second.actions.clear();
-        register_flow_version(harness.state.clone(), "approval", Uuid::now_v7(), second).await;
+        register_flow_version(&harness.state, "approval", Uuid::now_v7(), second).await;
 
         let new_job = service
             .create_job(Request::new(CreateJobRequest {
