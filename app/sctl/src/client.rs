@@ -99,9 +99,13 @@ impl ShirohaClient {
         &mut self,
         flow_id: &str,
         context: Option<Vec<u8>>,
+        max_lifetime_ms: Option<u64>,
         json_output: bool,
     ) -> anyhow::Result<()> {
-        let resp = self.api.create_job(flow_id, context.clone()).await?;
+        let resp = self
+            .api
+            .create_job(flow_id, context.clone(), max_lifetime_ms)
+            .await?;
         job_presenter::render_create_job_result(
             &resp.job_id,
             flow_id,

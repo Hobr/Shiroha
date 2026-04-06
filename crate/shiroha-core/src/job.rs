@@ -71,6 +71,12 @@ pub struct Job {
     /// timeout 倒计时起点（毫秒时间戳）；paused 或没有 timeout 时为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_anchor_ms: Option<u64>,
+    /// 可选的 Job 最大生存时长（毫秒）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_lifetime_ms: Option<u64>,
+    /// wall-clock 生命周期截止时间（毫秒时间戳）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime_deadline_ms: Option<u64>,
 }
 
 /// Action 执行状态

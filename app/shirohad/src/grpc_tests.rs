@@ -104,6 +104,7 @@ async fn grpc_round_trip_flow_and_job_execution() {
         .create_job(CreateJobRequest {
             flow_id: "grpc-approval".into(),
             context: Some(vec![1, 2, 3]),
+            max_lifetime_ms: None,
         })
         .await
         .expect("create job")
@@ -164,6 +165,7 @@ async fn grpc_pause_resume_processes_queued_event() {
         .create_job(CreateJobRequest {
             flow_id: "grpc-approval".into(),
             context: None,
+            max_lifetime_ms: None,
         })
         .await
         .expect("create job")
@@ -218,6 +220,7 @@ async fn grpc_timer_event_completes_job() {
         .create_job(CreateJobRequest {
             flow_id: "grpc-timer".into(),
             context: None,
+            max_lifetime_ms: None,
         })
         .await
         .expect("create job")
@@ -267,6 +270,7 @@ async fn grpc_simple_example_component_runs_end_to_end() {
         .create_job(CreateJobRequest {
             flow_id: "simple".into(),
             context: Some(b"demo-request".to_vec()),
+            max_lifetime_ms: None,
         })
         .await
         .expect("create job")
@@ -303,6 +307,7 @@ async fn grpc_advanced_example_runs_supported_submit_path() {
         .create_job(CreateJobRequest {
             flow_id: "advanced".into(),
             context: Some(b"quote-request".to_vec()),
+            max_lifetime_ms: None,
         })
         .await
         .expect("create job")
@@ -369,6 +374,7 @@ async fn grpc_subprocess_examples_support_manual_parent_child_progression() {
         .create_job(CreateJobRequest {
             flow_id: "legal-review-demo".into(),
             context: None,
+            max_lifetime_ms: None,
         })
         .await
         .expect("create child job")
@@ -386,6 +392,7 @@ async fn grpc_subprocess_examples_support_manual_parent_child_progression() {
         .create_job(CreateJobRequest {
             flow_id: "purchase-parent-demo".into(),
             context: None,
+            max_lifetime_ms: None,
         })
         .await
         .expect("create parent job")
