@@ -10,6 +10,7 @@ use tracing_subscriber::EnvFilter;
 pub mod job_service;
 
 mod flow_service;
+mod flow_registry;
 #[cfg(test)]
 mod grpc_tests;
 mod server;

@@ -77,21 +77,17 @@ impl JobServiceImpl {
 
     async fn flow_registration(&self, flow_id: &str) -> Result<FlowRegistration, Status> {
         self.state
-            .flows
-            .lock()
+            .flow_registry
+            .latest_registration(flow_id)
             .await
-            .get(flow_id)
-            .cloned()
             .ok_or_else(|| Status::internal(format!("flow `{flow_id}` not loaded in memory")))
     }
 
     async fn flow_registration_for_job(&self, job: &Job) -> Result<FlowRegistration, Status> {
         self.state
-            .flow_versions
-            .lock()
+            .flow_registry
+            .versioned_registration(&job.flow_id, job.flow_version)
             .await
-            .get(&(job.flow_id.clone(), job.flow_version))
-            .cloned()
             .ok_or_else(|| {
                 Status::internal(format!(
                     "flow `{}` version {} not loaded in memory",
@@ -139,9 +135,11 @@ impl JobServiceImpl {
         // 只在 engine 锁里完成“查拓扑、算下一步”这类纯读操作，
         // 拿到执行计划后立刻释放锁，避免后续 WASM 调用阻塞其他 Job 读取同一个 Flow。
         let (from, to, action, guard, on_exit, on_enter, is_terminal, timeouts) = {
-            let engines = self.state.versioned_engines.lock().await;
-            let engine = engines
-                .get(&(job.flow_id.clone(), job.flow_version))
+            let engine = self
+                .state
+                .flow_registry
+                .versioned_engine(&job.flow_id, job.flow_version)
+                .await
                 .ok_or_else(|| Status::internal("engine not found for flow"))?;
             let result = engine
                 .process_event(&job.current_state, &event)

@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use shiroha_core::flow::{FlowRegistration, FlowWorld};
 use shiroha_core::storage::Storage;
-use shiroha_engine::engine::StateMachineEngine;
 use shiroha_engine::validator::{FlowValidator, ValidationWarning};
 use shiroha_proto::shiroha_api::flow_service_server::FlowService;
 use shiroha_proto::shiroha_api::{
@@ -216,27 +215,7 @@ impl FlowService for FlowServiceImpl {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         self.state.module_cache.insert(wasm_module);
-        self.state
-            .flows
-            .lock()
-            .await
-            .insert(flow_id.clone(), registration.clone());
-        self.state
-            .flow_versions
-            .lock()
-            .await
-            .insert((flow_id.clone(), version), registration);
-        let versioned_engine = StateMachineEngine::new(manifest.clone());
-        self.state
-            .engines
-            .lock()
-            .await
-            .insert(flow_id.clone(), StateMachineEngine::new(manifest));
-        self.state
-            .versioned_engines
-            .lock()
-            .await
-            .insert((flow_id.clone(), version), versioned_engine);
+        self.state.flow_registry.register(registration).await;
 
         tracing::info!(flow_id, %version, "flow deployed");
 
@@ -349,18 +328,7 @@ impl FlowService for FlowServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        self.state.flows.lock().await.remove(&flow_id);
-        self.state.engines.lock().await.remove(&flow_id);
-        self.state
-            .flow_versions
-            .lock()
-            .await
-            .retain(|(candidate, _), _| candidate != &flow_id);
-        self.state
-            .versioned_engines
-            .lock()
-            .await
-            .retain(|(candidate, _), _| candidate != &flow_id);
+        self.state.flow_registry.remove_flow(&flow_id).await;
 
         tracing::info!(flow_id, version = %flow.version, "flow deleted");
 
@@ -644,16 +612,21 @@ mod tests {
                 .expect("get flow")
                 .is_none()
         );
-        assert!(!harness.state.flows.lock().await.contains_key("demo-flow"));
-        assert!(!harness.state.engines.lock().await.contains_key("demo-flow"));
         assert!(
-            !harness
+            harness
                 .state
-                .flow_versions
-                .lock()
+                .flow_registry
+                .latest_registration("demo-flow")
                 .await
-                .keys()
-                .any(|(flow_id, _)| flow_id == "demo-flow")
+                .is_none()
+        );
+        assert!(
+            harness
+                .state
+                .flow_registry
+                .latest_engine("demo-flow")
+                .await
+                .is_none()
         );
     }
 
