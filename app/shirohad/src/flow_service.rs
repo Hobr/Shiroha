@@ -19,6 +19,7 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::server::ShirohaState;
+use crate::service_support::parse_uuid;
 
 pub struct FlowServiceImpl {
     state: Arc<ShirohaState>,
@@ -267,9 +268,7 @@ impl FlowService for FlowServiceImpl {
         let req = request.into_inner();
         let flow_id = req.flow_id;
         let flow = if let Some(version) = req.version {
-            let version = version
-                .parse::<Uuid>()
-                .map_err(|_| Status::invalid_argument(format!("invalid UUID: {version}")))?;
+            let version = parse_uuid(&version)?;
             self.state
                 .storage
                 .get_flow_version(&flow_id, version)
