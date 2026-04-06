@@ -541,7 +541,7 @@ macro_rules! generate_full_flow {
 
 #[macro_export]
 macro_rules! action_ok {
-    ($output:expr) => {
+    ($output:expr $(,)?) => {
         ActionResult {
             status: ExecutionStatus::Success,
             output: $output,
@@ -551,7 +551,7 @@ macro_rules! action_ok {
 
 #[macro_export]
 macro_rules! action_fail {
-    ($output:expr) => {
+    ($output:expr $(,)?) => {
         ActionResult {
             status: ExecutionStatus::Failed,
             output: $output,
@@ -561,7 +561,7 @@ macro_rules! action_fail {
 
 #[macro_export]
 macro_rules! aggregate_event {
-    ($event:expr, $context_patch:expr) => {
+    ($event:expr, $context_patch:expr $(,)?) => {
         AggregateDecision {
             event: $event,
             context_patch: $context_patch,
@@ -665,7 +665,6 @@ macro_rules! fanout_action {
         aggregator: $aggregator:expr
         $(, timeout_ms: $timeout_ms:expr)?
         $(, min_success: $min_success:expr)?
-        $(, caps: [$($capability:ident),* $(,)?])?
         $(,)?
     ) => {
         $crate::flow_action!(
@@ -676,7 +675,26 @@ macro_rules! fanout_action {
                 timeout_ms: $crate::__sdk_option_expr!($($timeout_ms)?),
                 min_success: $crate::__sdk_option_expr!($($min_success)?),
             })
-            $(, caps: [$($($capability),*)?])?
+        )
+    };
+    (
+        $name:expr,
+        strategy: $strategy:expr,
+        aggregator: $aggregator:expr
+        $(, timeout_ms: $timeout_ms:expr)?
+        $(, min_success: $min_success:expr)?
+        , caps: [$($capability:ident),* $(,)?]
+        $(,)?
+    ) => {
+        $crate::flow_action!(
+            $name,
+            DispatchMode::FanOut(FanOutConfig {
+                strategy: $strategy,
+                aggregator: $aggregator.to_string(),
+                timeout_ms: $crate::__sdk_option_expr!($($timeout_ms)?),
+                min_success: $crate::__sdk_option_expr!($($min_success)?),
+            }),
+            caps: [$($capability),*]
         )
     };
 }

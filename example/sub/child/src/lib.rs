@@ -1,70 +1,38 @@
 shiroha_sdk::generate_flow!();
+use shiroha_sdk::prelude::*;
 
 struct ChildFlow;
 
 impl Guest for ChildFlow {
     fn get_manifest() -> FlowManifest {
-        FlowManifest {
-            id: "legal-review-demo".to_string(),
-            host_world: FlowWorld::Sandbox,
+        flow_manifest! {
+            id: "legal-review-demo",
+            world: Sandbox,
             states: vec![
-                StateDef {
-                    name: "review-pending".to_string(),
-                    kind: StateKind::Normal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-                StateDef {
-                    name: "approved".to_string(),
-                    kind: StateKind::Terminal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-                StateDef {
-                    name: "rejected".to_string(),
-                    kind: StateKind::Terminal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
+                flow_state!("review-pending", Normal),
+                flow_state!("approved", Terminal),
+                flow_state!("rejected", Terminal),
             ],
             transitions: vec![
-                TransitionDef {
-                    from: "review-pending".to_string(),
-                    to: "approved".to_string(),
-                    event: "approve".to_string(),
-                    guard: Some("allow-approval".to_string()),
-                    action: Some("record-approval".to_string()),
-                    timeout: None,
-                },
-                TransitionDef {
-                    from: "review-pending".to_string(),
-                    to: "rejected".to_string(),
-                    event: "reject".to_string(),
-                    guard: None,
-                    action: Some("record-rejection".to_string()),
-                    timeout: None,
-                },
+                flow_transition!(
+                    "review-pending",
+                    "approve",
+                    "approved",
+                    guard: "allow-approval",
+                    action: "record-approval"
+                ),
+                flow_transition!(
+                    "review-pending",
+                    "reject",
+                    "rejected",
+                    action: "record-rejection"
+                ),
             ],
-            initial_state: "review-pending".to_string(),
+            initial_state: "review-pending",
             actions: vec![
-                ActionDef {
-                    name: "record-approval".to_string(),
-                    dispatch: DispatchMode::Local,
-                    capabilities: Vec::new(),
-                },
-                ActionDef {
-                    name: "record-rejection".to_string(),
-                    dispatch: DispatchMode::Local,
-                    capabilities: Vec::new(),
-                },
-                ActionDef {
-                    name: "allow-approval".to_string(),
-                    dispatch: DispatchMode::Local,
-                    capabilities: Vec::new(),
-                },
+                local_action!("record-approval"),
+                local_action!("record-rejection"),
+                local_action!("allow-approval"),
             ],
         }
     }
@@ -73,16 +41,10 @@ impl Guest for ChildFlow {
         let summary = match name.as_str() {
             "record-approval" => format!("child approved job={} state={}", ctx.job_id, ctx.state),
             "record-rejection" => format!("child rejected job={} state={}", ctx.job_id, ctx.state),
-            other => return ActionResult {
-                status: ExecutionStatus::Failed,
-                output: Some(format!("unknown action: {other}").into_bytes()),
-            },
+            other => return action_fail!(Some(format!("unknown action: {other}").into_bytes())),
         };
 
-        ActionResult {
-            status: ExecutionStatus::Success,
-            output: Some(summary.into_bytes()),
-        }
+        action_ok!(Some(summary.into_bytes()))
     }
 
     fn invoke_guard(name: String, ctx: GuardContext) -> bool {
@@ -93,10 +55,7 @@ impl Guest for ChildFlow {
     }
 
     fn aggregate(name: String, _results: Vec<NodeResult>) -> AggregateDecision {
-        AggregateDecision {
-            event: format!("unsupported-aggregate:{name}"),
-            context_patch: None,
-        }
+        aggregate_event!(format!("unsupported-aggregate:{name}"), None)
     }
 }
 
