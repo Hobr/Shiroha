@@ -2,6 +2,8 @@
 //!
 //! 这里集中放 server harness、临时数据目录、WASM fixture 构造和
 //! UDS gRPC 连接逻辑，避免各测试文件重复搭基础设施。
+//! 其中 runtime helper 的 flow metadata 注册路径会复用生产侧同一个
+//! `FlowRegistry` 入口，避免测试代码旁路内存 registry 更新逻辑。
 
 use std::path::PathBuf;
 use std::sync::Arc;
