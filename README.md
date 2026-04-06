@@ -13,8 +13,24 @@ cargo install just cargo-binstall
 sudo apt update
 sudo apt install -y protobuf-compiler libprotobuf-dev pre-commit
 
-# 安装开发工具:
+# 安装开发工具
 just install-dev
+
+# 构建
+just build
+
+# 开发
+just check
+just fmt
+just test
+just doc
+just coverage
+
+# 生产构建
+just release
+
+# 升级
+just update
 ```
 
 ## 快速开始
@@ -150,16 +166,16 @@ just sctl complete zsh --print-path
 
 ## Guest SDK
 
-Rust guest component 现在可以优先依赖 `shiroha-sdk`，而不是在每个 component 里直接写 `wit_bindgen::generate!`。
+Rust guest component 现在可以优先依赖 `shiroha-sdk`, 而不是在每个 component 里直接写 `wit_bindgen::generate!`
 
-常见入口：
+常见入口
 
 - `shiroha_sdk::generate_flow!()`
 - `shiroha_sdk::generate_network_flow!()`
 - `shiroha_sdk::generate_storage_flow!()`
 - `shiroha_sdk::generate_full_flow!()`
 
-例如最小 guest 可以这样起步：
+例如最小 guest 可以这样起步
 
 ```rust
 shiroha_sdk::generate_flow!();
@@ -194,8 +210,8 @@ impl Guest for MyFlow {
 export!(MyFlow);
 ```
 
-也就是说，guest crate 不再需要自己直接声明 `wit-bindgen` 依赖。
-canonical WIT 定义现在位于 `crate/shiroha-wit/wit/*`，`shiroha-sdk` 和宿主侧测试都从这里共享。
+也就是说, guest crate 不再需要自己直接声明 `wit-bindgen` 依赖
+canonical WIT 定义现在位于 `crate/shiroha-wit/wit/*`, `shiroha-sdk` 和宿主侧测试都从这里共享
 
 ## 开发说明
 

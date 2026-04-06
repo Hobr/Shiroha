@@ -45,12 +45,12 @@ build-example: build-example-simple build-example-advanced build-example-warning
 build: build-sctl build-shirohad build-example
 release: release-sctl release-shirohad build-example
 
+install-dev:
+    cargo binstall cargo-deny cargo-nextest cargo-update cargo-llvm-cov wasmtime-cli -y --force
+    cargo deny fetch
+
 check:
     cargo check --workspace
-
-install-dev:
-    cargo binstall cargo-deny cargo-nextest cargo-update wasmtime-cli -y --force
-    cargo deny fetch
 
 fmt:
     cargo fmt
