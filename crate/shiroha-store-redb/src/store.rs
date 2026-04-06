@@ -9,6 +9,11 @@
 //! - `wasm_modules`: wasm_hash (str) → 原始 wasm bytes
 //! - `jobs`: job_id (16 bytes UUID) → Job (JSON bytes)
 //! - `events`: job_id+event_id (32 bytes) → EventRecord (JSON bytes)
+//!
+//! ## 升级兼容性
+//!
+//! `flow_versions` 表的键格式在引入十六进制编码前曾直接拼接原始 flow_id 字符串。
+//! 打开数据库时会自动将旧格式键迁移到新格式，不需要手动操作。
 
 use std::path::Path;
 use std::sync::Arc;
@@ -39,7 +44,7 @@ pub struct RedbStorage {
 }
 
 impl RedbStorage {
-    /// 打开或创建数据库，自动建表
+    /// 打开或创建数据库，自动建表，并执行必要的 schema 迁移
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         let db = Database::create(path).map_err(s)?;
         // 首次启动时确保所有表存在
@@ -51,7 +56,58 @@ impl RedbStorage {
         let _ = txn.open_table(EVENTS_TABLE).map_err(s)?;
         let _ = txn.open_table(KV_TABLE).map_err(s)?;
         txn.commit().map_err(s)?;
-        Ok(Self { db: Arc::new(db) })
+
+        let storage = Self { db: Arc::new(db) };
+        storage.migrate_flow_version_keys()?;
+        Ok(storage)
+    }
+
+    /// 将 flow_versions 表中旧格式键（`flow_id\0version`）迁移到新格式（`hex(flow_id)\0version`）。
+    ///
+    /// 旧格式直接拼接 flow_id 字符串，存在前缀冲突风险（如 `ab\0` 与 `a\0` 的 range scan 会互相干扰）。
+    /// 新格式先对 flow_id 进行十六进制编码，保证任意 flow_id 值都能安全区间扫描。
+    ///
+    /// 迁移逻辑：扫描全表，解码 JSON 值取出 `flow_id` 和 `version`，
+    /// 若当前键与预期的新格式键不一致，则删除旧键并写入新键。
+    fn migrate_flow_version_keys(&self) -> Result<()> {
+        // First pass: collect all entries that need migration (read-only)
+        let to_migrate: Vec<(String, Vec<u8>)> = {
+            let txn = self.db.begin_read().map_err(s)?;
+            let table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+            let mut entries = Vec::new();
+            for item in table.iter().map_err(s)? {
+                let (k, v) = item.map_err(s)?;
+                let stored_key = k.value().to_string();
+                let data = v.value().to_vec();
+                let flow: FlowRegistration = match serde_json::from_slice(&data) {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+                let expected_key = Self::flow_version_key(&flow.flow_id, flow.version);
+                if stored_key != expected_key {
+                    entries.push((stored_key, data));
+                }
+            }
+            entries
+        };
+
+        if to_migrate.is_empty() {
+            return Ok(());
+        }
+
+        // Second pass: rewrite keys in a single write transaction
+        let txn = self.db.begin_write().map_err(s)?;
+        {
+            let mut table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+            for (old_key, data) in to_migrate {
+                let flow: FlowRegistration = serde_json::from_slice(&data).map_err(s)?;
+                let new_key = Self::flow_version_key(&flow.flow_id, flow.version);
+                table.remove(old_key.as_str()).map_err(s)?;
+                table.insert(new_key.as_str(), data.as_slice()).map_err(s)?;
+            }
+        }
+        txn.commit().map_err(s)?;
+        Ok(())
     }
 
     /// 事件表的复合键：job_id (16B) + event_id (16B) = 32B
@@ -878,6 +934,57 @@ mod tests {
             None
         );
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// 验证旧格式键（`flow_id\0version`）在重新打开数据库时被自动迁移到新格式。
+    ///
+    /// 模拟升级前写入的数据：直接向 flow_versions 表写入旧格式键，
+    /// 重新打开数据库后应能通过新格式正常读取。
+    #[tokio::test]
+    async fn migrate_flow_version_keys_on_reopen() {
+        let path = temp_db_path("migrate-keys");
+        let flow = sample_flow_registration();
+        let data = serde_json::to_vec(&flow).expect("serialize flow");
+
+        // Write an entry with the old key format (plain flow_id + \0 + version)
+        {
+            let db = redb::Database::create(&path).expect("create db");
+            let txn = db.begin_write().expect("begin write");
+            let _ = txn.open_table(FLOWS_TABLE).expect("open flows");
+            {
+                let mut table = txn.open_table(FLOW_VERSIONS_TABLE).expect("open versions");
+                let old_key = format!("{}\u{0}{}", flow.flow_id, flow.version);
+                table
+                    .insert(old_key.as_str(), data.as_slice())
+                    .expect("insert old key");
+            }
+            let _ = txn.open_table(WASM_MODULES_TABLE).expect("open wasm");
+            let _ = txn.open_table(JOBS_TABLE).expect("open jobs");
+            let _ = txn.open_table(EVENTS_TABLE).expect("open events");
+            let _ = txn.open_table(KV_TABLE).expect("open kv");
+            txn.commit().expect("commit");
+        }
+
+        // Reopen via RedbStorage — migration should run automatically
+        let storage = RedbStorage::new(&path).expect("reopen db");
+
+        // The record must be findable under the new key format
+        let found = storage
+            .get_flow_version(&flow.flow_id, flow.version)
+            .await
+            .expect("get flow version after migration")
+            .expect("flow version should exist after migration");
+        assert_eq!(found.flow_id, flow.flow_id);
+        assert_eq!(found.version, flow.version);
+
+        let versions = storage
+            .list_flow_versions_for(&flow.flow_id)
+            .await
+            .expect("list versions after migration");
+        assert_eq!(versions.len(), 1);
+
+        drop(storage);
         let _ = std::fs::remove_file(path);
     }
 }
