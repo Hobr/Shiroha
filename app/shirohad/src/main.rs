@@ -12,6 +12,7 @@ pub mod job_service;
 mod flow_service;
 mod flow_registry;
 mod job_events;
+mod job_runtime;
 #[cfg(test)]
 mod grpc_tests;
 mod server;
