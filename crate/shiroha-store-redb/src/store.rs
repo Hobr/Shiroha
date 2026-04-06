@@ -68,6 +68,18 @@ impl RedbStorage {
         format!("{flow_id}\u{0}{version}")
     }
 
+    fn flow_version_prefix_bounds(flow_id: &str) -> (String, String) {
+        (format!("{flow_id}\u{0}"), format!("{flow_id}\u{1}"))
+    }
+
+    fn event_key_range(job_id: Uuid) -> ([u8; 32], [u8; 32]) {
+        let mut start = [0u8; 32];
+        let mut end = [0xFFu8; 32];
+        start[..16].copy_from_slice(job_id.as_bytes());
+        end[..16].copy_from_slice(job_id.as_bytes());
+        (start, end)
+    }
+
     fn kv_key(namespace: &str, key: &str) -> String {
         format!("{namespace}\u{0}{key}")
     }
@@ -128,6 +140,19 @@ impl Storage for RedbStorage {
         let table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
         let mut flows = Vec::new();
         for entry in table.iter().map_err(s)? {
+            let (_, v) = entry.map_err(s)?;
+            let flow: FlowRegistration = serde_json::from_slice(v.value()).map_err(s)?;
+            flows.push(flow);
+        }
+        Ok(flows)
+    }
+
+    async fn list_flow_versions_for(&self, flow_id: &str) -> Result<Vec<FlowRegistration>> {
+        let txn = self.db.begin_read().map_err(s)?;
+        let table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+        let (start, end) = Self::flow_version_prefix_bounds(flow_id);
+        let mut flows = Vec::new();
+        for entry in table.range(start.as_str()..end.as_str()).map_err(s)? {
             let (_, v) = entry.map_err(s)?;
             let flow: FlowRegistration = serde_json::from_slice(v.value()).map_err(s)?;
             flows.push(flow);
@@ -301,17 +326,15 @@ impl Storage for RedbStorage {
     async fn get_events(&self, job_id: Uuid) -> Result<Vec<EventRecord>> {
         let txn = self.db.begin_read().map_err(s)?;
         let table = txn.open_table(EVENTS_TABLE).map_err(s)?;
-        let prefix = job_id.as_bytes();
+        let (start, end) = Self::event_key_range(job_id);
         let mut events = Vec::new();
-        // 当前实现没有额外的 job_id 二级索引，因此直接扫描 events 表，
-        // 再利用复合键前 16 字节等于 job_id 的特性做过滤。
-        for entry in table.iter().map_err(s)? {
-            let (k, v) = entry.map_err(s)?;
-            let key_bytes: &[u8] = k.value();
-            if key_bytes.len() >= 16 && key_bytes[..16] == *prefix.as_slice() {
-                let event: EventRecord = serde_json::from_slice(v.value()).map_err(s)?;
-                events.push(event);
-            }
+        for entry in table
+            .range(start.as_slice()..=end.as_slice())
+            .map_err(s)?
+        {
+            let (_, v) = entry.map_err(s)?;
+            let event: EventRecord = serde_json::from_slice(v.value()).map_err(s)?;
+            events.push(event);
         }
         // 对外统一按事件发生时间返回，避免上层依赖底层 B-tree 迭代顺序。
         events.sort_by_key(|e: &EventRecord| e.timestamp_ms);
@@ -444,6 +467,13 @@ mod tests {
                 }],
             },
             wasm_hash: "hash-demo".into(),
+        }
+    }
+
+    fn sample_flow_registration_with_id(flow_id: &str) -> FlowRegistration {
+        FlowRegistration {
+            flow_id: flow_id.to_string(),
+            ..sample_flow_registration()
         }
     }
 
@@ -580,6 +610,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_flow_versions_for_returns_only_matching_flow() {
+        let path = temp_db_path("flow-versions-for");
+        let alpha_v1 = sample_flow_registration_with_id("alpha");
+        let alpha_v2 = FlowRegistration {
+            version: Uuid::now_v7(),
+            wasm_hash: "hash-alpha-v2".into(),
+            ..alpha_v1.clone()
+        };
+        let beta_v1 = sample_flow_registration_with_id("beta");
+        let storage = RedbStorage::new(&path).expect("open db");
+
+        storage.save_flow(&alpha_v1).await.expect("save alpha v1");
+        storage.save_flow(&alpha_v2).await.expect("save alpha v2");
+        storage.save_flow(&beta_v1).await.expect("save beta v1");
+
+        let versions = storage
+            .list_flow_versions_for("alpha")
+            .await
+            .expect("list alpha versions");
+
+        assert_eq!(versions.len(), 2);
+        assert!(versions.iter().all(|flow| flow.flow_id == "alpha"));
+        assert!(versions.iter().any(|flow| flow.version == alpha_v1.version));
+        assert!(versions.iter().any(|flow| flow.version == alpha_v2.version));
+
+        drop(storage);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn get_events_returns_timestamp_sorted_records() {
         let path = temp_db_path("event-order");
         let flow = sample_flow_registration();
@@ -619,6 +679,65 @@ mod tests {
         assert!(events[0].timestamp_ms < events[1].timestamp_ms);
         assert!(matches!(events[0].kind, EventKind::Transition { .. }));
         assert!(matches!(events[1].kind, EventKind::Completed { .. }));
+
+        drop(storage);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn get_events_ignores_records_for_other_jobs_with_neighboring_keys() {
+        let path = temp_db_path("event-neighboring-keys");
+        let flow = sample_flow_registration();
+        let target_job = Job {
+            id: Uuid::from_u128(42),
+            ..sample_job(&flow)
+        };
+        let neighbor_job = Job {
+            id: Uuid::from_u128(43),
+            ..target_job.clone()
+        };
+        let storage = RedbStorage::new(&path).expect("open db");
+
+        storage.save_job(&target_job).await.expect("save target job");
+        storage
+            .save_job(&neighbor_job)
+            .await
+            .expect("save neighbor job");
+
+        storage
+            .append_event(&EventRecord {
+                id: Uuid::now_v7(),
+                job_id: target_job.id,
+                timestamp_ms: 200,
+                kind: EventKind::Completed {
+                    final_state: "done".into(),
+                },
+            })
+            .await
+            .expect("append target event");
+        storage
+            .append_event(&EventRecord {
+                id: Uuid::now_v7(),
+                job_id: neighbor_job.id,
+                timestamp_ms: 100,
+                kind: EventKind::Transition {
+                    event: "finish".into(),
+                    from: "idle".into(),
+                    to: "done".into(),
+                    action: Some("ship".into()),
+                },
+            })
+            .await
+            .expect("append neighbor event");
+
+        let events = storage
+            .get_events(target_job.id)
+            .await
+            .expect("get target events");
+
+        assert_eq!(events.len(), 1);
+        assert!(events.iter().all(|event| event.job_id == target_job.id));
+        assert!(matches!(events[0].kind, EventKind::Completed { .. }));
 
         drop(storage);
         let _ = std::fs::remove_file(path);
