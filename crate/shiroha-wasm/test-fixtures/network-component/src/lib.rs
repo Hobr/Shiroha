@@ -1,9 +1,9 @@
 wit_bindgen::generate!({
     path: "../../wit",
-    world: "flow",
+    world: "network-flow",
 });
 
-use crate::shiroha::flow::network;
+use crate::shiroha::flow::net;
 
 struct NetworkFlow;
 
@@ -35,8 +35,8 @@ impl Guest for NetworkFlow {
             };
         }
 
-        let client = network::ClientConfig {
-                default_headers: vec![network::Header {
+        let client = net::ClientConfig {
+                default_headers: vec![net::Header {
                     name: "x-default".to_string(),
                     value: "fixture".to_string(),
                 }],
@@ -56,30 +56,30 @@ impl Guest for NetworkFlow {
                 no_proxy: Some(true),
                 http1_only: Some(true),
                 http2_prior_knowledge: Some(false),
-                redirect_policy: Some(network::RedirectPolicy::None),
+                redirect_policy: Some(net::RedirectPolicy::None),
                 proxies: Vec::new(),
                 tls: None,
                 local_address: None,
             };
-        let request = network::RequestOptions {
-                method: network::HttpMethod::Get,
+        let request = net::RequestOptions {
+                method: net::HttpMethod::Get,
                 url: env!("SHIROHA_NETWORK_URL").to_string(),
-                headers: vec![network::Header {
+                headers: vec![net::Header {
                     name: "x-request".to_string(),
                     value: "network".to_string(),
                 }],
-                query: vec![network::Header {
+                query: vec![net::Header {
                     name: "lang".to_string(),
                     value: "rust".to_string(),
                 }],
-                version: Some(network::HttpVersion::Http11),
+                version: Some(net::HttpVersion::Http11),
                 timeout_ms: Some(2_000),
                 bearer_token: Some("secret-token".to_string()),
                 basic_auth: None,
                 body: None,
                 error_for_status: Some(true),
             };
-        let response = network::send(Some(&client), &request);
+        let response = net::send(Some(&client), &request);
 
         match response {
             Ok(response) => ActionResult {
