@@ -1,0 +1,137 @@
+package shiroha:flow@0.1.0;
+
+interface net {
+  record header {
+    name: string,
+    value: string,
+  }
+
+  record basic-auth {
+    username: string,
+    password: option<string>,
+  }
+
+  enum http-method {
+    get,
+    head,
+    post,
+    put,
+    delete,
+    connect,
+    options,
+    trace,
+    patch,
+  }
+
+  enum http-version {
+    default,
+    http09,
+    http10,
+    http11,
+    http2,
+    http3,
+  }
+
+  variant redirect-policy {
+    default,
+    none,
+    limited(u32),
+  }
+
+  enum proxy-scope {
+    all,
+    http,
+    https,
+  }
+
+  record proxy-config {
+    scope: proxy-scope,
+    url: string,
+    auth: option<basic-auth>,
+  }
+
+  enum tls-version {
+    tls10,
+    tls11,
+    tls12,
+    tls13,
+  }
+
+  record tls-config {
+    min-version: option<tls-version>,
+    max-version: option<tls-version>,
+    built-in-root-certs: option<bool>,
+    danger-accept-invalid-certs: option<bool>,
+    danger-accept-invalid-hostnames: option<bool>,
+    https-only: option<bool>,
+    root-certificates-pem: list<list<u8>>,
+  }
+
+  record client-config {
+    default-headers: list<header>,
+    user-agent: option<string>,
+    timeout-ms: option<u64>,
+    connect-timeout-ms: option<u64>,
+    pool-idle-timeout-ms: option<u64>,
+    pool-max-idle-per-host: option<u32>,
+    tcp-keepalive-ms: option<u64>,
+    tcp-nodelay: option<bool>,
+    referer: option<bool>,
+    gzip: option<bool>,
+    brotli: option<bool>,
+    zstd: option<bool>,
+    deflate: option<bool>,
+    cookie-store: option<bool>,
+    no-proxy: option<bool>,
+    http1-only: option<bool>,
+    http2-prior-knowledge: option<bool>,
+    redirect-policy: option<redirect-policy>,
+    proxies: list<proxy-config>,
+    tls: option<tls-config>,
+    local-address: option<string>,
+  }
+
+  record request-options {
+    method: http-method,
+    url: string,
+    headers: list<header>,
+    query: list<header>,
+    version: option<http-version>,
+    timeout-ms: option<u64>,
+    bearer-token: option<string>,
+    basic-auth: option<basic-auth>,
+    body: option<list<u8>>,
+    error-for-status: option<bool>,
+  }
+
+  record response {
+    status: u16,
+    url: string,
+    version: http-version,
+    headers: list<header>,
+    body: list<u8>,
+  }
+
+  enum error-kind {
+    invalid-url,
+    invalid-method,
+    invalid-header,
+    invalid-config,
+    builder,
+    connect,
+    timeout,
+    redirect,
+    status,
+    request,
+    decode,
+  }
+
+  record error {
+    kind: error-kind,
+    message: string,
+    status: option<u16>,
+    url: option<string>,
+  }
+
+  send: func(client: option<client-config>, request: request-options) -> result<response, error>;
+}
