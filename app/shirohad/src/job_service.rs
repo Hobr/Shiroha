@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::job_events::{filter_events, validate_query};
 use crate::server::ShirohaState;
-use crate::service_support::{map_delete_job_error, parse_uuid};
+use crate::service_support::parse_uuid;
 
 /// JobService 的 standalone 实现。
 ///
@@ -446,6 +446,16 @@ fn execution_status_name(status: ExecutionStatus) -> &'static str {
         ExecutionStatus::Success => "success",
         ExecutionStatus::Failed => "failed",
         ExecutionStatus::Timeout => "timeout",
+    }
+}
+
+fn map_delete_job_error(error: ShirohaError) -> Status {
+    match error {
+        ShirohaError::JobNotFound(_) => Status::not_found(error.to_string()),
+        ShirohaError::InvalidJobState { .. } => {
+            Status::failed_precondition(error.to_string())
+        }
+        _ => Status::internal(error.to_string()),
     }
 }
 
