@@ -9,6 +9,7 @@ impl Guest for ChildFlow {
     fn get_manifest() -> FlowManifest {
         FlowManifest {
             id: "legal-review-demo".to_string(),
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "review-pending".to_string(),

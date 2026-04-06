@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use shiroha_core::flow::FlowRegistration;
+use shiroha_core::flow::{FlowRegistration, FlowWorld};
 use shiroha_core::storage::Storage;
 use shiroha_engine::engine::StateMachineEngine;
 use shiroha_engine::validator::{FlowValidator, ValidationWarning};
@@ -26,6 +26,9 @@ pub struct FlowServiceImpl {
 }
 
 impl FlowServiceImpl {
+    const NETWORK_IMPORT: &str = "shiroha:flow/net@0.1.0";
+    const STORAGE_IMPORT: &str = "shiroha:flow/store@0.1.0";
+
     pub fn new(state: Arc<ShirohaState>) -> Self {
         Self { state }
     }
@@ -48,6 +51,75 @@ impl FlowServiceImpl {
                 | ValidationWarning::MissingGuard(_)
         )
     }
+
+    fn declared_imports_for_world(world: FlowWorld) -> &'static [&'static str] {
+        match world {
+            FlowWorld::Sandbox => &[],
+            FlowWorld::Network => &[Self::NETWORK_IMPORT],
+            FlowWorld::Storage => &[Self::STORAGE_IMPORT],
+            FlowWorld::Full => &[Self::NETWORK_IMPORT, Self::STORAGE_IMPORT],
+        }
+    }
+
+    fn validate_component_imports(
+        actual_imports: &std::collections::BTreeSet<String>,
+        declared_world: FlowWorld,
+    ) -> Result<(), Status> {
+        let declared_imports = Self::declared_imports_for_world(declared_world)
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        let unknown_imports = actual_imports
+            .difference(
+                &[
+                    Self::NETWORK_IMPORT.to_string(),
+                    Self::STORAGE_IMPORT.to_string(),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unknown_imports.is_empty() {
+            return Err(Status::invalid_argument(format!(
+                "component imports unsupported host interfaces: {}",
+                unknown_imports.join(", ")
+            )));
+        }
+
+        if *actual_imports != declared_imports {
+            let actual = if actual_imports.is_empty() {
+                "<none>".to_string()
+            } else {
+                actual_imports
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let declared = if declared_imports.is_empty() {
+                "<none>".to_string()
+            } else {
+                declared_imports
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            return Err(Status::invalid_argument(format!(
+                "manifest world `{}` does not match component imports (declared={declared}, actual={actual})",
+                match declared_world {
+                    FlowWorld::Sandbox => "sandbox",
+                    FlowWorld::Network => "network",
+                    FlowWorld::Storage => "storage",
+                    FlowWorld::Full => "full",
+                }
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 #[tonic::async_trait]
@@ -67,6 +139,12 @@ impl FlowService for FlowServiceImpl {
             .wasm_runtime
             .load_component(&wasm_bytes)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let actual_imports = component
+            .component_type()
+            .imports(self.state.wasm_runtime.engine())
+            .map(|(name, _item)| name.to_string())
+            .filter(|name| !name.starts_with("wasi:"))
+            .collect::<std::collections::BTreeSet<_>>();
 
         let wasm_module = Arc::new(WasmModule::new(component, &wasm_bytes));
 
@@ -82,6 +160,7 @@ impl FlowService for FlowServiceImpl {
         let manifest = host
             .get_manifest()
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        Self::validate_component_imports(&actual_imports, manifest.world)?;
 
         // 静态验证
         let warnings = FlowValidator::validate(&manifest);
@@ -291,7 +370,7 @@ mod tests {
     use super::*;
     use crate::job_service::JobServiceImpl;
     use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
-    use shiroha_core::flow::{FlowManifest, StateDef, StateKind, TransitionDef};
+    use shiroha_core::flow::{FlowManifest, FlowWorld, StateDef, StateKind, TransitionDef};
     use shiroha_proto::shiroha_api::job_service_server::JobService;
     use shiroha_proto::shiroha_api::{
         CreateJobRequest, DeleteFlowRequest, GetFlowRequest, ListFlowVersionsRequest,
@@ -301,6 +380,7 @@ mod tests {
     fn warning_manifest() -> FlowManifest {
         FlowManifest {
             id: "warning-demo".into(),
+            world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
@@ -350,6 +430,7 @@ mod tests {
     fn invalid_reference_manifest() -> FlowManifest {
         FlowManifest {
             id: "invalid-reference".into(),
+            world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
@@ -372,6 +453,39 @@ mod tests {
                 event: "approve".into(),
                 guard: Some("allow".into()),
                 action: Some("ship".into()),
+                timeout: None,
+            }],
+            initial_state: "idle".into(),
+            actions: Vec::new(),
+        }
+    }
+
+    fn mismatched_world_manifest() -> FlowManifest {
+        FlowManifest {
+            id: "mismatched-world".into(),
+            world: FlowWorld::Network,
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![TransitionDef {
+                from: "idle".into(),
+                to: "done".into(),
+                event: "approve".into(),
+                guard: None,
+                action: None,
                 timeout: None,
             }],
             initial_state: "idle".into(),
@@ -494,6 +608,23 @@ mod tests {
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
         assert!(error.message().contains("action `ship`"));
         assert!(error.message().contains("guard `allow`"));
+    }
+
+    #[tokio::test]
+    async fn deploy_flow_rejects_manifest_world_mismatch() {
+        let harness = TestHarness::new("flow-world-mismatch").await;
+        let service = FlowServiceImpl::new(harness.state.clone());
+
+        let error = service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "mismatched-world".into(),
+                wasm_bytes: wasm_for_manifest(&mismatched_world_manifest()),
+            }))
+            .await
+            .expect_err("world mismatch should fail deploy");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().contains("manifest world `network`"));
     }
 
     #[tokio::test]

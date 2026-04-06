@@ -9,6 +9,7 @@ impl Guest for AdvancedFlow {
     fn get_manifest() -> FlowManifest {
         FlowManifest {
             id: "advanced-orchestration-demo".to_string(),
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "draft".to_string(),

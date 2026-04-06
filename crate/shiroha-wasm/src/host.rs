@@ -5,14 +5,15 @@
 //! `wasmtime::component::Instance::get_typed_func` 调用。
 
 mod network_support;
+mod storage_support;
 
 use serde::{Deserialize, Serialize};
 use wasmtime::component::{ComponentNamedList, ComponentType, Lift, Lower, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use shiroha_core::flow::{
-    ActionDef, DispatchMode, FanOutConfig, FanOutStrategy, FlowManifest, StateDef, StateKind,
-    SubprocessDef, TimeoutDef, TransitionDef,
+    ActionDef, DispatchMode, FanOutConfig, FanOutStrategy, FlowManifest, FlowWorld, StateDef,
+    StateKind, SubprocessDef, TimeoutDef, TransitionDef,
 };
 use shiroha_core::job::{ActionResult, AggregateDecision, ExecutionStatus, NodeResult};
 
@@ -79,6 +80,7 @@ impl ComponentGuest {
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
             .map_err(|e| WasmError::Instantiation(e.to_string()))?;
         network_support::add_to_linker(&mut linker)?;
+        storage_support::add_to_linker(&mut linker)?;
 
         // 每次调用都实例化独立的 store/component instance，避免 fuel 计数、
         // guest 内部状态和资源句柄在不同请求之间相互污染。
@@ -126,11 +128,28 @@ impl ComponentGuest {
 #[component(record)]
 struct ComponentFlowManifest {
     id: String,
+    #[component(name = "host-world")]
+    world: ComponentFlowWorld,
     states: Vec<ComponentStateDef>,
     transitions: Vec<ComponentTransitionDef>,
     #[component(name = "initial-state")]
     initial_state: String,
     actions: Vec<ComponentActionDef>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, ComponentType, Lift, Lower)]
+#[component(enum)]
+#[repr(u8)]
+enum ComponentFlowWorld {
+    #[component(name = "sandbox")]
+    Sandbox,
+    #[component(name = "network")]
+    Network,
+    #[component(name = "storage")]
+    Storage,
+    #[component(name = "full")]
+    Full,
 }
 
 #[derive(Debug, Clone, ComponentType, Lift, Lower)]
@@ -269,10 +288,22 @@ impl From<ComponentFlowManifest> for FlowManifest {
     fn from(value: ComponentFlowManifest) -> Self {
         Self {
             id: value.id,
+            world: value.world.into(),
             states: value.states.into_iter().map(Into::into).collect(),
             transitions: value.transitions.into_iter().map(Into::into).collect(),
             initial_state: value.initial_state,
             actions: value.actions.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<ComponentFlowWorld> for FlowWorld {
+    fn from(value: ComponentFlowWorld) -> Self {
+        match value {
+            ComponentFlowWorld::Sandbox => Self::Sandbox,
+            ComponentFlowWorld::Network => Self::Network,
+            ComponentFlowWorld::Storage => Self::Storage,
+            ComponentFlowWorld::Full => Self::Full,
         }
     }
 }
@@ -541,6 +572,7 @@ mod tests {
             .arg("build")
             .arg("--manifest-path")
             .arg(&manifest)
+            .arg("--offline")
             .arg("--target")
             .arg("wasm32-wasip2")
             .arg("--release")
@@ -562,6 +594,43 @@ mod tests {
                 .with_extension("wasm"),
         )
         .expect("read network fixture component")
+    }
+
+    fn build_storage_fixture() -> Vec<u8> {
+        static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        let _guard = BUILD_LOCK
+            .get_or_init(|| StdMutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let manifest = root.join("test-fixtures/storage-component/Cargo.toml");
+        let target_dir = temp_build_dir("storage-component");
+        let status = Command::new("cargo")
+            .arg("build")
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .arg("--offline")
+            .arg("--target")
+            .arg("wasm32-wasip2")
+            .arg("--release")
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .current_dir(&root)
+            .status()
+            .expect("build storage fixture");
+        assert!(status.success(), "storage fixture build failed");
+
+        std::fs::read(
+            target_dir
+                .join("wasm32-wasip2")
+                .join("release")
+                .join(format!(
+                    "storage_component_fixture{}",
+                    std::env::consts::EXE_SUFFIX
+                ))
+                .with_extension("wasm"),
+        )
+        .expect("read storage fixture component")
     }
 
     #[test]
@@ -604,5 +673,35 @@ mod tests {
         assert_eq!(result.status, ExecutionStatus::Failed);
         let output = String::from_utf8(result.output.expect("output")).expect("utf-8 output");
         assert!(output.contains("network error:"));
+    }
+
+    #[test]
+    fn invoke_action_can_call_host_storage_import() {
+        let runtime = WasmRuntime::new().expect("runtime");
+        let wasm_bytes = build_storage_fixture();
+        let component = runtime
+            .load_component(&wasm_bytes)
+            .expect("storage fixture should compile");
+        let mut host = WasmHost::new(runtime.engine(), &component).expect("host");
+
+        host.validate_required_exports()
+            .expect("storage fixture should satisfy exports");
+        let result = host
+            .invoke_action(
+                "store",
+                ActionContext {
+                    job_id: "job-1".into(),
+                    state: "idle".into(),
+                    payload: None,
+                },
+            )
+            .expect("invoke action");
+
+        assert_eq!(result.status, ExecutionStatus::Success);
+        let output = String::from_utf8(result.output.expect("output")).expect("utf-8 output");
+        assert!(output.contains("alpha=one"));
+        assert!(output.contains("beta"));
+        assert!(output.contains("deleted=true"));
+        assert!(output.contains("alpha_after_delete=false"));
     }
 }

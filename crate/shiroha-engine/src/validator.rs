@@ -188,13 +188,16 @@ impl FlowValidator {
 
 #[cfg(test)]
 mod tests {
-    use shiroha_core::flow::{ActionDef, DispatchMode, StateDef, StateKind, TransitionDef};
+    use shiroha_core::flow::{
+        ActionDef, DispatchMode, FlowWorld, StateDef, StateKind, TransitionDef,
+    };
 
     use super::*;
 
     fn valid_manifest() -> FlowManifest {
         FlowManifest {
             id: "valid".into(),
+            world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
@@ -299,6 +302,7 @@ mod tests {
     fn deadlock_and_missing_state_hook_are_reported() {
         let manifest = FlowManifest {
             id: "deadlock".into(),
+            world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),

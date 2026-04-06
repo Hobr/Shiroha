@@ -9,6 +9,7 @@ impl Guest for ApprovalFlow {
     fn get_manifest() -> FlowManifest {
         FlowManifest {
             id: "approval-demo".to_string(),
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "pending-approval".to_string(),

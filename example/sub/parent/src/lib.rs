@@ -9,6 +9,7 @@ impl Guest for ParentFlow {
     fn get_manifest() -> FlowManifest {
         FlowManifest {
             id: "purchase-parent-demo".to_string(),
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "draft".to_string(),

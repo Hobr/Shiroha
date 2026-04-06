@@ -3,10 +3,18 @@ package shiroha:flow@0.1.0;
 world flow {
   record flow-manifest {
     id: string,
+    host-world: flow-world,
     states: list<state-def>,
     transitions: list<transition-def>,
     initial-state: string,
     actions: list<action-def>,
+  }
+
+  enum flow-world {
+    sandbox,
+    network,
+    storage,
+    full,
   }
 
   record state-def {

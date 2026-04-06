@@ -276,7 +276,9 @@ mod tests {
     use crate::flow_service::FlowServiceImpl;
     use crate::job_service::JobServiceImpl;
     use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
-    use shiroha_core::flow::{FlowManifest, StateDef, StateKind, TimeoutDef, TransitionDef};
+    use shiroha_core::flow::{
+        FlowManifest, FlowWorld, StateDef, StateKind, TimeoutDef, TransitionDef,
+    };
     use shiroha_proto::shiroha_api::flow_service_server::FlowService;
     use shiroha_proto::shiroha_api::job_service_server::JobService;
     use shiroha_proto::shiroha_api::{
@@ -288,6 +290,7 @@ mod tests {
     fn restart_timeout_manifest(flow_id: &str) -> FlowManifest {
         FlowManifest {
             id: flow_id.to_string(),
+            world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "waiting".into(),

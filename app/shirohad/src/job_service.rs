@@ -731,7 +731,7 @@ mod tests {
     };
     use shiroha_core::event::EventKind;
     use shiroha_core::flow::{
-        ActionDef, DispatchMode, FlowManifest, StateDef, StateKind, TransitionDef,
+        ActionDef, DispatchMode, FlowManifest, FlowWorld, StateDef, StateKind, TransitionDef,
     };
     use shiroha_proto::shiroha_api::DeleteJobRequest;
     use shiroha_proto::shiroha_api::flow_service_server::FlowService;
@@ -781,6 +781,7 @@ mod tests {
     fn approval_manifest_to(flow_id: &str, terminal_state: &str) -> FlowManifest {
         FlowManifest {
             id: flow_id.to_string(),
+            world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
@@ -816,6 +817,7 @@ mod tests {
     fn initial_on_enter_manifest(flow_id: &str) -> FlowManifest {
         FlowManifest {
             id: flow_id.to_string(),
+            world: FlowWorld::Sandbox,
             states: vec![StateDef {
                 name: "idle".into(),
                 kind: StateKind::Normal,
@@ -835,6 +837,7 @@ mod tests {
     fn state_hooks_manifest(flow_id: &str) -> FlowManifest {
         FlowManifest {
             id: flow_id.to_string(),
+            world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),

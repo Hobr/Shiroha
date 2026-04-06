@@ -82,9 +82,10 @@ WASM 模块导出以下执行接口供框架调用：
 
 当前实现仅支持 component model 路线：
 
-- guest 实现 `crate/shiroha-wasm/wit/flow.wit` 中定义的 `world flow`
+- 不需要额外能力的 guest 实现 `crate/shiroha-wasm/wit/flow.wit` 中定义的 `world flow`
+- 需要 HTTP 的 guest 实现 `crate/shiroha-wasm/wit/network-flow.wit` 中定义的 `world network-flow`
+- HTTP capability 类型定义位于 `crate/shiroha-wasm/wit/net.wit`
 - host 使用 `wasmtime::component` typed exports 调用 `get-manifest` / `invoke-action` / `invoke-guard` / `aggregate`
-- `world flow` 当前还额外导入了 host 提供的 `network` interface，底层由 reqwest 驱动 HTTP 请求
 - component 实例化时接入 `wasmtime_wasi::p2`，因此 guest 应编译为 `wasm32-wasip2`
 - 上传的二进制必须是合法 component；core module 已不再接受
 
@@ -105,7 +106,7 @@ Controller                     Node
 
 ### Host Network Import
 
-当前 `world flow` 已提供 `network.send(client, request)` host import：
+当前 `world network-flow` 已提供 `net.send(client, request)` host import：
 
 - guest 可按请求传入 `client-config` 和 `request-options`
 - `client-config` 当前支持 default headers、user-agent、timeout、connect timeout、pool、TCP、redirect、proxy、cookie store、compression、TLS 版本、root cert、https-only、本地地址等配置
@@ -114,8 +115,8 @@ Controller                     Node
 
 当前限制：
 
-- 这是在 `world flow` 上直接暴露的网络能力，尚未做 `sandbox / network / storage / full` 的 world 分层
-- 也就是说，当前实现已经具备网络调用能力，但权限隔离模型仍属于后续迭代
+- `world flow` 与 `world network-flow` 已经开始分离能力，但还没有演进成完整的 `sandbox / network / storage / full` 权限体系
+- 也就是说，当前实现已经把 HTTP capability 从基础 Flow world 中拆出，但更细的 capability 组合与部署期权限校验仍属于后续迭代
 
 **Fan-out Action：**
 

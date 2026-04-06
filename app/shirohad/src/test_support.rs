@@ -10,7 +10,8 @@ use std::{fs, process::Command};
 
 use hyper_util::rt::TokioIo;
 use shiroha_core::flow::{
-    ActionDef, DispatchMode, FlowManifest, StateDef, StateKind, TimeoutDef, TransitionDef,
+    ActionDef, DispatchMode, FlowManifest, FlowWorld, StateDef, StateKind, TimeoutDef,
+    TransitionDef,
 };
 use shiroha_proto::shiroha_api::ListFlowsRequest;
 use shiroha_proto::shiroha_api::flow_service_client::FlowServiceClient;
@@ -84,15 +85,24 @@ impl Drop for TestHarness {
 }
 
 impl LiveGrpcServer {
-    pub(crate) async fn start(prefix: &str) -> Self {
+    pub(crate) async fn start(prefix: &str) -> Option<Self> {
         let data_dir = temp_data_dir(prefix);
         let server = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await
             .expect("create test server");
         let socket_path = data_dir.join("shirohad.sock");
         let _ = std::fs::remove_file(&socket_path);
-        let listener =
-            tokio::net::UnixListener::bind(&socket_path).expect("bind unix domain socket");
+        let listener = match tokio::net::UnixListener::bind(&socket_path) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!(
+                    "skipping grpc test: unix domain sockets are not permitted in this environment ({error})"
+                );
+                let _ = std::fs::remove_dir_all(&data_dir);
+                return None;
+            }
+            Err(error) => panic!("bind unix domain socket: {error}"),
+        };
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let join_handle = tokio::spawn(async move {
@@ -110,7 +120,7 @@ impl LiveGrpcServer {
             join_handle: Some(join_handle),
         };
         live.wait_until_ready().await;
-        live
+        Some(live)
     }
 
     pub(crate) async fn flow_client(&self) -> FlowServiceClient<Channel> {
@@ -158,6 +168,7 @@ pub(crate) fn approval_manifest(flow_id: &str, guard: Option<&str>) -> FlowManif
     // 最小 happy-path flow：一次 approve 事件驱动一次转移和一次 action。
     FlowManifest {
         id: flow_id.to_string(),
+        world: FlowWorld::Sandbox,
         states: vec![
             StateDef {
                 name: "idle".into(),
@@ -204,6 +215,7 @@ pub(crate) fn timeout_manifest(flow_id: &str) -> FlowManifest {
     // 专门用于覆盖 timeout -> enqueue_event -> terminal transition 这条链路。
     FlowManifest {
         id: flow_id.to_string(),
+        world: FlowWorld::Sandbox,
         states: vec![
             StateDef {
                 name: "waiting".into(),
@@ -284,9 +296,40 @@ pub(crate) fn wasm_for_manifest(manifest: &FlowManifest) -> Vec<u8> {
 pub(crate) fn example_wasm(manifest_path: &str, package_name: &str) -> Vec<u8> {
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let manifest_path = workspace_root.join(manifest_path);
+    let example_dir = manifest_path.parent().expect("example dir");
+    let source_fingerprint = {
+        let mut bytes = Vec::new();
+        bytes.extend(fs::read(&manifest_path).expect("read example manifest"));
+        bytes.extend(fs::read(example_dir.join("src/lib.rs")).expect("read example source"));
+        bytes.extend(
+            fs::read(workspace_root.join("crate/shiroha-wasm/wit/flow.wit"))
+                .expect("read flow wit"),
+        );
+        bytes.extend(
+            fs::read(workspace_root.join("crate/shiroha-wasm/wit/net.wit")).expect("read net wit"),
+        );
+        bytes.extend(
+            fs::read(workspace_root.join("crate/shiroha-wasm/wit/store.wit"))
+                .expect("read store wit"),
+        );
+        bytes.extend(
+            fs::read(workspace_root.join("crate/shiroha-wasm/wit/network-flow.wit"))
+                .expect("read network-flow wit"),
+        );
+        bytes.extend(
+            fs::read(workspace_root.join("crate/shiroha-wasm/wit/storage-flow.wit"))
+                .expect("read storage-flow wit"),
+        );
+        bytes.extend(
+            fs::read(workspace_root.join("crate/shiroha-wasm/wit/full-flow.wit"))
+                .expect("read full-flow wit"),
+        );
+        compute_hash(&bytes)
+    };
     let build_root = std::env::temp_dir()
         .join("shiroha-example-builds")
-        .join(package_name);
+        .join(package_name)
+        .join(source_fingerprint);
     let target_dir = build_root.join("target");
     let wasm_path = target_dir.join(format!("wasm32-wasip2/release/{package_name}.wasm"));
 
