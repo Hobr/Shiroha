@@ -554,4 +554,81 @@ mod tests {
         assert_eq!(resumed.state, JobState::Running);
         assert!(resumed.timeout_anchor_ms.is_some());
     }
+
+    #[tokio::test]
+    async fn create_job_with_lifetime_persists_lifetime_fields() {
+        let storage = Arc::new(MemoryStorage::new());
+        let manager = JobManager::new(storage.clone());
+        let flow_version = Uuid::now_v7();
+        let deadline_ms = 9_999_999_999_u64;
+
+        let job = manager
+            .create_job_with_lifetime(
+                "demo",
+                flow_version,
+                "idle",
+                None,
+                Some(500),
+                Some(deadline_ms),
+            )
+            .await
+            .expect("job created with lifetime");
+
+        assert_eq!(job.max_lifetime_ms, Some(500));
+        assert_eq!(job.lifetime_deadline_ms, Some(deadline_ms));
+
+        // Verify the values survive a storage round-trip (simulates controller restart).
+        let stored = storage
+            .get_job(job.id)
+            .await
+            .expect("read job")
+            .expect("job exists");
+        assert_eq!(stored.max_lifetime_ms, Some(500));
+        assert_eq!(stored.lifetime_deadline_ms, Some(deadline_ms));
+    }
+
+    #[tokio::test]
+    async fn lifetime_deadline_is_preserved_across_pause_and_resume() {
+        // Verifies that pause/resume does NOT touch lifetime_deadline_ms, so that
+        // the wall-clock deadline keeps ticking even while the job is paused.
+        let storage = Arc::new(MemoryStorage::new());
+        let manager = JobManager::new(storage.clone());
+        let deadline_ms = 9_999_999_999_u64;
+
+        let job = manager
+            .create_job_with_lifetime(
+                "demo",
+                Uuid::now_v7(),
+                "idle",
+                None,
+                Some(1_000),
+                Some(deadline_ms),
+            )
+            .await
+            .expect("job created");
+
+        manager.pause_job(job.id).await.expect("pause");
+        let paused = storage
+            .get_job(job.id)
+            .await
+            .expect("get job")
+            .expect("job exists");
+        assert_eq!(
+            paused.lifetime_deadline_ms,
+            Some(deadline_ms),
+            "pause must not modify lifetime_deadline_ms"
+        );
+
+        manager.resume_job(job.id).await.expect("resume");
+        let resumed = storage
+            .get_job(job.id)
+            .await
+            .expect("get job")
+            .expect("job exists");
+        assert_eq!(
+            resumed.lifetime_deadline_ms,
+            Some(deadline_ms),
+            "resume must not modify lifetime_deadline_ms"
+        );
+    }
 }
