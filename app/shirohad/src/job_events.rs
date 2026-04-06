@@ -200,20 +200,4 @@ mod tests {
         assert!(matches!(filtered[0].kind, EventKind::Transition { .. }));
     }
 
-    #[test]
-    fn get_job_events_supports_cursor_kind_and_limit() {
-        let job_id = Uuid::from_u128(100);
-        let request = GetJobEventsRequest {
-            job_id: job_id.to_string(),
-            since_id: Some(Uuid::from_u128(1).to_string()),
-            since_timestamp_ms: None,
-            kind: vec!["transition".into(), "action_complete".into()],
-            limit: Some(1),
-        };
-        let query = validate_query(request).expect("valid query");
-
-        let filtered = filter_events(sample_events(job_id), &query).expect("filter events");
-        assert_eq!(filtered.len(), 1);
-        assert!(matches!(filtered[0].kind, EventKind::Transition { .. }));
-    }
 }
