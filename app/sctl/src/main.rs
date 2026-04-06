@@ -2,19 +2,20 @@
 //!
 //! 通过 gRPC 连接 shirohad，提供 Flow 部署和 Job 管理的命令行操作。
 
+mod cli_support;
 mod client;
+mod command_runner;
 mod completion;
 mod event_presenter;
 mod flow_presenter;
 mod job_presenter;
 mod presenter_support;
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use clap::{Args, CommandFactory, Parser, ValueHint};
-use clap_complete::env::CompleteEnv;
-use tracing_subscriber::EnvFilter;
+use clap::{Args, Parser, ValueHint};
+
+use crate::cli_support::{parse_positive_u32, parse_positive_usize};
 
 shadow_rs::shadow!(build);
 
@@ -334,266 +335,12 @@ enum JobCommands {
 }
 
 fn main() -> anyhow::Result<()> {
-    CompleteEnv::with_factory(Cli::command).complete();
-
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(async_main())
-}
-
-async fn async_main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-
-    if let Commands::Complete(args) = cli.command {
-        handle_complete(args)?;
-        return Ok(());
-    }
-
-    // 整个 CLI 生命周期只建立一次 channel，然后把子命令分派给薄封装客户端。
-    let mut c = client::ShirohaClient::connect(&cli.server).await?;
-
-    match cli.command {
-        Commands::Flow { command } => dispatch_flow_command(&mut c, command, cli.json).await?,
-        Commands::Job { command } => dispatch_job_command(&mut c, command, cli.json).await?,
-        Commands::Complete(..) => unreachable!("complete command handled before gRPC connect"),
-    }
-
-    Ok(())
-}
-
-async fn dispatch_flow_command(
-    client: &mut client::ShirohaClient,
-    command: FlowCommands,
-    json_output: bool,
-) -> anyhow::Result<()> {
-    match command {
-        FlowCommands::Deploy(args) => {
-            client
-                .deploy(&args.flow.flow_id, &args.file, json_output)
-                .await
-        }
-        FlowCommands::Ls => client.list_flows(json_output).await,
-        FlowCommands::Get(args) => {
-            client
-                .get_flow(
-                    &args.flow.flow_id,
-                    args.version.as_deref(),
-                    args.summary,
-                    json_output,
-                )
-                .await
-        }
-        FlowCommands::Vers(args) => client.list_flow_versions(&args.flow_id, json_output).await,
-        FlowCommands::Rm(args) => {
-            client
-                .delete_flow(&args.flow.flow_id, args.force, json_output)
-                .await
-        }
-    }
-}
-
-async fn dispatch_job_command(
-    client: &mut client::ShirohaClient,
-    command: JobCommands,
-    json_output: bool,
-) -> anyhow::Result<()> {
-    match command {
-        JobCommands::New(args) => {
-            client
-                .create_job(
-                    &args.flow.flow_id,
-                    client::decode_optional_bytes(
-                        args.context.context_text.as_deref(),
-                        args.context.context_hex.as_deref(),
-                        args.context.context_file.as_deref(),
-                    )?,
-                    json_output,
-                )
-                .await
-        }
-        JobCommands::Get(args) => client.get_job(&args.job_id, json_output).await,
-        JobCommands::Rm(args) => {
-            client
-                .delete_job(&args.job.job_id, args.force, json_output)
-                .await
-        }
-        JobCommands::Ls(args) => {
-            client
-                .list_jobs(args.flow_id.as_deref(), args.all, json_output)
-                .await
-        }
-        JobCommands::Trig(args) => {
-            client
-                .trigger_event(
-                    &args.job.job_id,
-                    &args.event,
-                    client::decode_optional_bytes(
-                        args.payload.payload_text.as_deref(),
-                        args.payload.payload_hex.as_deref(),
-                        args.payload.payload_file.as_deref(),
-                    )?,
-                    json_output,
-                )
-                .await
-        }
-        JobCommands::Pause(args) => client.pause_job(&args.job_id, json_output).await,
-        JobCommands::Resume(args) => client.resume_job(&args.job_id, json_output).await,
-        JobCommands::Cancel(args) => client.cancel_job(&args.job_id, json_output).await,
-        JobCommands::Logs(args) => {
-            client
-                .get_job_events(
-                    &args.job.job_id,
-                    client::EventQueryOptions {
-                        pretty: args.pretty,
-                        follow: args.follow,
-                        since_id: args.since_id,
-                        since_timestamp_ms: args.since_timestamp_ms,
-                        limit: args.limit,
-                        kind_filters: args.kind,
-                        tail: args.tail,
-                        interval_ms: args.interval_ms,
-                        json_output,
-                    },
-                )
-                .await
-        }
-        JobCommands::Wait(args) => {
-            client
-                .wait_job(
-                    &args.job.job_id,
-                    args.state.as_deref(),
-                    args.timeout_ms,
-                    args.interval_ms,
-                    json_output,
-                )
-                .await
-        }
-    }
-}
-
-fn handle_complete(args: CompleteArgs) -> anyhow::Result<()> {
-    let shell = resolve_completion_shell(args.shell)?;
-    if args.print_path {
-        let path = default_completion_path(shell)?;
-        println!("{}", path.display());
-        return Ok(());
-    }
-
-    let script = generate_completion_script(shell)?;
-    if let Some(path) = args.output.as_deref() {
-        write_completion_script(path, &script)?;
-        println!("{}", path.display());
-        return Ok(());
-    }
-    if args.install {
-        let path = default_completion_path(shell)?;
-        write_completion_script(&path, &script)?;
-        println!("{}", path.display());
-        return Ok(());
-    }
-
-    std::io::stdout().write_all(&script)?;
-    Ok(())
-}
-
-fn resolve_completion_shell(shell: Option<CompletionShell>) -> anyhow::Result<CompletionShell> {
-    shell.or_else(detect_shell_from_env).ok_or_else(|| {
-        anyhow::anyhow!(
-            "failed to detect shell from $SHELL; pass one explicitly, e.g. `sctl complete fish`"
-        )
-    })
-}
-
-fn detect_shell_from_env() -> Option<CompletionShell> {
-    let shell = std::env::var_os("SHELL")?;
-    let shell = Path::new(&shell).file_name()?.to_str()?;
-    match shell {
-        "bash" => Some(CompletionShell::Bash),
-        "elvish" => Some(CompletionShell::Elvish),
-        "fish" => Some(CompletionShell::Fish),
-        "pwsh" | "powershell" => Some(CompletionShell::PowerShell),
-        "zsh" => Some(CompletionShell::Zsh),
-        _ => None,
-    }
-}
-
-fn default_completion_path(shell: CompletionShell) -> anyhow::Result<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow::anyhow!("$HOME is not set"))?;
-    shell.default_output_path(&home).ok_or_else(|| {
-        anyhow::anyhow!("shell `{shell}` has no default install path; use `--output <PATH>`")
-    })
-}
-
-fn generate_completion_script(shell: CompletionShell) -> anyhow::Result<Vec<u8>> {
-    let output = std::process::Command::new(std::env::current_exe()?)
-        .env("COMPLETE", shell.env_name())
-        .output()?;
-    if output.status.success() {
-        return Ok(output.stdout);
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    anyhow::bail!(
-        "failed to generate {} completion script: {}",
-        shell,
-        stderr.trim()
-    )
-}
-
-fn write_completion_script(path: &Path, script: &[u8]) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, script)?;
-    Ok(())
-}
-
-fn parse_positive_usize(input: &str) -> Result<usize, String> {
-    parse_positive(input)
-}
-
-fn parse_positive_u32(input: &str) -> Result<u32, String> {
-    parse_positive(input)
-}
-
-fn parse_positive<T>(input: &str) -> Result<T, String>
-where
-    T: std::str::FromStr + PartialEq + Default,
-    T::Err: std::fmt::Display,
-{
-    let value = input
-        .parse::<T>()
-        .map_err(|error| format!("invalid positive integer `{input}`: {error}"))?;
-    if value == T::default() {
-        return Err("value must be greater than 0".to_string());
-    }
-    Ok(value)
+    command_runner::run()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn detect_shell_from_path_basename() {
-        assert_eq!(
-            Path::new("/usr/bin/fish")
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(|name| match name {
-                    "fish" => Some(CompletionShell::Fish),
-                    _ => None,
-                }),
-            Some(CompletionShell::Fish)
-        );
-    }
 
     #[test]
     fn default_output_path_matches_shell_convention() {
@@ -607,37 +354,5 @@ mod tests {
             Some(home.join(".local/share/bash-completion/completions/sctl"))
         );
         assert_eq!(CompletionShell::PowerShell.default_output_path(home), None);
-    }
-
-    #[test]
-    fn parse_positive_parsers_accept_non_zero_values() {
-        assert_eq!(parse_positive_usize("7"), Ok(7));
-        assert_eq!(parse_positive_u32("9"), Ok(9));
-    }
-
-    #[test]
-    fn parse_positive_parsers_reject_zero() {
-        assert_eq!(
-            parse_positive_usize("0"),
-            Err("value must be greater than 0".to_string())
-        );
-        assert_eq!(
-            parse_positive_u32("0"),
-            Err("value must be greater than 0".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_positive_parsers_report_invalid_input() {
-        assert!(
-            parse_positive_usize("abc")
-                .expect_err("usize parser should reject non-numeric input")
-                .contains("invalid positive integer `abc`")
-        );
-        assert!(
-            parse_positive_u32("-3")
-                .expect_err("u32 parser should reject negative input")
-                .contains("invalid positive integer `-3`")
-        );
     }
 }
