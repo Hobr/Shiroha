@@ -5,6 +5,20 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex as StdMutex, OnceLock};
 
+const CANONICAL_WIT_FILES: &[&str] = &[
+    "flow.wit",
+    "net.wit",
+    "store.wit",
+    "network-flow.wit",
+    "storage-flow.wit",
+    "full-flow.wit",
+];
+
+struct FixtureCase {
+    manifest_path: &'static str,
+    wasm_name: &'static str,
+}
+
 fn hash_file_if_present(path: &Path, hasher: &mut DefaultHasher) {
     path.hash(hasher);
     if let Ok(bytes) = fs::read(path) {
@@ -12,22 +26,40 @@ fn hash_file_if_present(path: &Path, hasher: &mut DefaultHasher) {
     }
 }
 
-fn build_key(root: &Path) -> String {
+fn tracked_input_paths(root: &Path, fixture_path: &str) -> Vec<PathBuf> {
+    let mut paths = vec![
+        root.join("Cargo.toml"),
+        root.join("build.rs"),
+        root.join("src/lib.rs"),
+        root.join(fixture_path).join("Cargo.toml"),
+        root.join(fixture_path).join("src/lib.rs"),
+    ];
+
+    paths.extend(
+        CANONICAL_WIT_FILES
+            .iter()
+            .map(|file| root.join("../shiroha-wasm/wit").join(file)),
+    );
+    paths
+}
+
+fn build_key(root: &Path, fixture_path: &str) -> String {
     let mut hasher = DefaultHasher::new();
-    hash_file_if_present(&root.join("src/lib.rs"), &mut hasher);
-    hash_file_if_present(
-        &root.join("test-fixtures/sdk-smoke/Cargo.toml"),
-        &mut hasher,
-    );
-    hash_file_if_present(
-        &root.join("test-fixtures/sdk-smoke/src/lib.rs"),
-        &mut hasher,
-    );
+    for path in tracked_input_paths(root, fixture_path) {
+        hash_file_if_present(&path, &mut hasher);
+    }
     format!("{:016x}", hasher.finish())
 }
 
-#[test]
-fn builds_sdk_smoke_fixture_for_wasm32_wasip2() {
+fn fixture_target_dir(root: &Path, fixture_path: &str) -> PathBuf {
+    let fixture_key = fixture_path.replace('/', "-");
+    std::env::temp_dir()
+        .join("shiroha-sdk-fixtures")
+        .join(fixture_key)
+        .join(build_key(root, fixture_path))
+}
+
+fn build_fixture(case: &FixtureCase) -> Vec<u8> {
     static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
     let _guard = BUILD_LOCK
         .get_or_init(|| StdMutex::new(()))
@@ -35,11 +67,9 @@ fn builds_sdk_smoke_fixture_for_wasm32_wasip2() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture_manifest = root.join("test-fixtures/sdk-smoke/Cargo.toml");
-    let target_dir = std::env::temp_dir()
-        .join("shiroha-sdk-fixtures")
-        .join(build_key(&root));
-    let wasm_path = target_dir.join("wasm32-wasip2/release/sdk_smoke_component.wasm");
+    let fixture_manifest = root.join(case.manifest_path).join("Cargo.toml");
+    let target_dir = fixture_target_dir(&root, case.manifest_path);
+    let wasm_path = target_dir.join(format!("wasm32-wasip2/release/{}.wasm", case.wasm_name));
 
     if !wasm_path.exists() {
         let status = Command::new("cargo")
@@ -58,9 +88,139 @@ fn builds_sdk_smoke_fixture_for_wasm32_wasip2() {
         assert!(status.success(), "sdk smoke fixture build failed");
     }
 
-    let wasm_bytes = fs::read(&wasm_path).expect("read built sdk smoke fixture");
+    fs::read(&wasm_path).expect("read built sdk smoke fixture")
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create parent directories");
+    }
+    fs::write(path, contents).expect("write file");
+}
+
+fn stage_workspace(root: &Path, fixture_path: &str) {
+    write_file(
+        &root.join("Cargo.toml"),
+        "[package]\nname = \"shiroha-sdk\"\nversion = \"0.1.0\"\n",
+    );
+    write_file(
+        &root.join("build.rs"),
+        "fn main() {\n    println!(\"cargo:rerun-if-changed=../shiroha-wasm/wit/flow.wit\");\n}\n",
+    );
+    write_file(&root.join("src/lib.rs"), "pub fn placeholder() {}\n");
+    write_file(
+        &root.join(fixture_path).join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    );
+    write_file(
+        &root.join(fixture_path).join("src/lib.rs"),
+        "pub fn fixture_placeholder() {}\n",
+    );
+
+    for file in CANONICAL_WIT_FILES {
+        write_file(
+            &root.join("../shiroha-wasm/wit").join(file),
+            &format!("package shiroha:flow@0.1.0;\n// {file}\n"),
+        );
+    }
+}
+
+#[test]
+fn sdk_build_script_uses_canonical_wit_directory() {
+    let source = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("build.rs"))
+        .expect("read sdk build script");
+
+    assert!(
+        source.contains("../shiroha-wasm/wit"),
+        "sdk build script should reference the canonical wit directory"
+    );
+}
+
+#[test]
+fn build_key_changes_when_sdk_manifest_changes() {
+    let temp_root = std::env::temp_dir()
+        .join("shiroha-sdk-build-key-tests")
+        .join("manifest-change")
+        .join("shiroha-sdk");
+    let fixture_path = "test-fixtures/sdk-smoke";
+    stage_workspace(&temp_root, fixture_path);
+
+    let before = build_key(&temp_root, fixture_path);
+    write_file(
+        &temp_root.join("Cargo.toml"),
+        "[package]\nname = \"shiroha-sdk\"\nversion = \"0.2.0\"\n",
+    );
+    let after = build_key(&temp_root, fixture_path);
+
+    assert_ne!(before, after, "build key should include sdk Cargo.toml");
+}
+
+#[test]
+fn build_key_changes_when_canonical_wit_changes() {
+    let temp_root = std::env::temp_dir()
+        .join("shiroha-sdk-build-key-tests")
+        .join("wit-change")
+        .join("shiroha-sdk");
+    let fixture_path = "test-fixtures/sdk-smoke";
+    stage_workspace(&temp_root, fixture_path);
+
+    let before = build_key(&temp_root, fixture_path);
+    write_file(
+        &temp_root.join("../shiroha-wasm/wit/flow.wit"),
+        "package shiroha:flow@0.1.0;\n// flow changed\n",
+    );
+    let after = build_key(&temp_root, fixture_path);
+
+    assert_ne!(
+        before, after,
+        "build key should include canonical wit files"
+    );
+}
+
+#[test]
+fn builds_flow_sdk_smoke_fixture_for_wasm32_wasip2() {
+    let wasm_bytes = build_fixture(&FixtureCase {
+        manifest_path: "test-fixtures/flow-smoke",
+        wasm_name: "sdk_flow_smoke_component",
+    });
     assert!(
         !wasm_bytes.is_empty(),
-        "sdk smoke fixture wasm should not be empty"
+        "sdk flow smoke fixture wasm should not be empty"
+    );
+}
+
+#[test]
+fn builds_network_sdk_smoke_fixture_for_wasm32_wasip2() {
+    let wasm_bytes = build_fixture(&FixtureCase {
+        manifest_path: "test-fixtures/network-smoke",
+        wasm_name: "sdk_network_smoke_component",
+    });
+    assert!(
+        !wasm_bytes.is_empty(),
+        "sdk network smoke fixture wasm should not be empty"
+    );
+}
+
+#[test]
+fn builds_storage_sdk_smoke_fixture_for_wasm32_wasip2() {
+    let wasm_bytes = build_fixture(&FixtureCase {
+        manifest_path: "test-fixtures/storage-smoke",
+        wasm_name: "sdk_storage_smoke_component",
+    });
+    assert!(
+        !wasm_bytes.is_empty(),
+        "sdk storage smoke fixture wasm should not be empty"
+    );
+}
+
+#[test]
+fn builds_full_sdk_smoke_fixture_for_wasm32_wasip2() {
+    let wasm_bytes = build_fixture(&FixtureCase {
+        manifest_path: "test-fixtures/sdk-smoke",
+        wasm_name: "sdk_smoke_component",
+    });
+    assert!(
+        !wasm_bytes.is_empty(),
+        "sdk full smoke fixture wasm should not be empty"
     );
 }
