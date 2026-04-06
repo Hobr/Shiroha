@@ -7,12 +7,63 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
-  build-rust:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-src, rustfmt, rust-analyzer, clippy, cargo
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest, cargo-deny, protoc
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Deny
+        run: cargo deny check -d
+
+      - name: Check
+        run: cargo check --workspace
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features --tests --benches -- -D warnings
+
+      - name: Test
+        run: cargo nextest run --all-features --run-ignored all
+
+  build:
+    needs: lint
     strategy:
       matrix:
-        platform: [windows-latest, ubuntu-latest, macos-latest]
+        include:
+          - platform: ubuntu-latest
+            archive_name: shiroha-linux-x86_64
+            archive_ext: tar.gz
+            bin_dir: target/release
+          - platform: macos-latest
+            archive_name: shiroha-macos-arm64
+            archive_ext: tar.gz
+            bin_dir: target/release
+          - platform: windows-latest
+            archive_name: shiroha-windows-x86_64
+            archive_ext: zip
+            bin_dir: target/release
 
     runs-on: ${{ matrix.platform }}
 
@@ -23,24 +74,59 @@ jobs:
           submodules: recursive
 
       - name: Install Rust
-        run: rustup toolchain install stable --component llvm-tools-preview
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-src, rustfmt, rust-analyzer, clippy, cargo
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
 
-      - name: install nextest
-        uses: taiki-e/install-action@nextest
+      - name: Install tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest, cargo-deny, protoc
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Build binaries
+        run: cargo build --workspace --release
 
-      - name: Check code format
-        run: cargo fmt -- --check
+      - name: Package binaries (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.bin_dir }}/shirohad" dist/
+          cp "${{ matrix.bin_dir }}/sctl" dist/
+          tar -C dist -czf "${{ matrix.archive_name }}.${{ matrix.archive_ext }}" shirohad sctl
 
-      - name: Check the package for errors
-        run: cargo check --all
+      - name: Package binaries (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item "${{ matrix.bin_dir }}/shirohad.exe" "dist/shirohad.exe"
+          Copy-Item "${{ matrix.bin_dir }}/sctl.exe" "dist/sctl.exe"
+          Compress-Archive -Path dist/shirohad.exe,dist/sctl.exe -DestinationPath "${{ matrix.archive_name }}.${{ matrix.archive_ext }}" -Force
 
-      - name: Lint rust sources
-        run: cargo clippy --all-targets --all-features --tests --benches -- -D warnings
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive_name }}
+          path: ${{ matrix.archive_name }}.${{ matrix.archive_ext }}
 
-      - name: Execute rust tests
-        run: cargo nextest run --all-features
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
