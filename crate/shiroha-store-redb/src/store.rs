@@ -5,7 +5,7 @@
 //!
 //! 数据以 JSON 序列化存储，表结构：
 //! - `flows`: flow_id (str) → 最新 FlowRegistration (JSON bytes)
-//! - `flow_versions`: flow_id + version → 指定版本 FlowRegistration (JSON bytes)
+//! - `flow_versions`: hex(flow_id bytes) + `\0` + version → 指定版本 FlowRegistration (JSON bytes)
 //! - `wasm_modules`: wasm_hash (str) → 原始 wasm bytes
 //! - `jobs`: job_id (16 bytes UUID) → Job (JSON bytes)
 //! - `events`: job_id+event_id (32 bytes) → EventRecord (JSON bytes)
@@ -65,11 +65,25 @@ impl RedbStorage {
     }
 
     fn flow_version_key(flow_id: &str, version: Uuid) -> String {
-        format!("{flow_id}\u{0}{version}")
+        format!("{}\u{0}{version}", Self::encode_flow_id(flow_id))
     }
 
     fn flow_version_prefix_bounds(flow_id: &str) -> (String, String) {
-        (format!("{flow_id}\u{0}"), format!("{flow_id}\u{1}"))
+        let encoded_flow_id = Self::encode_flow_id(flow_id);
+        (
+            format!("{encoded_flow_id}\u{0}"),
+            format!("{encoded_flow_id}\u{1}"),
+        )
+    }
+
+    fn encode_flow_id(flow_id: &str) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut encoded = String::with_capacity(flow_id.len() * 2);
+        for byte in flow_id.as_bytes() {
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        encoded
     }
 
     fn event_key_range(job_id: Uuid) -> ([u8; 32], [u8; 32]) {
@@ -155,10 +169,9 @@ impl Storage for RedbStorage {
         for entry in table.range(start.as_str()..end.as_str()).map_err(s)? {
             let (_, v) = entry.map_err(s)?;
             let flow: FlowRegistration = serde_json::from_slice(v.value()).map_err(s)?;
-            if flow.flow_id == flow_id {
-                flows.push(flow);
-            }
+            flows.push(flow);
         }
+        flows.sort_by_key(|flow| flow.version.as_u128());
         Ok(flows)
     }
 
@@ -180,16 +193,13 @@ impl Storage for RedbStorage {
             let mut table = txn.open_table(FLOWS_TABLE).map_err(s)?;
             table.remove(flow_id).map_err(s)?;
         }
-        let version_prefix = format!("{flow_id}\u{0}");
+        let (start, end) = Self::flow_version_prefix_bounds(flow_id);
         let version_keys = {
             let table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
             let mut keys = Vec::new();
-            for entry in table.iter().map_err(s)? {
+            for entry in table.range(start.as_str()..end.as_str()).map_err(s)? {
                 let (k, _) = entry.map_err(s)?;
-                let key = k.value();
-                if key.starts_with(&version_prefix) {
-                    keys.push(key.to_string());
-                }
+                keys.push(k.value().to_string());
             }
             keys
         };
@@ -614,14 +624,23 @@ mod tests {
     #[tokio::test]
     async fn list_flow_versions_for_returns_only_matching_flow() {
         let path = temp_db_path("flow-versions-for");
-        let alpha_v1 = sample_flow_registration_with_id("alpha");
+        let alpha_v1 = FlowRegistration {
+            version: Uuid::from_u128(2),
+            ..sample_flow_registration_with_id("alpha")
+        };
         let alpha_v2 = FlowRegistration {
-            version: Uuid::now_v7(),
+            version: Uuid::from_u128(1),
             wasm_hash: "hash-alpha-v2".into(),
             ..alpha_v1.clone()
         };
-        let beta_v1 = sample_flow_registration_with_id("beta");
-        let alpha_null_beta_v1 = sample_flow_registration_with_id("alpha\0beta");
+        let beta_v1 = FlowRegistration {
+            version: Uuid::from_u128(9),
+            ..sample_flow_registration_with_id("beta")
+        };
+        let alpha_null_beta_v1 = FlowRegistration {
+            version: Uuid::from_u128(8),
+            ..sample_flow_registration_with_id("alpha\0beta")
+        };
         let storage = RedbStorage::new(&path).expect("open db");
 
         storage.save_flow(&alpha_v1).await.expect("save alpha v1");
@@ -639,8 +658,10 @@ mod tests {
 
         assert_eq!(versions.len(), 2);
         assert!(versions.iter().all(|flow| flow.flow_id == "alpha"));
-        assert!(versions.iter().any(|flow| flow.version == alpha_v1.version));
-        assert!(versions.iter().any(|flow| flow.version == alpha_v2.version));
+        assert_eq!(
+            versions.iter().map(|flow| flow.version).collect::<Vec<_>>(),
+            vec![alpha_v2.version, alpha_v1.version]
+        );
 
         drop(storage);
         let _ = std::fs::remove_file(path);
