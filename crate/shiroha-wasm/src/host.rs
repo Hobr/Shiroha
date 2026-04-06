@@ -4,6 +4,8 @@
 //! guest 需按 `wit/flow.wit` 导出 typed exports，host 通过
 //! `wasmtime::component::Instance::get_typed_func` 调用。
 
+mod network_support;
+
 use serde::{Deserialize, Serialize};
 use wasmtime::component::{ComponentNamedList, ComponentType, Lift, Lower, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
@@ -76,6 +78,7 @@ impl ComponentGuest {
         let mut linker = wasmtime::component::Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
             .map_err(|e| WasmError::Instantiation(e.to_string()))?;
+        network_support::add_to_linker(&mut linker)?;
 
         // 每次调用都实例化独立的 store/component instance，避免 fuel 计数、
         // guest 内部状态和资源句柄在不同请求之间相互污染。
@@ -513,8 +516,53 @@ impl WasmHost {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::sync::{Mutex as StdMutex, OnceLock};
+
     use super::*;
     use crate::runtime::WasmRuntime;
+
+    fn temp_build_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("shiroha-wasm-{name}-{}", uuid::Uuid::now_v7()))
+    }
+
+    fn build_network_fixture(url: &str) -> Vec<u8> {
+        static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        let _guard = BUILD_LOCK
+            .get_or_init(|| StdMutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let manifest = root.join("test-fixtures/network-component/Cargo.toml");
+        let target_dir = temp_build_dir("network-component");
+        let status = Command::new("cargo")
+            .arg("build")
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .arg("--target")
+            .arg("wasm32-wasip2")
+            .arg("--release")
+            .env("SHIROHA_NETWORK_URL", url)
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .current_dir(&root)
+            .status()
+            .expect("build network fixture");
+        assert!(status.success(), "network fixture build failed");
+
+        std::fs::read(
+            target_dir
+                .join("wasm32-wasip2")
+                .join("release")
+                .join(format!(
+                    "network_component_fixture{}",
+                    std::env::consts::EXE_SUFFIX
+                ))
+                .with_extension("wasm"),
+        )
+        .expect("read network fixture component")
+    }
 
     #[test]
     fn validate_required_exports_rejects_components_without_flow_world_exports() {
@@ -529,5 +577,32 @@ mod tests {
             .expect_err("missing required exports should fail");
 
         assert!(matches!(error, WasmError::Instantiation(_)));
+    }
+
+    #[test]
+    fn invoke_action_can_call_host_network_import() {
+        let runtime = WasmRuntime::new().expect("runtime");
+        let wasm_bytes = build_network_fixture("http://127.0.0.1:1/");
+        let component = runtime
+            .load_component(&wasm_bytes)
+            .expect("network fixture should compile");
+        let mut host = WasmHost::new(runtime.engine(), &component).expect("host");
+
+        host.validate_required_exports()
+            .expect("network fixture should satisfy exports");
+        let result = host
+            .invoke_action(
+                "fetch",
+                ActionContext {
+                    job_id: "job-1".into(),
+                    state: "idle".into(),
+                    payload: None,
+                },
+            )
+            .expect("invoke action");
+
+        assert_eq!(result.status, ExecutionStatus::Failed);
+        let output = String::from_utf8(result.output.expect("output")).expect("utf-8 output");
+        assert!(output.contains("network error:"));
     }
 }
