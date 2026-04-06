@@ -51,14 +51,18 @@ impl ModuleCache {
 
     pub fn get(&self, hash: &str) -> Option<Arc<WasmModule>> {
         // 只在短临界区内 clone `Arc`，避免长时间持有全局缓存锁。
-        self.modules.lock().unwrap().get(hash).cloned()
+        self.lock_modules().get(hash).cloned()
     }
 
     pub fn insert(&self, module: Arc<WasmModule>) {
+        self.lock_modules()
+            .insert(module.hash().to_string(), module);
+    }
+
+    fn lock_modules(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<WasmModule>>> {
         self.modules
             .lock()
-            .unwrap()
-            .insert(module.hash().to_string(), module);
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -70,7 +74,9 @@ impl Default for ModuleCache {
 
 #[cfg(test)]
 mod tests {
-    use super::WasmModule;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use super::{ModuleCache, WasmModule};
 
     #[test]
     fn compute_hash_changes_when_middle_bytes_change() {
@@ -83,5 +89,47 @@ mod tests {
             WasmModule::compute_hash(&right),
             "hash should include the full wasm payload"
         );
+    }
+
+    #[test]
+    fn get_tolerates_poisoned_mutex() {
+        let cache = ModuleCache::new();
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = cache.modules.lock().unwrap();
+            panic!("poison cache mutex");
+        }));
+
+        let access = catch_unwind(AssertUnwindSafe(|| cache.get("missing")));
+
+        assert!(access.is_ok(), "poisoned cache should not panic on get");
+        assert!(
+            access.unwrap().is_none(),
+            "missing cache entry should stay empty"
+        );
+    }
+
+    #[test]
+    fn insert_tolerates_poisoned_mutex() {
+        let cache = ModuleCache::new();
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = cache.modules.lock().unwrap();
+            panic!("poison cache mutex");
+        }));
+
+        let insert = catch_unwind(AssertUnwindSafe(|| {
+            cache.insert(std::sync::Arc::new(dummy_module("hash")));
+        }));
+
+        assert!(insert.is_ok(), "poisoned cache should not panic on insert");
+    }
+
+    fn dummy_module(hash: &str) -> WasmModule {
+        let engine = wasmtime::Engine::default();
+        let component =
+            wasmtime::component::Component::new(&engine, b"(component)").expect("component");
+        WasmModule {
+            component,
+            hash: hash.to_string(),
+        }
     }
 }
