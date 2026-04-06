@@ -61,6 +61,7 @@ Shiroha 提供一种能力：将状态机的 Action/Callback 等计算密集或 
 当前实现状态：
 
 - Phase 1 只有 `standalone` 路径是完整可用的
+- `remote` action 在 standalone 中仍复用本地 WASM 调用路径，不代表已经存在真实 Node 执行边界
 - `controller` / `node` 模式对应的分离部署仍属于后续阶段
 
 ## 详细设计
@@ -75,3 +76,4 @@ Shiroha 提供一种能力：将状态机的 Action/Callback 等计算密集或 
 | [可插拔后端](backends.md) | Transport、Storage、Context 传递 |
 | [运维与观测](operations.md) | 节点管理、观测性、拓扑模式 |
 | [路线图](roadmap.md) | Flow 验证、分阶段实施计划 |
+| [Phase 1 审计清单](phase1-audit-checklist.md) | 严格对照当前实现与 Phase 1 目标的缺口清单 |
