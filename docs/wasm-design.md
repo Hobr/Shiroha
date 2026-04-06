@@ -93,6 +93,7 @@ WASM 模块导出以下执行接口供框架调用：
 - component 实例化时接入 `wasmtime_wasi::p2`，因此 guest 应编译为 `wasm32-wasip2`
 - 上传的二进制必须是合法 component；core module 已不再接受
 - 部署时框架会校验 manifest 声明的 `host-world` 与组件实际 imports 是否一致
+- 当前 deploy 只验证通用导出接口是否存在，不会逐个验证 manifest 中命名的 `action` / `guard` / `aggregator` 在 guest 内部分支里是否真正实现
 
 ### 执行流程
 
@@ -107,7 +108,7 @@ Controller                     Node
     │  用结果继续推进状态机         │
 ```
 
-当前 standalone 实现里，`local` 和 `remote` 都由同进程内的 host 直接调用 guest typed export，区别只保留在 manifest 语义层。
+当前 standalone 实现里，`local` 和 `remote` 都由同进程内的 host 直接调用 guest typed export，区别只保留在 manifest 语义层；还没有一个真实的 in-process Controller↔Node 执行边界。
 
 ### Host Network Import
 
@@ -163,6 +164,7 @@ Controller                          Nodes
 当前实现状态：
 
 - `fan-out` manifest / guest ABI / aggregate host 调用已经打通
+- manifest 当前仍可通过 deploy，但 standalone 运行时一旦真正执行到 `fan-out` action 会直接返回 `unimplemented`
 - standalone 运行时尚未真正执行多节点 fan-out 调度与聚合
 - `subprocess` manifest 声明已可部署，但自动父子 Job 编排尚未实现
 

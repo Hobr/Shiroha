@@ -15,6 +15,11 @@
 - 状态转移时，按 `on-exit -> transition action -> on-enter` 的顺序执行
 - 这些执行结果和普通 Action 一样会记录到事件日志里
 
+当前限制：
+
+- 如果同一状态下存在多条 `event` 相同的候选转移，运行时会先按声明顺序选中第一条，再评估这条边的 guard
+- 这意味着当前还不支持通过多个 guard 在候选边之间做完整分支选择；建模时应避免依赖这种语义
+
 ## Job
 
 一个 Flow 的运行实例。绑定特定版本的 Flow WASM 模块。
@@ -74,6 +79,11 @@
 ## Execution
 
 一次 Action 的执行。可能在本地、远程单节点、或多节点并行执行。
+
+当前实现状态：
+
+- standalone 下，`remote` 仍退化为与 `local` 相同的同进程调用路径
+- `fan-out` 相关 manifest 形状已存在，但运行时尚不能真正执行
 
 ## 子流程（Subprocess）
 
