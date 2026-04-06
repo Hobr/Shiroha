@@ -155,7 +155,9 @@ impl Storage for RedbStorage {
         for entry in table.range(start.as_str()..end.as_str()).map_err(s)? {
             let (_, v) = entry.map_err(s)?;
             let flow: FlowRegistration = serde_json::from_slice(v.value()).map_err(s)?;
-            flows.push(flow);
+            if flow.flow_id == flow_id {
+                flows.push(flow);
+            }
         }
         Ok(flows)
     }
@@ -619,11 +621,16 @@ mod tests {
             ..alpha_v1.clone()
         };
         let beta_v1 = sample_flow_registration_with_id("beta");
+        let alpha_null_beta_v1 = sample_flow_registration_with_id("alpha\0beta");
         let storage = RedbStorage::new(&path).expect("open db");
 
         storage.save_flow(&alpha_v1).await.expect("save alpha v1");
         storage.save_flow(&alpha_v2).await.expect("save alpha v2");
         storage.save_flow(&beta_v1).await.expect("save beta v1");
+        storage
+            .save_flow(&alpha_null_beta_v1)
+            .await
+            .expect("save alpha\\0beta v1");
 
         let versions = storage
             .list_flow_versions_for("alpha")
