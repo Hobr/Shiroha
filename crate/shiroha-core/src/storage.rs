@@ -33,6 +33,10 @@ pub trait Storage: Send + Sync {
         flow_id: &str,
         version: Uuid,
     ) -> impl Future<Output = Result<Option<FlowRegistration>>> + Send;
+    fn list_flow_versions_for(
+        &self,
+        flow_id: &str,
+    ) -> impl Future<Output = Result<Vec<FlowRegistration>>> + Send;
     fn list_flow_versions(&self) -> impl Future<Output = Result<Vec<FlowRegistration>>> + Send;
     fn list_flows(&self) -> impl Future<Output = Result<Vec<FlowRegistration>>> + Send;
     fn delete_flow(&self, flow_id: &str) -> impl Future<Output = Result<()>> + Send;
@@ -133,6 +137,17 @@ impl Storage for MemoryStorage {
 
     async fn list_flow_versions(&self) -> Result<Vec<FlowRegistration>> {
         Ok(self.flow_versions.read().await.values().cloned().collect())
+    }
+
+    async fn list_flow_versions_for(&self, flow_id: &str) -> Result<Vec<FlowRegistration>> {
+        Ok(self
+            .flow_versions
+            .read()
+            .await
+            .values()
+            .filter(|flow| flow.flow_id == flow_id)
+            .cloned()
+            .collect())
     }
 
     async fn list_flows(&self) -> Result<Vec<FlowRegistration>> {

@@ -248,13 +248,12 @@ impl FlowService for FlowServiceImpl {
         request: Request<ListFlowVersionsRequest>,
     ) -> Result<Response<ListFlowVersionsResponse>, Status> {
         let flow_id = request.into_inner().flow_id;
-        let mut flows = self
+        let flows = self
             .state
             .storage
-            .list_flow_versions()
+            .list_flow_versions_for(&flow_id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
-        flows.retain(|flow| flow.flow_id == flow_id);
 
         Ok(Response::new(ListFlowVersionsResponse {
             flows: flows.iter().map(Self::flow_summary).collect(),
