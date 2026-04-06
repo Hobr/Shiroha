@@ -57,6 +57,10 @@ pub(crate) fn parse_positive_u32(input: &str) -> Result<u32, String> {
     parse_positive(input)
 }
 
+pub(crate) fn parse_positive_u64(input: &str) -> Result<u64, String> {
+    parse_positive(input)
+}
+
 fn parse_positive<T>(input: &str) -> Result<T, String>
 where
     T: std::str::FromStr + PartialEq + Default,

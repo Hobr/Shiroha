@@ -83,6 +83,7 @@ async fn dispatch_job_command(
                         args.context.context_hex.as_deref(),
                         args.context.context_file.as_deref(),
                     )?,
+                    args.max_lifetime_ms,
                     json_output,
                 )
                 .await

@@ -64,6 +64,19 @@ impl<S: Storage> JobManager<S> {
         initial_state: &str,
         context: Option<Vec<u8>>,
     ) -> Result<Job> {
+        self.create_job_with_lifetime(flow_id, flow_version, initial_state, context, None, None)
+            .await
+    }
+
+    pub async fn create_job_with_lifetime(
+        &self,
+        flow_id: &str,
+        flow_version: Uuid,
+        initial_state: &str,
+        context: Option<Vec<u8>>,
+        max_lifetime_ms: Option<u64>,
+        lifetime_deadline_ms: Option<u64>,
+    ) -> Result<Job> {
         let job = Job {
             id: Uuid::now_v7(),
             flow_id: flow_id.to_string(),
@@ -74,6 +87,8 @@ impl<S: Storage> JobManager<S> {
             pending_events: Vec::new(),
             scheduled_timeouts: Vec::new(),
             timeout_anchor_ms: None,
+            max_lifetime_ms,
+            lifetime_deadline_ms,
         };
         let event = make_event(
             job.id,

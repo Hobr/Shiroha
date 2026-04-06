@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, ValueHint};
 
-use crate::cli_support::{parse_positive_u32, parse_positive_usize};
+use crate::cli_support::{parse_positive_u32, parse_positive_u64, parse_positive_usize};
 
 shadow_rs::shadow!(build);
 
@@ -129,6 +129,8 @@ struct JobCreateArgs {
     flow: FlowIdArgs,
     #[command(flatten)]
     context: ContextArgs,
+    #[arg(long, value_name = "MS", value_parser = parse_positive_u64)]
+    max_lifetime_ms: Option<u64>,
 }
 
 #[derive(Args)]

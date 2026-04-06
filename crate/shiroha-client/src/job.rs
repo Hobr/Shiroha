@@ -71,12 +71,14 @@ impl ControlClient {
         &mut self,
         flow_id: &str,
         context: Option<Vec<u8>>,
+        max_lifetime_ms: Option<u64>,
     ) -> anyhow::Result<CreateJobResponse> {
         Ok(self
             .job
             .create_job(CreateJobRequest {
                 flow_id: flow_id.to_string(),
                 context,
+                max_lifetime_ms,
             })
             .await?
             .into_inner())
