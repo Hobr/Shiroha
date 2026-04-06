@@ -212,9 +212,9 @@ impl JobServiceImpl {
             if let Some(message) = self
                 .run_declared_action(
                     &flow,
-                    scheduled.action_name,
+                    scheduled.action_name(),
                     job.id,
-                    scheduled.action_state,
+                    scheduled.action_state(),
                     payload.clone(),
                 )
                 .await?

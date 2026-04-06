@@ -1,6 +1,21 @@
+//! Job runtime helper module.
+//!
+//! This module currently contains only action sequencing helpers.
+//! It does not contain the full runtime coordinator yet.
+
 pub(crate) struct ScheduledAction<'a> {
-    pub(crate) action_name: &'a str,
-    pub(crate) action_state: &'a str,
+    action_name: &'a str,
+    action_state: &'a str,
+}
+
+impl<'a> ScheduledAction<'a> {
+    pub(crate) fn action_name(&self) -> &'a str {
+        self.action_name
+    }
+
+    pub(crate) fn action_state(&self) -> &'a str {
+        self.action_state
+    }
 }
 
 pub(crate) fn action_sequence<'a>(
@@ -65,12 +80,45 @@ mod tests {
         assert_eq!(
             sequence
                 .iter()
-                .map(|it| (it.action_name, it.action_state))
+                .map(|it| (it.action_name(), it.action_state()))
                 .collect::<Vec<_>>(),
             expected
                 .iter()
-                .map(|it| (it.action_name, it.action_state))
+                .map(|it| (it.action_name(), it.action_state()))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn action_sequence_skips_missing_optional_actions() {
+        let only_exit = action_sequence("pending", "running", Some("exit_pending"), None, None);
+        assert_eq!(
+            only_exit
+                .iter()
+                .map(|it| (it.action_name(), it.action_state()))
+                .collect::<Vec<_>>(),
+            vec![("exit_pending", "pending")]
+        );
+
+        let only_transition = action_sequence("pending", "running", None, Some("run_transition"), None);
+        assert_eq!(
+            only_transition
+                .iter()
+                .map(|it| (it.action_name(), it.action_state()))
+                .collect::<Vec<_>>(),
+            vec![("run_transition", "running")]
+        );
+
+        let only_enter = action_sequence("pending", "running", None, None, Some("enter_running"));
+        assert_eq!(
+            only_enter
+                .iter()
+                .map(|it| (it.action_name(), it.action_state()))
+                .collect::<Vec<_>>(),
+            vec![("enter_running", "running")]
+        );
+
+        let none = action_sequence("pending", "running", None, None, None);
+        assert!(none.is_empty());
     }
 }
