@@ -19,6 +19,8 @@ pub(crate) struct JobEventsQuery {
 }
 
 pub(crate) fn validate_query(req: GetJobEventsRequest) -> Result<JobEventsQuery, Status> {
+    let job_id = parse_uuid(&req.job_id)?;
+
     if req.since_id.is_some() && req.since_timestamp_ms.is_some() {
         return Err(Status::invalid_argument(
             "`since_id` and `since_timestamp_ms` cannot be used together",
@@ -46,7 +48,7 @@ pub(crate) fn validate_query(req: GetJobEventsRequest) -> Result<JobEventsQuery,
 
     let since_id_text = req.since_id.clone();
     Ok(JobEventsQuery {
-        job_id: parse_uuid(&req.job_id)?,
+        job_id,
         job_id_text: req.job_id,
         since_id: match since_id_text.as_deref() {
             Some(id) => Some(parse_uuid(id)?),
@@ -154,6 +156,21 @@ mod tests {
             error.message(),
             "`since_id` and `since_timestamp_ms` cannot be used together"
         );
+    }
+
+    #[test]
+    fn validate_query_rejects_invalid_job_id_before_other_constraints() {
+        let request = GetJobEventsRequest {
+            job_id: "not-a-uuid".into(),
+            since_id: Some(Uuid::from_u128(1).to_string()),
+            since_timestamp_ms: Some(20),
+            kind: vec!["unknown".into()],
+            limit: Some(0),
+        };
+
+        let error = validate_query(request).expect_err("invalid job_id should be rejected first");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.message(), "invalid UUID: not-a-uuid");
     }
 
     #[test]
