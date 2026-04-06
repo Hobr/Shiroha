@@ -3,6 +3,7 @@ use serde_json::Value;
 use shiroha_proto::shiroha_api::*;
 
 use crate::client::ControlClient;
+use crate::job::ForceDeleteJobResult;
 use crate::manifest::parse_json_value_required;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,7 +58,7 @@ fn manifest_host_world(manifest: &Value) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForceDeleteFlowResult {
     pub flow_id: String,
-    pub deleted_jobs: Vec<crate::job::ForceDeleteJobResult>,
+    pub deleted_jobs: Vec<ForceDeleteJobResult>,
 }
 
 impl ControlClient {

@@ -33,6 +33,15 @@ pub trait Storage: Send + Sync {
         flow_id: &str,
         version: Uuid,
     ) -> impl Future<Output = Result<Option<FlowRegistration>>> + Send;
+    /// 列出某个 Flow 的所有已注册版本。
+    ///
+    /// 语义契约（所有后端必须满足）：
+    /// - 仅返回 `flow.flow_id == flow_id` 的记录（精确匹配，非前缀匹配）。
+    /// - 返回结果必须按 `flow.version.as_u128()` 升序稳定排序。
+    fn list_flow_versions_for(
+        &self,
+        flow_id: &str,
+    ) -> impl Future<Output = Result<Vec<FlowRegistration>>> + Send;
     fn list_flow_versions(&self) -> impl Future<Output = Result<Vec<FlowRegistration>>> + Send;
     fn list_flows(&self) -> impl Future<Output = Result<Vec<FlowRegistration>>> + Send;
     fn delete_flow(&self, flow_id: &str) -> impl Future<Output = Result<()>> + Send;
@@ -133,6 +142,19 @@ impl Storage for MemoryStorage {
 
     async fn list_flow_versions(&self) -> Result<Vec<FlowRegistration>> {
         Ok(self.flow_versions.read().await.values().cloned().collect())
+    }
+
+    async fn list_flow_versions_for(&self, flow_id: &str) -> Result<Vec<FlowRegistration>> {
+        let mut flows = self
+            .flow_versions
+            .read()
+            .await
+            .values()
+            .filter(|flow| flow.flow_id == flow_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        flows.sort_by_key(|flow| flow.version.as_u128());
+        Ok(flows)
     }
 
     async fn list_flows(&self) -> Result<Vec<FlowRegistration>> {
@@ -258,7 +280,37 @@ impl CapabilityStore for MemoryStorage {
 
 #[cfg(test)]
 mod tests {
-    use super::{CapabilityStore, MemoryStorage};
+    use super::{CapabilityStore, MemoryStorage, Storage};
+    use crate::flow::{
+        DispatchMode, FlowManifest, FlowRegistration, FlowWorld, StateDef, StateKind,
+    };
+    use uuid::Uuid;
+
+    fn flow_registration(flow_id: &str, version: Uuid) -> FlowRegistration {
+        FlowRegistration {
+            flow_id: flow_id.to_string(),
+            version,
+            manifest: FlowManifest {
+                id: flow_id.to_string(),
+                host_world: FlowWorld::Sandbox,
+                states: vec![StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                }],
+                transitions: Vec::new(),
+                initial_state: "idle".into(),
+                actions: vec![crate::flow::ActionDef {
+                    name: "noop".into(),
+                    dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
+                }],
+            },
+            wasm_hash: format!("hash-{flow_id}-{version}"),
+        }
+    }
 
     #[test]
     fn capability_store_round_trip_works_in_memory() {
@@ -290,5 +342,40 @@ mod tests {
             storage.get_value("fixture", "alpha").expect("get alpha"),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn list_flow_versions_for_uses_exact_match_and_stable_order() {
+        let storage = MemoryStorage::new();
+        let flow_id = "alpha";
+        let other_flow_id = "alpha\0beta";
+        let versions = [6_u128, 1, 4, 2, 5, 3]
+            .into_iter()
+            .map(Uuid::from_u128)
+            .collect::<Vec<_>>();
+
+        for version in &versions {
+            storage
+                .save_flow(&flow_registration(flow_id, *version))
+                .await
+                .expect("save alpha flow");
+        }
+        storage
+            .save_flow(&flow_registration(other_flow_id, Uuid::from_u128(7)))
+            .await
+            .expect("save alpha\\0beta flow");
+
+        let listed = storage
+            .list_flow_versions_for(flow_id)
+            .await
+            .expect("list flow versions for alpha");
+
+        assert_eq!(listed.len(), versions.len());
+        assert!(listed.iter().all(|flow| flow.flow_id == flow_id));
+        let listed_versions = listed
+            .iter()
+            .map(|flow| flow.version.as_u128())
+            .collect::<Vec<_>>();
+        assert_eq!(listed_versions, vec![1, 2, 3, 4, 5, 6]);
     }
 }
