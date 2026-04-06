@@ -379,8 +379,12 @@ impl JobServiceImpl {
             })?;
 
         // 缓存中保存的是编译后的 component；每次调用仍会创建新的 guest 实例。
-        WasmHost::new(self.state.wasm_runtime.engine(), module.component())
-            .map_err(|e| Status::internal(e.to_string()))
+        WasmHost::new_with_capability_store(
+            self.state.wasm_runtime.engine(),
+            module.component(),
+            self.state.storage.clone(),
+        )
+        .map_err(|e| Status::internal(e.to_string()))
     }
 
     async fn invoke_guard(

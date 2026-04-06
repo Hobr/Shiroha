@@ -7,6 +7,8 @@
 mod network_support;
 mod storage_support;
 
+use std::sync::{Arc, OnceLock};
+
 use serde::{Deserialize, Serialize};
 use wasmtime::component::{ComponentNamedList, ComponentType, Lift, Lower, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
@@ -16,6 +18,7 @@ use shiroha_core::flow::{
     StateKind, SubprocessDef, TimeoutDef, TransitionDef,
 };
 use shiroha_core::job::{ActionResult, AggregateDecision, ExecutionStatus, NodeResult};
+use shiroha_core::storage::{CapabilityStore, MemoryStorage};
 
 use crate::error::WasmError;
 
@@ -50,11 +53,26 @@ pub struct GuardContext {
     pub payload: Option<Vec<u8>>,
 }
 
-#[derive(Default)]
 struct ComponentStoreState {
     // 当前 host 只提供最小 WASI 上下文，没有额外的业务态共享给 guest。
     ctx: WasiCtx,
     table: ResourceTable,
+    capability_store: Arc<dyn CapabilityStore>,
+}
+
+impl Default for ComponentStoreState {
+    fn default() -> Self {
+        Self {
+            ctx: WasiCtx::default(),
+            table: ResourceTable::new(),
+            capability_store: default_capability_store(),
+        }
+    }
+}
+
+fn default_capability_store() -> Arc<dyn CapabilityStore> {
+    static STORE: OnceLock<Arc<MemoryStorage>> = OnceLock::new();
+    STORE.get_or_init(|| Arc::new(MemoryStorage::new())).clone()
 }
 
 impl WasiView for ComponentStoreState {
@@ -75,6 +93,7 @@ impl ComponentGuest {
     fn new(
         engine: &wasmtime::Engine,
         component: &wasmtime::component::Component,
+        capability_store: Arc<dyn CapabilityStore>,
     ) -> Result<Self, WasmError> {
         let mut linker = wasmtime::component::Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
@@ -84,7 +103,13 @@ impl ComponentGuest {
 
         // 每次调用都实例化独立的 store/component instance，避免 fuel 计数、
         // guest 内部状态和资源句柄在不同请求之间相互污染。
-        let mut store = wasmtime::Store::new(engine, ComponentStoreState::default());
+        let mut store = wasmtime::Store::new(
+            engine,
+            ComponentStoreState {
+                capability_store,
+                ..ComponentStoreState::default()
+            },
+        );
         store
             .set_fuel(DEFAULT_FUEL)
             .map_err(|e| WasmError::Instantiation(e.to_string()))?;
@@ -457,6 +482,7 @@ impl From<ComponentAggregateDecision> for AggregateDecision {
 pub struct WasmHost {
     engine: wasmtime::Engine,
     component: wasmtime::component::Component,
+    capability_store: Arc<dyn CapabilityStore>,
 }
 
 impl WasmHost {
@@ -464,15 +490,24 @@ impl WasmHost {
         engine: &wasmtime::Engine,
         component: &wasmtime::component::Component,
     ) -> Result<Self, WasmError> {
+        Self::new_with_capability_store(engine, component, default_capability_store())
+    }
+
+    pub fn new_with_capability_store(
+        engine: &wasmtime::Engine,
+        component: &wasmtime::component::Component,
+        capability_store: Arc<dyn CapabilityStore>,
+    ) -> Result<Self, WasmError> {
         Ok(Self {
             engine: engine.clone(),
             component: component.clone(),
+            capability_store,
         })
     }
 
     /// 创建一次性 guest 实例，用于单次 typed export 调用。
     fn guest(&self) -> Result<ComponentGuest, WasmError> {
-        ComponentGuest::new(&self.engine, &self.component)
+        ComponentGuest::new(&self.engine, &self.component, self.capability_store.clone())
     }
 
     pub fn validate_required_exports(&self) -> Result<(), WasmError> {

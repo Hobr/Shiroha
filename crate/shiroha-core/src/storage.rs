@@ -4,8 +4,9 @@
 //! 内置 [`MemoryStorage`] 用于开发和测试。
 //! 生产环境使用 `shiroha-store-redb` 等具体实现。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -14,6 +15,8 @@ use crate::error::Result;
 use crate::event::EventRecord;
 use crate::flow::FlowRegistration;
 use crate::job::Job;
+
+type MemoryKvMap = BTreeMap<(String, String), Vec<u8>>;
 
 /// 存储后端 trait
 ///
@@ -63,6 +66,21 @@ pub trait Storage: Send + Sync {
     fn get_events(&self, job_id: Uuid) -> impl Future<Output = Result<Vec<EventRecord>>> + Send;
 }
 
+/// 面向 WASM capability host 的同步 KV 存储抽象。
+///
+/// 这里选择 object-safe 同步 API，便于在 component host import 中通过 trait object 直接调用。
+pub trait CapabilityStore: Send + Sync {
+    fn get_value(&self, namespace: &str, key: &str) -> Result<Option<Vec<u8>>>;
+    fn put_value(&self, namespace: &str, key: &str, value: &[u8]) -> Result<()>;
+    fn delete_value(&self, namespace: &str, key: &str) -> Result<bool>;
+    fn list_keys(
+        &self,
+        namespace: &str,
+        prefix: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Vec<String>>;
+}
+
 /// 基于内存的存储实现（开发/测试用）
 ///
 /// 数据仅存活于进程生命周期内，不做持久化。
@@ -74,6 +92,7 @@ pub struct MemoryStorage {
     jobs: Arc<RwLock<HashMap<Uuid, Job>>>,
     /// 事件按追加顺序保存在内存中，测试可以直接断言生命周期顺序。
     events: Arc<RwLock<Vec<EventRecord>>>,
+    kv: Arc<StdRwLock<MemoryKvMap>>,
 }
 
 impl MemoryStorage {
@@ -184,5 +203,92 @@ impl Storage for MemoryStorage {
             .filter(|e| e.job_id == job_id)
             .cloned()
             .collect())
+    }
+}
+
+impl CapabilityStore for MemoryStorage {
+    fn get_value(&self, namespace: &str, key: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self
+            .kv
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&(namespace.to_string(), key.to_string()))
+            .cloned())
+    }
+
+    fn put_value(&self, namespace: &str, key: &str, value: &[u8]) -> Result<()> {
+        self.kv
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert((namespace.to_string(), key.to_string()), value.to_vec());
+        Ok(())
+    }
+
+    fn delete_value(&self, namespace: &str, key: &str) -> Result<bool> {
+        Ok(self
+            .kv
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&(namespace.to_string(), key.to_string()))
+            .is_some())
+    }
+
+    fn list_keys(
+        &self,
+        namespace: &str,
+        prefix: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Vec<String>> {
+        let mut keys = self
+            .kv
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .keys()
+            .filter(|(entry_namespace, key)| {
+                entry_namespace == namespace && prefix.is_none_or(|prefix| key.starts_with(prefix))
+            })
+            .map(|(_, key)| key.clone())
+            .collect::<Vec<_>>();
+        if let Some(limit) = limit {
+            keys.truncate(limit as usize);
+        }
+        Ok(keys)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CapabilityStore, MemoryStorage};
+
+    #[test]
+    fn capability_store_round_trip_works_in_memory() {
+        let storage = MemoryStorage::new();
+
+        storage
+            .put_value("fixture", "alpha", b"one")
+            .expect("put alpha");
+        storage
+            .put_value("fixture", "beta", b"two")
+            .expect("put beta");
+
+        assert_eq!(
+            storage.get_value("fixture", "alpha").expect("get alpha"),
+            Some(b"one".to_vec())
+        );
+        assert_eq!(
+            storage
+                .list_keys("fixture", Some("a"), None)
+                .expect("list keys"),
+            vec!["alpha".to_string()]
+        );
+        assert!(
+            storage
+                .delete_value("fixture", "alpha")
+                .expect("delete alpha")
+        );
+        assert_eq!(
+            storage.get_value("fixture", "alpha").expect("get alpha"),
+            None
+        );
     }
 }

@@ -18,7 +18,7 @@ use shiroha_core::error::{Result, ShirohaError};
 use shiroha_core::event::EventRecord;
 use shiroha_core::flow::FlowRegistration;
 use shiroha_core::job::Job;
-use shiroha_core::storage::Storage;
+use shiroha_core::storage::{CapabilityStore, Storage};
 use uuid::Uuid;
 
 const FLOWS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("flows");
@@ -26,6 +26,7 @@ const FLOW_VERSIONS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("
 const WASM_MODULES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("wasm_modules");
 const JOBS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("jobs");
 const EVENTS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("events");
+const KV_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("kv");
 
 /// 将任意 Display 错误转为 ShirohaError::Storage
 fn s(e: impl std::fmt::Display) -> ShirohaError {
@@ -48,6 +49,7 @@ impl RedbStorage {
         let _ = txn.open_table(WASM_MODULES_TABLE).map_err(s)?;
         let _ = txn.open_table(JOBS_TABLE).map_err(s)?;
         let _ = txn.open_table(EVENTS_TABLE).map_err(s)?;
+        let _ = txn.open_table(KV_TABLE).map_err(s)?;
         txn.commit().map_err(s)?;
         Ok(Self { db: Arc::new(db) })
     }
@@ -64,6 +66,10 @@ impl RedbStorage {
 
     fn flow_version_key(flow_id: &str, version: Uuid) -> String {
         format!("{flow_id}\u{0}{version}")
+    }
+
+    fn kv_key(namespace: &str, key: &str) -> String {
+        format!("{namespace}\u{0}{key}")
     }
 }
 
@@ -310,6 +316,74 @@ impl Storage for RedbStorage {
         // 对外统一按事件发生时间返回，避免上层依赖底层 B-tree 迭代顺序。
         events.sort_by_key(|e: &EventRecord| e.timestamp_ms);
         Ok(events)
+    }
+}
+
+impl CapabilityStore for RedbStorage {
+    fn get_value(&self, namespace: &str, key: &str) -> Result<Option<Vec<u8>>> {
+        let txn = self.db.begin_read().map_err(s)?;
+        let table = txn.open_table(KV_TABLE).map_err(s)?;
+        match table
+            .get(Self::kv_key(namespace, key).as_str())
+            .map_err(s)?
+        {
+            Some(value) => Ok(Some(value.value().to_vec())),
+            None => Ok(None),
+        }
+    }
+
+    fn put_value(&self, namespace: &str, key: &str, value: &[u8]) -> Result<()> {
+        let txn = self.db.begin_write().map_err(s)?;
+        {
+            let mut table = txn.open_table(KV_TABLE).map_err(s)?;
+            table
+                .insert(Self::kv_key(namespace, key).as_str(), value)
+                .map_err(s)?;
+        }
+        txn.commit().map_err(s)?;
+        Ok(())
+    }
+
+    fn delete_value(&self, namespace: &str, key: &str) -> Result<bool> {
+        let txn = self.db.begin_write().map_err(s)?;
+        let removed = {
+            let mut table = txn.open_table(KV_TABLE).map_err(s)?;
+            table
+                .remove(Self::kv_key(namespace, key).as_str())
+                .map_err(s)?
+                .is_some()
+        };
+        txn.commit().map_err(s)?;
+        Ok(removed)
+    }
+
+    fn list_keys(
+        &self,
+        namespace: &str,
+        prefix: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Vec<String>> {
+        let txn = self.db.begin_read().map_err(s)?;
+        let table = txn.open_table(KV_TABLE).map_err(s)?;
+        let namespace_prefix = format!("{namespace}\u{0}");
+        let key_prefix = prefix.unwrap_or_default();
+        let mut keys = Vec::new();
+        for entry in table.iter().map_err(s)? {
+            let (raw_key, _) = entry.map_err(s)?;
+            let raw_key = raw_key.value();
+            if !raw_key.starts_with(&namespace_prefix) {
+                continue;
+            }
+            let key = &raw_key[namespace_prefix.len()..];
+            if !key.starts_with(key_prefix) {
+                continue;
+            }
+            keys.push(key.to_string());
+            if limit.is_some_and(|limit| keys.len() >= limit as usize) {
+                break;
+            }
+        }
+        Ok(keys)
     }
 }
 
@@ -621,6 +695,41 @@ mod tests {
         );
 
         drop(storage);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn capability_store_round_trip_works_in_redb() {
+        let path = temp_db_path("kv-store");
+        let storage = RedbStorage::new(&path).expect("open db");
+
+        storage
+            .put_value("fixture", "alpha", b"one")
+            .expect("put alpha");
+        storage
+            .put_value("fixture", "beta", b"two")
+            .expect("put beta");
+
+        assert_eq!(
+            storage.get_value("fixture", "alpha").expect("get alpha"),
+            Some(b"one".to_vec())
+        );
+        assert_eq!(
+            storage
+                .list_keys("fixture", Some("a"), None)
+                .expect("list keys"),
+            vec!["alpha".to_string()]
+        );
+        assert!(
+            storage
+                .delete_value("fixture", "alpha")
+                .expect("delete alpha")
+        );
+        assert_eq!(
+            storage.get_value("fixture", "alpha").expect("get alpha"),
+            None
+        );
+
         let _ = std::fs::remove_file(path);
     }
 }

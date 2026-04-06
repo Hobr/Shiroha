@@ -275,10 +275,11 @@ mod tests {
     use super::*;
     use crate::flow_service::FlowServiceImpl;
     use crate::job_service::JobServiceImpl;
-    use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
+    use crate::test_support::{TestHarness, approval_manifest, example_wasm, wasm_for_manifest};
     use shiroha_core::flow::{
         FlowManifest, FlowWorld, StateDef, StateKind, TimeoutDef, TransitionDef,
     };
+    use shiroha_core::storage::CapabilityStore;
     use shiroha_proto::shiroha_api::flow_service_server::FlowService;
     use shiroha_proto::shiroha_api::job_service_server::JobService;
     use shiroha_proto::shiroha_api::{
@@ -567,5 +568,59 @@ mod tests {
         .expect("timer should complete after reload");
 
         assert_eq!(job.current_state, "timed_out");
+    }
+
+    #[tokio::test]
+    async fn reloaded_server_preserves_storage_capability_data() {
+        let harness = TestHarness::new("server-reload-storage-capability").await;
+        let data_dir = harness.data_dir.clone();
+        let flow_service = FlowServiceImpl::new(harness.state.clone());
+        let job_service = JobServiceImpl::new(harness.state.clone());
+
+        let wasm_bytes = example_wasm(
+            "crate/shiroha-wasm/test-fixtures/storage-component/Cargo.toml",
+            "storage_component_fixture",
+        );
+        flow_service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "storage-flow".into(),
+                wasm_bytes,
+            }))
+            .await
+            .expect("deploy storage flow");
+
+        job_service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "storage-flow".into(),
+                context: None,
+            }))
+            .await
+            .expect("create storage job");
+
+        assert_eq!(
+            harness
+                .state
+                .storage
+                .get_value("fixture", "beta")
+                .expect("get stored beta"),
+            Some(b"two".to_vec())
+        );
+
+        drop(job_service);
+        drop(flow_service);
+        drop(harness);
+
+        let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
+            .await
+            .expect("reload server");
+
+        assert_eq!(
+            reloaded
+                .state
+                .storage
+                .get_value("fixture", "beta")
+                .expect("get stored beta after reload"),
+            Some(b"two".to_vec())
+        );
     }
 }
