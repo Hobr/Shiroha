@@ -59,6 +59,9 @@ fmt:
 test:
     cargo nextest run --all-features --run-ignored all
 
+coverage:
+    cargo llvm-cov nextest --workspace --html
+
 doc:
     cargo doc --open --workspace
 
