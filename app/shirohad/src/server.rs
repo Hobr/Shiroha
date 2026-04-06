@@ -6,10 +6,8 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use shiroha_core::flow::FlowRegistration;
 use shiroha_core::job::JobState;
 use shiroha_core::storage::Storage;
-use shiroha_engine::engine::StateMachineEngine;
 use shiroha_engine::job::JobManager;
 use shiroha_engine::timer::TimerWheel;
 use shiroha_store_redb::store::RedbStorage;
@@ -22,6 +20,7 @@ use tokio::task::JoinHandle;
 use tokio_stream::wrappers::UnixListenerStream;
 use uuid::Uuid;
 
+use crate::flow_registry::FlowRegistry;
 use crate::flow_service::FlowServiceImpl;
 use crate::job_service::JobServiceImpl;
 
@@ -30,16 +29,7 @@ pub struct ShirohaState {
     pub storage: Arc<RedbStorage>,
     pub wasm_runtime: Arc<WasmRuntime>,
     pub module_cache: Arc<ModuleCache>,
-    /// 内存中的最新 Flow 注册表（flow_id → FlowRegistration）。
-    /// 部署后会落盘到 storage，这里保留一份热路径缓存，避免每次请求都查数据库。
-    pub flows: Arc<Mutex<HashMap<String, FlowRegistration>>>,
-    /// 所有已部署版本的 Flow 注册表（(flow_id, version) → FlowRegistration）。
-    pub flow_versions: Arc<Mutex<HashMap<(String, Uuid), FlowRegistration>>>,
-    /// 每个 Flow 最新版本对应的状态机引擎（flow_id → Engine）。
-    /// Engine 是只读拓扑索引，常驻内存后事件处理只需要查 HashMap。
-    pub engines: Arc<Mutex<HashMap<String, StateMachineEngine>>>,
-    /// 所有已部署版本的状态机引擎（(flow_id, version) → Engine）。
-    pub versioned_engines: Arc<Mutex<HashMap<(String, Uuid), StateMachineEngine>>>,
+    pub flow_registry: Arc<FlowRegistry>,
     /// Job 级串行化锁，保证同一 Job 任一时刻只处理一个事件/生命周期操作
     pub(crate) job_locks: Arc<Mutex<HashMap<uuid::Uuid, Arc<Mutex<()>>>>>,
     pub job_manager: Arc<JobManager<RedbStorage>>,
@@ -84,8 +74,7 @@ impl ShirohaServer {
             .unwrap_or_default()
             .as_millis() as u64;
         let flow_ids = {
-            let flows = state.flows.lock().await;
-            flows.keys().cloned().collect::<Vec<_>>()
+            state.flow_registry.latest_flow_ids().await
         };
 
         let mut restored_timers = 0usize;
@@ -133,10 +122,7 @@ impl ShirohaServer {
             storage,
             wasm_runtime,
             module_cache,
-            flows: Arc::new(Mutex::new(HashMap::new())),
-            flow_versions: Arc::new(Mutex::new(HashMap::new())),
-            engines: Arc::new(Mutex::new(HashMap::new())),
-            versioned_engines: Arc::new(Mutex::new(HashMap::new())),
+            flow_registry: Arc::new(FlowRegistry::new()),
             job_locks: Arc::new(Mutex::new(HashMap::new())),
             job_manager,
             timer_wheel: Arc::new(timer_wheel),
@@ -148,10 +134,6 @@ impl ShirohaServer {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         if !persisted_flows.is_empty() {
-            let mut flows = state.flows.lock().await;
-            let mut flow_versions = state.flow_versions.lock().await;
-            let mut engines = state.engines.lock().await;
-            let mut versioned_engines = state.versioned_engines.lock().await;
             // 重启时先恢复 Flow 拓扑和编译入口；Job timeout 会在后面按 Job 快照重建。
             for registration in persisted_flows {
                 let wasm_bytes = state
@@ -176,27 +158,12 @@ impl ShirohaServer {
                         .insert(Arc::new(WasmModule::new(component, &wasm_bytes)));
                 }
 
-                let versioned_key = (registration.flow_id.clone(), registration.version);
-                flow_versions.insert(versioned_key.clone(), registration.clone());
-                versioned_engines.insert(
-                    versioned_key,
-                    StateMachineEngine::new(registration.manifest.clone()),
-                );
-
-                let should_replace_latest = flows
-                    .get(&registration.flow_id)
-                    .is_none_or(|existing| registration.version > existing.version);
-                if should_replace_latest {
-                    engines.insert(
-                        registration.flow_id.clone(),
-                        StateMachineEngine::new(registration.manifest.clone()),
-                    );
-                    flows.insert(registration.flow_id.clone(), registration);
-                }
+                state.flow_registry.register(registration).await;
             }
+            let (latest_count, version_count) = state.flow_registry.counts().await;
             tracing::info!(
-                latest_count = flows.len(),
-                version_count = flow_versions.len(),
+                latest_count,
+                version_count,
                 "loaded persisted flows into memory registry"
             );
         }
@@ -341,23 +308,21 @@ mod tests {
             .await
             .expect("reload server");
 
-        assert!(reloaded.state.flows.lock().await.contains_key("persisted"));
         assert!(
             reloaded
                 .state
-                .engines
-                .lock()
+                .flow_registry
+                .latest_registration("persisted")
                 .await
-                .contains_key("persisted")
+                .is_some()
         );
         assert!(
             reloaded
                 .state
-                .flow_versions
-                .lock()
+                .flow_registry
+                .latest_engine("persisted")
                 .await
-                .keys()
-                .any(|(flow_id, _)| flow_id == "persisted")
+                .is_some()
         );
         let wasm_hash = reloaded
             .state
