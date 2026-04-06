@@ -1,11 +1,8 @@
-use std::path::Path;
-
 use clap::{CommandFactory, Parser};
 use clap_complete::env::CompleteEnv;
 use tracing_subscriber::EnvFilter;
 
-use crate::cli_support;
-use crate::{Cli, Commands, CompleteArgs, CompletionShell, FlowCommands, JobCommands, client};
+use crate::{Cli, Commands, FlowCommands, JobCommands, cli_support, client};
 
 pub(crate) fn run() -> anyhow::Result<()> {
     CompleteEnv::with_factory(Cli::command).complete();
@@ -24,7 +21,7 @@ async fn async_main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     if let Commands::Complete(args) = cli.command {
-        handle_complete(args)?;
+        cli_support::handle_complete(args)?;
         return Ok(());
     }
 
@@ -147,85 +144,5 @@ async fn dispatch_job_command(
                 )
                 .await
         }
-    }
-}
-
-fn handle_complete(args: CompleteArgs) -> anyhow::Result<()> {
-    let shell = resolve_completion_shell(args.shell)?;
-    if args.print_path {
-        let path = cli_support::default_completion_path(shell)?;
-        println!("{}", path.display());
-        return Ok(());
-    }
-
-    let script = generate_completion_script(shell)?;
-    if let Some(path) = args.output.as_deref() {
-        cli_support::write_completion_script(path, &script)?;
-        println!("{}", path.display());
-        return Ok(());
-    }
-    if args.install {
-        let path = cli_support::default_completion_path(shell)?;
-        cli_support::write_completion_script(&path, &script)?;
-        println!("{}", path.display());
-        return Ok(());
-    }
-
-    cli_support::emit_completion_script(&script)
-}
-
-fn resolve_completion_shell(shell: Option<CompletionShell>) -> anyhow::Result<CompletionShell> {
-    shell.or_else(detect_shell_from_env).ok_or_else(|| {
-        anyhow::anyhow!(
-            "failed to detect shell from $SHELL; pass one explicitly, e.g. `sctl complete fish`"
-        )
-    })
-}
-
-fn detect_shell_from_env() -> Option<CompletionShell> {
-    let shell = std::env::var_os("SHELL")?;
-    let shell = Path::new(&shell).file_name()?.to_str()?;
-    match shell {
-        "bash" => Some(CompletionShell::Bash),
-        "elvish" => Some(CompletionShell::Elvish),
-        "fish" => Some(CompletionShell::Fish),
-        "pwsh" | "powershell" => Some(CompletionShell::PowerShell),
-        "zsh" => Some(CompletionShell::Zsh),
-        _ => None,
-    }
-}
-
-fn generate_completion_script(shell: CompletionShell) -> anyhow::Result<Vec<u8>> {
-    let output = std::process::Command::new(std::env::current_exe()?)
-        .env("COMPLETE", shell.env_name())
-        .output()?;
-    if output.status.success() {
-        return Ok(output.stdout);
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    anyhow::bail!(
-        "failed to generate {} completion script: {}",
-        shell,
-        stderr.trim()
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detect_shell_from_path_basename() {
-        assert_eq!(
-            Path::new("/usr/bin/fish")
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(|name| match name {
-                    "fish" => Some(CompletionShell::Fish),
-                    _ => None,
-                }),
-            Some(CompletionShell::Fish)
-        );
     }
 }
