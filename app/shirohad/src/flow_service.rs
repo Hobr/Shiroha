@@ -372,65 +372,16 @@ impl FlowService for FlowServiceImpl {
 mod tests {
     use super::*;
     use crate::job_service::JobServiceImpl;
-    use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
+    use crate::test_support::{
+        TestHarness, approval_manifest, register_flow_version, warning_manifest, wasm_for_manifest,
+    };
     use shiroha_core::flow::{FlowManifest, FlowWorld, StateDef, StateKind, TransitionDef};
     use shiroha_core::storage::Storage;
-    use shiroha_engine::engine::StateMachineEngine;
     use shiroha_proto::shiroha_api::job_service_server::JobService;
     use shiroha_proto::shiroha_api::{
         CreateJobRequest, DeleteFlowRequest, GetFlowRequest, ListFlowVersionsRequest,
         ListFlowsRequest,
     };
-
-    fn warning_manifest() -> FlowManifest {
-        FlowManifest {
-            id: "warning-demo".into(),
-            host_world: FlowWorld::Sandbox,
-            states: vec![
-                StateDef {
-                    name: "idle".into(),
-                    kind: StateKind::Normal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-                StateDef {
-                    name: "loop".into(),
-                    kind: StateKind::Normal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-                StateDef {
-                    name: "done".into(),
-                    kind: StateKind::Terminal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-            ],
-            transitions: vec![
-                TransitionDef {
-                    from: "idle".into(),
-                    to: "loop".into(),
-                    event: "start".into(),
-                    guard: None,
-                    action: None,
-                    timeout: None,
-                },
-                TransitionDef {
-                    from: "loop".into(),
-                    to: "loop".into(),
-                    event: "spin".into(),
-                    guard: None,
-                    action: None,
-                    timeout: None,
-                },
-            ],
-            initial_state: "idle".into(),
-            actions: Vec::new(),
-        }
-    }
 
     fn invalid_reference_manifest() -> FlowManifest {
         FlowManifest {
@@ -463,58 +414,6 @@ mod tests {
             initial_state: "idle".into(),
             actions: Vec::new(),
         }
-    }
-
-    async fn register_flow_version(
-        state: &Arc<crate::server::ShirohaState>,
-        flow_id: &str,
-        version: Uuid,
-        manifest: FlowManifest,
-    ) -> FlowRegistration {
-        let registration = FlowRegistration {
-            flow_id: flow_id.to_string(),
-            version,
-            manifest: manifest.clone(),
-            // 这组查询测试只验证 flow 元数据读路径，不走真实 wasm 执行。
-            wasm_hash: format!("test-{flow_id}-{version}"),
-        };
-
-        state
-            .storage
-            .save_flow(&registration)
-            .await
-            .expect("save flow version");
-
-        state
-            .flow_versions
-            .lock()
-            .await
-            .insert((flow_id.to_string(), version), registration.clone());
-        state.versioned_engines.lock().await.insert(
-            (flow_id.to_string(), version),
-            StateMachineEngine::new(manifest.clone()),
-        );
-
-        let replace_latest = state
-            .flows
-            .lock()
-            .await
-            .get(flow_id)
-            .is_none_or(|existing| version > existing.version);
-        if replace_latest {
-            state
-                .flows
-                .lock()
-                .await
-                .insert(flow_id.to_string(), registration.clone());
-            state
-                .engines
-                .lock()
-                .await
-                .insert(flow_id.to_string(), StateMachineEngine::new(manifest));
-        }
-
-        registration
     }
 
     #[tokio::test]

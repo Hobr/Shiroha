@@ -275,7 +275,7 @@ mod tests {
     use super::*;
     use crate::flow_service::FlowServiceImpl;
     use crate::job_service::JobServiceImpl;
-    use crate::test_support::{TestHarness, approval_manifest, example_wasm, wasm_for_manifest};
+    use crate::test_support::{TestHarness, approval_manifest, deploy_flow, example_wasm};
     use shiroha_core::flow::{
         FlowManifest, FlowWorld, StateDef, StateKind, TimeoutDef, TransitionDef,
     };
@@ -329,17 +329,12 @@ mod tests {
     async fn new_server_loads_persisted_flows_into_memory_registry() {
         let harness = TestHarness::new("server-reload").await;
         let data_dir = harness.data_dir.clone();
-        let flow_service = FlowServiceImpl::new(harness.state.clone());
-
-        flow_service
-            .deploy_flow(Request::new(DeployFlowRequest {
-                flow_id: "persisted".into(),
-                wasm_bytes: wasm_for_manifest(&approval_manifest("persisted", Some("allow"))),
-            }))
-            .await
-            .expect("deploy flow");
-
-        drop(flow_service);
+        deploy_flow(
+            harness.state.clone(),
+            "persisted",
+            &approval_manifest("persisted", Some("allow")),
+        )
+        .await;
         drop(harness);
 
         let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
@@ -380,16 +375,14 @@ mod tests {
     async fn reloaded_server_can_continue_existing_job_execution() {
         let harness = TestHarness::new("server-reload-job").await;
         let data_dir = harness.data_dir.clone();
-        let flow_service = FlowServiceImpl::new(harness.state.clone());
         let job_service = JobServiceImpl::new(harness.state.clone());
 
-        flow_service
-            .deploy_flow(Request::new(DeployFlowRequest {
-                flow_id: "persisted".into(),
-                wasm_bytes: wasm_for_manifest(&approval_manifest("persisted", Some("allow"))),
-            }))
-            .await
-            .expect("deploy flow");
+        deploy_flow(
+            harness.state.clone(),
+            "persisted",
+            &approval_manifest("persisted", Some("allow")),
+        )
+        .await;
         let created = job_service
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "persisted".into(),
@@ -400,7 +393,6 @@ mod tests {
             .into_inner();
 
         drop(job_service);
-        drop(flow_service);
         drop(harness);
 
         let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
@@ -433,16 +425,14 @@ mod tests {
     async fn reloaded_server_preserves_paused_job_pending_events() {
         let harness = TestHarness::new("server-reload-paused-job").await;
         let data_dir = harness.data_dir.clone();
-        let flow_service = FlowServiceImpl::new(harness.state.clone());
         let job_service = JobServiceImpl::new(harness.state.clone());
 
-        flow_service
-            .deploy_flow(Request::new(DeployFlowRequest {
-                flow_id: "persisted".into(),
-                wasm_bytes: wasm_for_manifest(&approval_manifest("persisted", Some("allow"))),
-            }))
-            .await
-            .expect("deploy flow");
+        deploy_flow(
+            harness.state.clone(),
+            "persisted",
+            &approval_manifest("persisted", Some("allow")),
+        )
+        .await;
         let created = job_service
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "persisted".into(),
@@ -467,7 +457,6 @@ mod tests {
             .expect("queue event while paused");
 
         drop(job_service);
-        drop(flow_service);
         drop(harness);
 
         let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
@@ -522,16 +511,14 @@ mod tests {
     async fn reloaded_server_restores_running_job_timers() {
         let harness = TestHarness::new("server-reload-timeout").await;
         let data_dir = harness.data_dir.clone();
-        let flow_service = FlowServiceImpl::new(harness.state.clone());
         let job_service = JobServiceImpl::new(harness.state.clone());
 
-        flow_service
-            .deploy_flow(Request::new(DeployFlowRequest {
-                flow_id: "timeout-flow".into(),
-                wasm_bytes: wasm_for_manifest(&restart_timeout_manifest("timeout-flow")),
-            }))
-            .await
-            .expect("deploy timeout flow");
+        deploy_flow(
+            harness.state.clone(),
+            "timeout-flow",
+            &restart_timeout_manifest("timeout-flow"),
+        )
+        .await;
         let created = job_service
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "timeout-flow".into(),
@@ -543,7 +530,6 @@ mod tests {
 
         sleep(Duration::from_millis(60)).await;
         drop(job_service);
-        drop(flow_service);
         drop(harness);
 
         let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
