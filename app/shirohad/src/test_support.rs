@@ -90,7 +90,7 @@ impl LiveGrpcServer {
         let server = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await
             .expect("create test server");
-        let socket_path = data_dir.join("shirohad.sock");
+        let socket_path = std::env::temp_dir().join(format!("shirohad-{}.sock", Uuid::now_v7()));
         let _ = std::fs::remove_file(&socket_path);
         let listener = match tokio::net::UnixListener::bind(&socket_path) {
             Ok(listener) => listener,
