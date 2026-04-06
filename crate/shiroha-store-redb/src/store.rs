@@ -340,10 +340,7 @@ impl Storage for RedbStorage {
         let table = txn.open_table(EVENTS_TABLE).map_err(s)?;
         let (start, end) = Self::event_key_range(job_id);
         let mut events = Vec::new();
-        for entry in table
-            .range(start.as_slice()..=end.as_slice())
-            .map_err(s)?
-        {
+        for entry in table.range(start.as_slice()..=end.as_slice()).map_err(s)? {
             let (_, v) = entry.map_err(s)?;
             let event: EventRecord = serde_json::from_slice(v.value()).map_err(s)?;
             events.push(event);
@@ -726,7 +723,10 @@ mod tests {
         };
         let storage = RedbStorage::new(&path).expect("open db");
 
-        storage.save_job(&target_job).await.expect("save target job");
+        storage
+            .save_job(&target_job)
+            .await
+            .expect("save target job");
         storage
             .save_job(&neighbor_job)
             .await

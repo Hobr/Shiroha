@@ -62,7 +62,7 @@ mod tests {
             Some("enter_running"),
         );
 
-        let expected = vec![
+        let expected = [
             ScheduledAction {
                 action_name: "exit_pending",
                 action_state: "pending",
@@ -100,7 +100,8 @@ mod tests {
             vec![("exit_pending", "pending")]
         );
 
-        let only_transition = action_sequence("pending", "running", None, Some("run_transition"), None);
+        let only_transition =
+            action_sequence("pending", "running", None, Some("run_transition"), None);
         assert_eq!(
             only_transition
                 .iter()
