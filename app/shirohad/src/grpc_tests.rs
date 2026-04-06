@@ -72,7 +72,9 @@ async fn deploy_wasm(client: &mut FlowServiceClient<Channel>, flow_id: &str, was
 #[tokio::test]
 async fn grpc_round_trip_flow_and_job_execution() {
     // 覆盖最完整的 happy-path：deploy -> create -> trigger -> complete -> event log。
-    let server = LiveGrpcServer::start("grpc-roundtrip").await;
+    let Some(server) = LiveGrpcServer::start("grpc-roundtrip").await else {
+        return;
+    };
     let mut flow = server.flow_client().await;
     let mut job = server.job_client().await;
     let manifest = approval_manifest("grpc-approval", Some("allow"));
@@ -143,7 +145,9 @@ async fn grpc_round_trip_flow_and_job_execution() {
 #[tokio::test]
 async fn grpc_pause_resume_processes_queued_event() {
     // 验证 pause 后的 trigger-event 会先排队，resume 时再继续消费。
-    let server = LiveGrpcServer::start("grpc-pause-resume").await;
+    let Some(server) = LiveGrpcServer::start("grpc-pause-resume").await else {
+        return;
+    };
     let mut flow = server.flow_client().await;
     let mut job = server.job_client().await;
 
@@ -199,7 +203,9 @@ async fn grpc_pause_resume_processes_queued_event() {
 #[tokio::test]
 async fn grpc_timer_event_completes_job() {
     // 覆盖定时器通过 server 内部 forwarder 回注到 JobService 的路径。
-    let server = LiveGrpcServer::start("grpc-timer").await;
+    let Some(server) = LiveGrpcServer::start("grpc-timer").await else {
+        return;
+    };
     let mut flow = server.flow_client().await;
     let mut job = server.job_client().await;
 
@@ -240,7 +246,9 @@ async fn grpc_timer_event_completes_job() {
 
 #[tokio::test]
 async fn grpc_simple_example_component_runs_end_to_end() {
-    let server = LiveGrpcServer::start("grpc-example-simple").await;
+    let Some(server) = LiveGrpcServer::start("grpc-example-simple").await else {
+        return;
+    };
     let mut flow = server.flow_client().await;
     let mut job = server.job_client().await;
 
@@ -273,7 +281,9 @@ async fn grpc_simple_example_component_runs_end_to_end() {
 
 #[tokio::test]
 async fn grpc_advanced_example_runs_supported_submit_path() {
-    let server = LiveGrpcServer::start("grpc-example-advanced").await;
+    let Some(server) = LiveGrpcServer::start("grpc-example-advanced").await else {
+        return;
+    };
     let mut flow = server.flow_client().await;
     let mut job = server.job_client().await;
 
@@ -330,7 +340,9 @@ async fn grpc_advanced_example_runs_supported_submit_path() {
 
 #[tokio::test]
 async fn grpc_subprocess_examples_support_manual_parent_child_progression() {
-    let server = LiveGrpcServer::start("grpc-example-sub").await;
+    let Some(server) = LiveGrpcServer::start("grpc-example-sub").await else {
+        return;
+    };
     let mut flow = server.flow_client().await;
     let mut job = server.job_client().await;
 

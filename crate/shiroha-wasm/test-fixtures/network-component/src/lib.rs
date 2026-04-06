@@ -11,6 +11,7 @@ impl Guest for NetworkFlow {
     fn get_manifest() -> FlowManifest {
         FlowManifest {
             id: "network-fixture".to_string(),
+            host_world: FlowWorld::Network,
             states: vec![StateDef {
                 name: "idle".to_string(),
                 kind: StateKind::Normal,

@@ -1,0 +1,7 @@
+package shiroha:flow@0.1.0;
+
+world full-flow {
+  include flow;
+  import net;
+  import store;
+}

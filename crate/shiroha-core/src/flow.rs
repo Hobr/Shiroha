@@ -12,6 +12,8 @@ use uuid::Uuid;
 pub struct FlowManifest {
     /// guest 自描述的 flow 标识；部署时平台侧也会额外维护自己的注册键。
     pub id: String,
+    /// guest 声明所需的 capability world，部署时会与组件实际 imports 做一致性校验。
+    pub world: FlowWorld,
     /// 完整状态集合，和 `transitions` 一起构成静态拓扑快照。
     pub states: Vec<StateDef>,
     pub transitions: Vec<TransitionDef>,
@@ -19,6 +21,15 @@ pub struct FlowManifest {
     pub initial_state: String,
     /// Action 元信息注册表，声明每个 action 的分发策略
     pub actions: Vec<ActionDef>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowWorld {
+    Sandbox,
+    Network,
+    Storage,
+    Full,
 }
 
 /// 状态节点定义

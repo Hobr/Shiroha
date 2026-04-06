@@ -319,7 +319,8 @@ mod tests {
 
     use shiroha_core::event::{EventKind, EventRecord};
     use shiroha_core::flow::{
-        ActionDef, DispatchMode, FlowManifest, FlowRegistration, StateDef, StateKind, TransitionDef,
+        ActionDef, DispatchMode, FlowManifest, FlowRegistration, FlowWorld, StateDef, StateKind,
+        TransitionDef,
     };
     use shiroha_core::job::{Job, JobState};
     use shiroha_core::storage::Storage;
@@ -336,6 +337,7 @@ mod tests {
             version: Uuid::now_v7(),
             manifest: FlowManifest {
                 id: "demo".into(),
+                world: FlowWorld::Sandbox,
                 states: vec![
                     StateDef {
                         name: "idle".into(),

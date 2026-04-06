@@ -16,6 +16,8 @@ struct FlowComponent;
 #[derive(Debug, Deserialize)]
 struct ManifestTemplate {
     id: String,
+    #[serde(default)]
+    world: Option<FlowWorldTemplate>,
     states: Vec<StateTemplate>,
     transitions: Vec<TransitionTemplate>,
     initial_state: String,
@@ -75,6 +77,15 @@ enum DispatchTemplate {
     Local,
     Remote,
     FanOut(FanOutTemplate),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FlowWorldTemplate {
+    Sandbox,
+    Network,
+    Storage,
+    Full,
 }
 
 #[derive(Debug, Deserialize)]
@@ -159,6 +170,7 @@ impl From<ManifestTemplate> for FlowManifest {
     fn from(value: ManifestTemplate) -> Self {
         Self {
             id: value.id,
+            host_world: value.world.unwrap_or(FlowWorldTemplate::Sandbox).into(),
             states: value.states.into_iter().map(Into::into).collect(),
             transitions: value.transitions.into_iter().map(Into::into).collect(),
             initial_state: value.initial_state,
@@ -237,6 +249,17 @@ impl From<DispatchTemplate> for DispatchMode {
             DispatchTemplate::Local => Self::Local,
             DispatchTemplate::Remote => Self::Remote,
             DispatchTemplate::FanOut(config) => Self::FanOut(config.into()),
+        }
+    }
+}
+
+impl From<FlowWorldTemplate> for FlowWorld {
+    fn from(value: FlowWorldTemplate) -> Self {
+        match value {
+            FlowWorldTemplate::Sandbox => Self::Sandbox,
+            FlowWorldTemplate::Network => Self::Network,
+            FlowWorldTemplate::Storage => Self::Storage,
+            FlowWorldTemplate::Full => Self::Full,
         }
     }
 }

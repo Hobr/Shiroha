@@ -9,6 +9,7 @@ impl Guest for WarningDeadlockFlow {
     fn get_manifest() -> FlowManifest {
         FlowManifest {
             id: "warning-deadlock-demo".to_string(),
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".to_string(),

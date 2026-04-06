@@ -78,13 +78,14 @@ impl StateMachineEngine {
 #[cfg(test)]
 mod tests {
     use shiroha_core::error::ShirohaError;
-    use shiroha_core::flow::{ActionDef, DispatchMode};
+    use shiroha_core::flow::{ActionDef, DispatchMode, FlowWorld};
 
     use super::*;
 
     fn sample_manifest() -> FlowManifest {
         FlowManifest {
             id: "demo".into(),
+            world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
