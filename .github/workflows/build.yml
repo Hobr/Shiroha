@@ -36,7 +36,9 @@ jobs:
         run: cargo fmt --all
 
       - name: Deny
-        run: cargo deny check -d
+        run: |
+          cargo deny fetch
+          cargo deny check -d
 
       - name: Check
         run: cargo check --workspace
