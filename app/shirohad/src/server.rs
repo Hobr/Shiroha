@@ -4,8 +4,10 @@ use std::collections::HashMap;
 #[cfg(test)]
 use std::future::Future;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use shiroha_core::flow::FlowRegistration;
+use shiroha_core::job::JobState;
 use shiroha_core::storage::Storage;
 use shiroha_engine::engine::StateMachineEngine;
 use shiroha_engine::job::JobManager;
@@ -76,6 +78,46 @@ pub(crate) fn spawn_timer_forwarder(
 }
 
 impl ShirohaServer {
+    async fn restore_persisted_timers(state: &Arc<ShirohaState>) -> anyhow::Result<()> {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let flow_ids = {
+            let flows = state.flows.lock().await;
+            flows.keys().cloned().collect::<Vec<_>>()
+        };
+
+        let mut restored_timers = 0usize;
+        for flow_id in flow_ids {
+            for job in state
+                .job_manager
+                .list_jobs(&flow_id)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+            {
+                if job.state != JobState::Running || job.scheduled_timeouts.is_empty() {
+                    continue;
+                }
+                let anchor = job.timeout_anchor_ms.unwrap_or(now_ms);
+                let elapsed = now_ms.saturating_sub(anchor);
+                for timeout in job.scheduled_timeouts {
+                    let remaining = timeout.remaining_ms.saturating_sub(elapsed);
+                    state
+                        .timer_wheel
+                        .register(job.id, timeout.event, Duration::from_millis(remaining))
+                        .await;
+                    restored_timers += 1;
+                }
+            }
+        }
+
+        if restored_timers > 0 {
+            tracing::info!(restored_timers, "restored persisted job timers");
+        }
+        Ok(())
+    }
+
     /// 初始化所有组件：存储、WASM 运行时、定时器轮
     pub async fn new(data_dir: &str) -> anyhow::Result<Self> {
         std::fs::create_dir_all(data_dir)?;
@@ -110,8 +152,7 @@ impl ShirohaServer {
             let mut flow_versions = state.flow_versions.lock().await;
             let mut engines = state.engines.lock().await;
             let mut versioned_engines = state.versioned_engines.lock().await;
-            // 重启后恢复的是 Flow 拓扑和编译入口，不包括运行中的 timer 状态；
-            // timer 会在后续 Job 创建或状态迁移时重新注册。
+            // 重启时先恢复 Flow 拓扑和编译入口；Job timeout 会在后面按 Job 快照重建。
             for registration in persisted_flows {
                 let wasm_bytes = state
                     .storage
@@ -159,6 +200,7 @@ impl ShirohaServer {
                 "loaded persisted flows into memory registry"
             );
         }
+        Self::restore_persisted_timers(&state).await?;
 
         Ok(Self { state, timer_rx })
     }
@@ -234,12 +276,49 @@ mod tests {
     use crate::flow_service::FlowServiceImpl;
     use crate::job_service::JobServiceImpl;
     use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
+    use shiroha_core::flow::{FlowManifest, StateDef, StateKind, TimeoutDef, TransitionDef};
     use shiroha_proto::shiroha_api::flow_service_server::FlowService;
     use shiroha_proto::shiroha_api::job_service_server::JobService;
     use shiroha_proto::shiroha_api::{
         CreateJobRequest, DeployFlowRequest, GetJobRequest, TriggerEventRequest,
     };
+    use tokio::time::{Duration, sleep, timeout};
     use tonic::Request;
+
+    fn restart_timeout_manifest(flow_id: &str) -> FlowManifest {
+        FlowManifest {
+            id: flow_id.to_string(),
+            states: vec![
+                StateDef {
+                    name: "waiting".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "timed_out".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![TransitionDef {
+                from: "waiting".into(),
+                to: "timed_out".into(),
+                event: "expire".into(),
+                guard: None,
+                action: None,
+                timeout: Some(TimeoutDef {
+                    duration_ms: 200,
+                    timeout_event: "expire".into(),
+                }),
+            }],
+            initial_state: "waiting".into(),
+            actions: Vec::new(),
+        }
+    }
 
     #[tokio::test]
     async fn new_server_loads_persisted_flows_into_memory_registry() {
@@ -429,5 +508,61 @@ mod tests {
             .into_inner();
         assert_eq!(job.state, "completed");
         assert_eq!(job.current_state, "done");
+    }
+
+    #[tokio::test]
+    async fn reloaded_server_restores_running_job_timers() {
+        let harness = TestHarness::new("server-reload-timeout").await;
+        let data_dir = harness.data_dir.clone();
+        let flow_service = FlowServiceImpl::new(harness.state.clone());
+        let job_service = JobServiceImpl::new(harness.state.clone());
+
+        flow_service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "timeout-flow".into(),
+                wasm_bytes: wasm_for_manifest(&restart_timeout_manifest("timeout-flow")),
+            }))
+            .await
+            .expect("deploy timeout flow");
+        let created = job_service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "timeout-flow".into(),
+                context: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        sleep(Duration::from_millis(60)).await;
+        drop(job_service);
+        drop(flow_service);
+        drop(harness);
+
+        let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
+            .await
+            .expect("reload server");
+        let (state, timer_rx) = reloaded.into_test_parts();
+        let _timer_forwarder = spawn_timer_forwarder(state.clone(), timer_rx);
+        let job_service = JobServiceImpl::new(state);
+
+        let job = timeout(Duration::from_millis(400), async {
+            loop {
+                let job = job_service
+                    .get_job(Request::new(GetJobRequest {
+                        job_id: created.job_id.clone(),
+                    }))
+                    .await
+                    .expect("get job")
+                    .into_inner();
+                if job.state == "completed" {
+                    break job;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("timer should complete after reload");
+
+        assert_eq!(job.current_state, "timed_out");
     }
 }

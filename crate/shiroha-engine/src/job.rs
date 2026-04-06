@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use shiroha_core::error::{Result, ShirohaError};
 use shiroha_core::event::{EventKind, EventRecord};
-use shiroha_core::job::{ExecutionStatus, Job, JobState, PendingJobEvent};
+use shiroha_core::job::{ExecutionStatus, Job, JobState, PendingJobEvent, ScheduledTimeout};
 use shiroha_core::storage::Storage;
 use uuid::Uuid;
 
@@ -40,6 +40,17 @@ fn make_event(job_id: Uuid, kind: EventKind) -> EventRecord {
     }
 }
 
+fn freeze_timeout_schedule(job: &mut Job, timestamp_ms: u64) {
+    let Some(anchor) = job.timeout_anchor_ms else {
+        return;
+    };
+    let elapsed = timestamp_ms.saturating_sub(anchor);
+    for timeout in &mut job.scheduled_timeouts {
+        timeout.remaining_ms = timeout.remaining_ms.saturating_sub(elapsed);
+    }
+    job.timeout_anchor_ms = None;
+}
+
 impl<S: Storage> JobManager<S> {
     pub fn new(storage: Arc<S>) -> Self {
         Self { storage }
@@ -61,6 +72,8 @@ impl<S: Storage> JobManager<S> {
             current_state: initial_state.to_string(),
             context,
             pending_events: Vec::new(),
+            scheduled_timeouts: Vec::new(),
+            timeout_anchor_ms: None,
         };
         let event = make_event(
             job.id,
@@ -144,6 +157,17 @@ impl<S: Storage> JobManager<S> {
         self.storage.save_job(&job).await
     }
 
+    pub async fn replace_timeout_schedule(
+        &self,
+        job_id: Uuid,
+        timeouts: Vec<ScheduledTimeout>,
+    ) -> Result<()> {
+        let mut job = self.load_job(job_id).await?;
+        job.scheduled_timeouts = timeouts;
+        job.timeout_anchor_ms = (!job.scheduled_timeouts.is_empty()).then(now_ms);
+        self.storage.save_job(&job).await
+    }
+
     /// 暂停 Job（Running → Paused）
     pub async fn pause_job(&self, job_id: Uuid) -> Result<()> {
         let mut job = self.load_job(job_id).await?;
@@ -154,6 +178,7 @@ impl<S: Storage> JobManager<S> {
             });
         }
         job.state = JobState::Paused;
+        freeze_timeout_schedule(&mut job, now_ms());
         let event = make_event(job_id, EventKind::Paused);
         self.storage.save_job_with_event(&job, &event).await
     }
@@ -168,6 +193,7 @@ impl<S: Storage> JobManager<S> {
             });
         }
         job.state = JobState::Running;
+        job.timeout_anchor_ms = (!job.scheduled_timeouts.is_empty()).then(now_ms);
         let event = make_event(job_id, EventKind::Resumed);
         self.storage.save_job_with_event(&job, &event).await
     }
@@ -183,6 +209,8 @@ impl<S: Storage> JobManager<S> {
         }
         job.state = JobState::Cancelled;
         job.pending_events.clear();
+        job.scheduled_timeouts.clear();
+        job.timeout_anchor_ms = None;
         let event = make_event(job_id, EventKind::Cancelled);
         self.storage.save_job_with_event(&job, &event).await
     }
@@ -193,6 +221,8 @@ impl<S: Storage> JobManager<S> {
         job.state = JobState::Completed;
         job.current_state = final_state.to_string();
         job.pending_events.clear();
+        job.scheduled_timeouts.clear();
+        job.timeout_anchor_ms = None;
         let event = make_event(
             job_id,
             EventKind::Completed {
@@ -219,6 +249,8 @@ impl<S: Storage> JobManager<S> {
             });
         }
         job.current_state = to.to_string();
+        job.scheduled_timeouts.clear();
+        job.timeout_anchor_ms = None;
         let event = make_event(
             job_id,
             EventKind::Transition {
@@ -289,6 +321,8 @@ mod tests {
         assert_eq!(stored.state, JobState::Running);
         assert_eq!(stored.context, Some(vec![1, 2, 3]));
         assert!(stored.pending_events.is_empty());
+        assert!(stored.scheduled_timeouts.is_empty());
+        assert!(stored.timeout_anchor_ms.is_none());
 
         let events = manager.get_events(job.id).await.expect("events");
         assert_eq!(events.len(), 1);
@@ -456,5 +490,53 @@ mod tests {
             .expect("get job")
             .expect("job exists");
         assert!(stored.pending_events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn timeout_schedule_is_frozen_on_pause_and_rearmed_on_resume() {
+        let storage = Arc::new(MemoryStorage::new());
+        let manager = JobManager::new(storage.clone());
+        let job = manager
+            .create_job("demo", Uuid::now_v7(), "idle", None)
+            .await
+            .expect("job created");
+
+        manager
+            .replace_timeout_schedule(
+                job.id,
+                vec![ScheduledTimeout {
+                    event: "expire".into(),
+                    remaining_ms: 200,
+                }],
+            )
+            .await
+            .expect("set timeout schedule");
+
+        let armed = storage
+            .get_job(job.id)
+            .await
+            .expect("get job")
+            .expect("job exists");
+        assert!(armed.timeout_anchor_ms.is_some());
+        assert_eq!(armed.scheduled_timeouts[0].remaining_ms, 200);
+
+        manager.pause_job(job.id).await.expect("pause");
+        let paused = storage
+            .get_job(job.id)
+            .await
+            .expect("get job")
+            .expect("job exists");
+        assert_eq!(paused.state, JobState::Paused);
+        assert!(paused.timeout_anchor_ms.is_none());
+        assert!(paused.scheduled_timeouts[0].remaining_ms <= 200);
+
+        manager.resume_job(job.id).await.expect("resume");
+        let resumed = storage
+            .get_job(job.id)
+            .await
+            .expect("get job")
+            .expect("job exists");
+        assert_eq!(resumed.state, JobState::Running);
+        assert!(resumed.timeout_anchor_ms.is_some());
     }
 }

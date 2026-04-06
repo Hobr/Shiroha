@@ -28,7 +28,7 @@ Shiroha 统一守护进程。Phase 1 仅支持 standalone 模式（Controller + 
 - `ShirohaState` 同时维护 latest flow 注册表、versioned flow 注册表、latest engine 和 versioned engine
 - `trigger_event` 是最关键的路径：查找绑定版本的转移 → 更新状态 → 执行 `on-exit` / transition action / `on-enter` → 检查终态 → 注册定时器
 - Flow 部署时会额外持久化原始 WASM 字节，server 重启后会重建 module cache
-- 当前重启恢复会重载 Flow/WASM/Job 快照；暂停期间排队事件会随 Job 快照一起恢复，但运行中的定时器仍不会恢复
+- 当前重启恢复会重载 Flow/WASM/Job 快照；暂停期间排队事件和运行中的 timeout 计划都会随 Job 快照一起恢复
 - 使用 `Storage` trait 时需导入 `shiroha_core::storage::Storage`（trait 方法需在作用域内）
 - 修改 proto 后需重新编译 `shiroha-proto` crate
 - README 和 `just shirohad ...` 是当前推荐的用户启动入口，变更参数行为后要同步更新

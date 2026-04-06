@@ -1,14 +1,14 @@
 //! gRPC JobService 实现
 //!
 //! 处理 Job 的创建、状态查询、事件触发、生命周期管理（暂停/恢复/取消）。
-//! Phase 1 里所有事件都按 Job 串行处理，暂停期间事件会暂存在内存队列中。
+//! Phase 1 里所有事件都按 Job 串行处理，暂停期间事件会跟随 Job 快照一起持久化。
 
 use std::sync::Arc;
 
 use shiroha_core::error::ShirohaError;
 use shiroha_core::event::EventKind;
 use shiroha_core::flow::{DispatchMode, FlowRegistration, TimeoutDef};
-use shiroha_core::job::{ActionResult, ExecutionStatus, Job, JobState};
+use shiroha_core::job::{ActionResult, ExecutionStatus, Job, JobState, ScheduledTimeout};
 use shiroha_proto::shiroha_api::job_service_server::JobService;
 use shiroha_proto::shiroha_api::{
     CancelJobRequest, CancelJobResponse, CreateJobRequest, CreateJobResponse, DeleteJobRequest,
@@ -228,9 +228,7 @@ impl JobServiceImpl {
             self.state.timer_wheel.cancel_all_job_timers(job.id).await;
         } else {
             // timeout 是“状态出边”的属性，所以进入新状态后要重新扫描所有出边注册。
-            for timeout in timeouts {
-                self.register_timeout(job.id, timeout).await;
-            }
+            self.persist_and_register_timeouts(job.id, timeouts).await?;
         }
 
         tracing::info!(job_id = %job.id, event, from, to, "event processed");
@@ -326,6 +324,46 @@ impl JobServiceImpl {
                 std::time::Duration::from_millis(timeout.duration_ms),
             )
             .await;
+    }
+
+    async fn persist_and_register_timeouts(
+        &self,
+        job_id: Uuid,
+        timeouts: Vec<TimeoutDef>,
+    ) -> Result<(), Status> {
+        self.state
+            .job_manager
+            .replace_timeout_schedule(
+                job_id,
+                timeouts
+                    .iter()
+                    .map(|timeout| ScheduledTimeout {
+                        event: timeout.timeout_event.clone(),
+                        remaining_ms: timeout.duration_ms,
+                    })
+                    .collect(),
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        for timeout in timeouts {
+            self.register_timeout(job_id, timeout).await;
+        }
+        Ok(())
+    }
+
+    async fn rearm_persisted_timeouts(&self, job_id: Uuid) -> Result<(), Status> {
+        let job = self.load_job(job_id).await?;
+        for timeout in job.scheduled_timeouts {
+            self.state
+                .timer_wheel
+                .register(
+                    job_id,
+                    timeout.event,
+                    std::time::Duration::from_millis(timeout.remaining_ms),
+                )
+                .await;
+        }
+        Ok(())
     }
 
     fn wasm_host(&self, flow: &FlowRegistration) -> Result<WasmHost, Status> {
@@ -463,13 +501,15 @@ impl JobService for JobServiceImpl {
             action_failures.push(message);
         }
 
-        for transition in &flow.manifest.transitions {
-            if transition.from == flow.manifest.initial_state
-                && let Some(timeout) = transition.timeout.clone()
-            {
-                self.register_timeout(job.id, timeout).await;
-            }
-        }
+        let initial_timeouts = flow
+            .manifest
+            .transitions
+            .iter()
+            .filter(|transition| transition.from == flow.manifest.initial_state)
+            .filter_map(|transition| transition.timeout.clone())
+            .collect::<Vec<_>>();
+        self.persist_and_register_timeouts(job.id, initial_timeouts)
+            .await?;
 
         tracing::info!(job_id = %job.id, flow_id = req.flow_id, "job created");
         if !action_failures.is_empty() {
@@ -575,7 +615,8 @@ impl JobService for JobServiceImpl {
             .resume_job(job_id)
             .await
             .map_err(|e| Status::failed_precondition(e.to_string()))?;
-        self.state.timer_wheel.resume_job_timers(job_id).await;
+        self.state.timer_wheel.cancel_all_job_timers(job_id).await;
+        self.rearm_persisted_timeouts(job_id).await?;
         self.drain_pending_events_locked(job_id).await?;
 
         Ok(Response::new(ResumeJobResponse {}))
