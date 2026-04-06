@@ -14,7 +14,16 @@ use crate::job_service::JobServiceImpl;
 use crate::server::ShirohaState;
 use crate::test_support::wasm_for_manifest;
 
+/// Deploy a flow fixture through `FlowServiceImpl`.
+///
+/// Test fixtures should keep request `flow_id` and `manifest.id` aligned so assertions
+/// about flow identity do not silently drift.
 pub(crate) async fn deploy_flow(state: Arc<ShirohaState>, flow_id: &str, manifest: &FlowManifest) {
+    assert_eq!(
+        flow_id, manifest.id,
+        "test helper invariant: deploy flow_id must match manifest.id"
+    );
+
     let flow_service = FlowServiceImpl::new(state);
     flow_service
         .deploy_flow(Request::new(DeployFlowRequest {
@@ -25,6 +34,10 @@ pub(crate) async fn deploy_flow(state: Arc<ShirohaState>, flow_id: &str, manifes
         .expect("deploy flow");
 }
 
+/// Register a specific flow version for metadata/version-binding tests.
+///
+/// This helper is intentionally metadata-only: it seeds storage + in-memory flow/engine maps
+/// with a synthetic `wasm_hash`, and does NOT build/install wasm bytes into module cache.
 pub(crate) async fn register_flow_version(
     state: &Arc<ShirohaState>,
     flow_id: &str,
