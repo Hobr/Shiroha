@@ -20,6 +20,7 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::job_events::{filter_events, validate_query};
+use crate::job_runtime::action_sequence;
 use crate::server::ShirohaState;
 use crate::service_support::parse_uuid;
 
@@ -201,16 +202,21 @@ impl JobServiceImpl {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let mut action_failures = Vec::new();
-        for (action_name, action_state) in [
-            on_exit.as_deref().map(|name| (name, from.as_str())),
-            action.as_deref().map(|name| (name, to.as_str())),
-            on_enter.as_deref().map(|name| (name, to.as_str())),
-        ]
-        .into_iter()
-        .flatten()
-        {
+        for scheduled in action_sequence(
+            from.as_str(),
+            to.as_str(),
+            on_exit.as_deref(),
+            action.as_deref(),
+            on_enter.as_deref(),
+        ) {
             if let Some(message) = self
-                .run_declared_action(&flow, action_name, job.id, action_state, payload.clone())
+                .run_declared_action(
+                    &flow,
+                    scheduled.action_name,
+                    job.id,
+                    scheduled.action_state,
+                    payload.clone(),
+                )
                 .await?
             {
                 action_failures.push(message);
