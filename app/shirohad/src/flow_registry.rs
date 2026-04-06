@@ -34,7 +34,9 @@ impl FlowRegistry {
         let flow_id = registration.flow_id.clone();
         let version = registration.version;
         let versioned_key = (flow_id.clone(), version);
-        inner.versioned.insert(versioned_key.clone(), registration.clone());
+        inner
+            .versioned
+            .insert(versioned_key.clone(), registration.clone());
         inner.versioned_engines.insert(
             versioned_key,
             Arc::new(StateMachineEngine::new(registration.manifest.clone())),
@@ -45,12 +47,10 @@ impl FlowRegistry {
             .get(&flow_id)
             .is_none_or(|existing| version > existing.version);
         if replace_latest {
-            inner
-                .latest_engines
-                .insert(
-                    flow_id.clone(),
-                    Arc::new(StateMachineEngine::new(registration.manifest.clone())),
-                );
+            inner.latest_engines.insert(
+                flow_id.clone(),
+                Arc::new(StateMachineEngine::new(registration.manifest.clone())),
+            );
             inner.latest.insert(flow_id, registration);
         }
     }
@@ -59,7 +59,9 @@ impl FlowRegistry {
         let mut inner = self.inner.lock().await;
         inner.latest.remove(flow_id);
         inner.latest_engines.remove(flow_id);
-        inner.versioned.retain(|(candidate, _), _| candidate != flow_id);
+        inner
+            .versioned
+            .retain(|(candidate, _), _| candidate != flow_id);
         inner
             .versioned_engines
             .retain(|(candidate, _), _| candidate != flow_id);
@@ -76,7 +78,10 @@ impl FlowRegistry {
         version: Uuid,
     ) -> Option<FlowRegistration> {
         let inner = self.inner.lock().await;
-        inner.versioned.get(&(flow_id.to_string(), version)).cloned()
+        inner
+            .versioned
+            .get(&(flow_id.to_string(), version))
+            .cloned()
     }
 
     pub async fn versioned_engine(
@@ -180,14 +185,28 @@ mod tests {
         let registry = FlowRegistry::new();
         let v1 = Uuid::now_v7();
         let v2 = Uuid::now_v7();
-        registry.register(registration("approval", v1, "done")).await;
-        registry.register(registration("approval", v2, "rerouted")).await;
+        registry
+            .register(registration("approval", v1, "done"))
+            .await;
+        registry
+            .register(registration("approval", v2, "rerouted"))
+            .await;
 
         registry.remove_flow("approval").await;
 
         assert!(registry.latest_registration("approval").await.is_none());
-        assert!(registry.versioned_registration("approval", v1).await.is_none());
-        assert!(registry.versioned_registration("approval", v2).await.is_none());
+        assert!(
+            registry
+                .versioned_registration("approval", v1)
+                .await
+                .is_none()
+        );
+        assert!(
+            registry
+                .versioned_registration("approval", v2)
+                .await
+                .is_none()
+        );
         assert!(registry.versioned_engine("approval", v1).await.is_none());
         assert!(registry.versioned_engine("approval", v2).await.is_none());
     }

@@ -199,5 +199,4 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert!(matches!(filtered[0].kind, EventKind::Transition { .. }));
     }
-
 }

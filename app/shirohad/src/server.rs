@@ -18,6 +18,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 #[cfg(test)]
 use tokio_stream::wrappers::UnixListenerStream;
+#[cfg(test)]
 use uuid::Uuid;
 
 use crate::flow_registry::FlowRegistry;
@@ -73,9 +74,7 @@ impl ShirohaServer {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let flow_ids = {
-            state.flow_registry.latest_flow_ids().await
-        };
+        let flow_ids = { state.flow_registry.latest_flow_ids().await };
 
         let mut restored_timers = 0usize;
         for flow_id in flow_ids {
