@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use shiroha_core::error::ShirohaError;
-use shiroha_core::event::EventKind;
 use shiroha_core::flow::{ActionCapability, DispatchMode, FlowRegistration, TimeoutDef};
 use shiroha_core::job::{ActionResult, ExecutionStatus, Job, JobState, ScheduledTimeout};
 use shiroha_proto::shiroha_api::job_service_server::JobService;
@@ -20,7 +19,9 @@ use shiroha_wasm::host::{ActionContext, GuardContext, WasmHost};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
+use crate::job_events::{filter_events, validate_query};
 use crate::server::ShirohaState;
+use crate::service_support::{map_delete_job_error, parse_uuid};
 
 /// JobService 的 standalone 实现。
 ///
@@ -448,23 +449,6 @@ fn execution_status_name(status: ExecutionStatus) -> &'static str {
     }
 }
 
-fn parse_uuid(s: &str) -> Result<Uuid, Status> {
-    s.parse::<Uuid>()
-        .map_err(|_| Status::invalid_argument(format!("invalid UUID: {s}")))
-}
-
-fn event_kind_name(kind: &EventKind) -> &'static str {
-    match kind {
-        EventKind::Created { .. } => "created",
-        EventKind::Transition { .. } => "transition",
-        EventKind::ActionComplete { .. } => "action_complete",
-        EventKind::Paused => "paused",
-        EventKind::Resumed => "resumed",
-        EventKind::Cancelled => "cancelled",
-        EventKind::Completed { .. } => "completed",
-    }
-}
-
 #[tonic::async_trait]
 impl JobService for JobServiceImpl {
     /// 创建 Job：查找 Flow → 创建运行实例 → 注册初始状态的定时器
@@ -563,11 +547,7 @@ impl JobService for JobServiceImpl {
             .job_manager
             .delete_job(job_id)
             .await
-            .map_err(|e| match e {
-                ShirohaError::JobNotFound(_) => Status::not_found(e.to_string()),
-                ShirohaError::InvalidJobState { .. } => Status::failed_precondition(e.to_string()),
-                _ => Status::internal(e.to_string()),
-            })?;
+            .map_err(map_delete_job_error)?;
         self.state.timer_wheel.cancel_all_job_timers(job_id).await;
         self.remove_job_lock(job_id).await;
 
@@ -649,63 +629,15 @@ impl JobService for JobServiceImpl {
         &self,
         request: Request<GetJobEventsRequest>,
     ) -> Result<Response<GetJobEventsResponse>, Status> {
-        let req = request.into_inner();
-        let job_id = parse_uuid(&req.job_id)?;
-        if req.since_id.is_some() && req.since_timestamp_ms.is_some() {
-            return Err(Status::invalid_argument(
-                "`since_id` and `since_timestamp_ms` cannot be used together",
-            ));
-        }
-        if req.limit == Some(0) {
-            return Err(Status::invalid_argument("`limit` must be greater than 0"));
-        }
-        if let Some(kind) = req.kind.iter().find(|kind| {
-            !matches!(
-                kind.as_str(),
-                "created"
-                    | "transition"
-                    | "action_complete"
-                    | "paused"
-                    | "resumed"
-                    | "cancelled"
-                    | "completed"
-            )
-        }) {
-            return Err(Status::invalid_argument(format!(
-                "unknown event kind filter: {kind}"
-            )));
-        }
+        let query = validate_query(request.into_inner())?;
 
-        let mut events = self
+        let events = self
             .state
             .job_manager
-            .get_events(job_id)
+            .get_events(query.job_id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
-        if let Some(since_id) = req.since_id {
-            let cursor = parse_uuid(&since_id)?;
-            let Some(index) = events.iter().position(|event| event.id == cursor) else {
-                return Err(Status::invalid_argument(format!(
-                    "event `{since_id}` not found for job `{}`",
-                    req.job_id
-                )));
-            };
-            events.drain(..=index);
-        }
-        if let Some(since_timestamp_ms) = req.since_timestamp_ms {
-            events.retain(|event| event.timestamp_ms > since_timestamp_ms);
-        }
-        if !req.kind.is_empty() {
-            let kinds = req
-                .kind
-                .iter()
-                .map(String::as_str)
-                .collect::<std::collections::HashSet<_>>();
-            events.retain(|event| kinds.contains(event_kind_name(&event.kind)));
-        }
-        if let Some(limit) = req.limit {
-            events.truncate(limit as usize);
-        }
+        let events = filter_events(events, &query)?;
 
         let records = events
             .iter()

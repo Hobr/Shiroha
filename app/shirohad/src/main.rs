@@ -11,9 +11,11 @@ pub mod job_service;
 
 mod flow_service;
 mod flow_registry;
+mod job_events;
 #[cfg(test)]
 mod grpc_tests;
 mod server;
+mod service_support;
 #[cfg(test)]
 mod test_support;
 shadow_rs::shadow!(build);
