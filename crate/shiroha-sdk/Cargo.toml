@@ -1,0 +1,11 @@
+[package]
+name = "shiroha-sdk"
+description = "Shiroha WASM Guest SDK"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+wit-bindgen = "0.51"

@@ -23,7 +23,7 @@
 | Directory | Purpose |
 | --------- | ------- |
 | `app/` | 可执行文件：shirohad 守护进程和 sctl CLI（见 `app/AGENTS.md`） |
-| `crate/` | 库 crate：核心类型、引擎、WASM、存储、协议、客户端抽象（见 `crate/AGENTS.md`） |
+| `crate/` | 库 crate：核心类型、引擎、WASM、存储、协议、客户端抽象、guest SDK（见 `crate/AGENTS.md`） |
 | `docs/` | 架构设计文档（见 `docs/AGENTS.md`） |
 | `example/` | 可编译的 `wasm32-wasip2` Flow component 示例（simple / advanced / warning-deadlock / sub） |
 

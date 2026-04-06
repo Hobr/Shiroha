@@ -1,7 +1,4 @@
-wit_bindgen::generate!({
-    path: "../../wit",
-    world: "storage-flow",
-});
+shiroha_sdk::generate_storage_flow!();
 
 use crate::shiroha::flow::store;
 
