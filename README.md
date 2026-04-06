@@ -148,6 +148,54 @@ just sctl complete zsh --print-path
 
 各示例目录都有单独的 `README.md` 说明构建和测试方式
 
+## Guest SDK
+
+Rust guest component 现在可以优先依赖 `shiroha-sdk`，而不是在每个 component 里直接写 `wit_bindgen::generate!`。
+
+常见入口：
+
+- `shiroha_sdk::generate_flow!()`
+- `shiroha_sdk::generate_network_flow!()`
+- `shiroha_sdk::generate_storage_flow!()`
+- `shiroha_sdk::generate_full_flow!()`
+
+例如最小 guest 可以这样起步：
+
+```rust
+shiroha_sdk::generate_flow!();
+
+struct MyFlow;
+
+impl Guest for MyFlow {
+    fn get_manifest() -> FlowManifest {
+        FlowManifest {
+            id: "demo".to_string(),
+            host_world: FlowWorld::Sandbox,
+            states: vec![],
+            transitions: vec![],
+            initial_state: "idle".to_string(),
+            actions: vec![],
+        }
+    }
+
+    fn invoke_action(_name: String, _ctx: ActionContext) -> ActionResult {
+        shiroha_sdk::action_ok!(None)
+    }
+
+    fn invoke_guard(_name: String, _ctx: GuardContext) -> bool {
+        true
+    }
+
+    fn aggregate(_name: String, _results: Vec<NodeResult>) -> AggregateDecision {
+        shiroha_sdk::aggregate_event!("done".to_string(), None)
+    }
+}
+
+export!(MyFlow);
+```
+
+也就是说，guest crate 不再需要自己直接声明 `wit-bindgen` 依赖。
+
 ## 开发说明
 
 - 代码格式化和 pre-commit 检查: `just fmt`

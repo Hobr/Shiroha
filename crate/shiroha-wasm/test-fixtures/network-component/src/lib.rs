@@ -1,7 +1,4 @@
-wit_bindgen::generate!({
-    path: "../../wit",
-    world: "network-flow",
-});
+shiroha_sdk::generate_network_flow!();
 
 use crate::shiroha::flow::net;
 

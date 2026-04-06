@@ -1,7 +1,4 @@
-wit_bindgen::generate!({
-    path: "../../../crate/shiroha-wasm/wit",
-    world: "flow",
-});
+shiroha_sdk::generate_flow!();
 
 struct ParentFlow;
 

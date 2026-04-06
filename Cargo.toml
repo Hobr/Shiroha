@@ -5,6 +5,7 @@ members = [
 
     "crate/shiroha-client",
     "crate/shiroha-core",
+    "crate/shiroha-sdk",
     "crate/shiroha-engine",
     "crate/shiroha-proto",
     "crate/shiroha-store-redb",
@@ -24,6 +25,7 @@ repository = "https://github.com/Hobr/Shiroha"
 shiroha-core = { path = "crate/shiroha-core" }
 shiroha-client = { path = "crate/shiroha-client" }
 shiroha-engine = { path = "crate/shiroha-engine" }
+shiroha-sdk = { path = "crate/shiroha-sdk" }
 shiroha-proto = { path = "crate/shiroha-proto" }
 shiroha-store-redb = { path = "crate/shiroha-store-redb" }
 shiroha-wasm = { path = "crate/shiroha-wasm" }

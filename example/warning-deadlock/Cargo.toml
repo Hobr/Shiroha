@@ -8,6 +8,6 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.51"
+shiroha-sdk = { path = "../../crate/shiroha-sdk" }
 
 [workspace]
