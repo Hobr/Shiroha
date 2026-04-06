@@ -3,8 +3,8 @@ use serde_json::Value;
 use shiroha_proto::shiroha_api::*;
 
 use crate::client::ControlClient;
+use crate::job_support::{bound_flow_request, sort_job_details, sort_jobs};
 use crate::manifest::{manifest_event_names, manifest_state_names, parse_json_value_required};
-use crate::support::{bound_flow_request, sort_job_details, sort_jobs};
 
 #[derive(Debug, Clone, Default)]
 pub struct EventQuery {
