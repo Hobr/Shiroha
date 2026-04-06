@@ -41,6 +41,13 @@ pub struct PendingJobEvent {
     pub payload: Option<Vec<u8>>,
 }
 
+/// 当前状态上已注册的 timeout 快照
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScheduledTimeout {
+    pub event: String,
+    pub remaining_ms: u64,
+}
+
 /// Job 运行实例
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
@@ -58,6 +65,12 @@ pub struct Job {
     /// 暂停期间收到但尚未处理的事件；需要跟随 Job 快照一起持久化。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_events: Vec<PendingJobEvent>,
+    /// 当前状态的 timeout 计划；running 时表示从 `timeout_anchor_ms` 开始倒计时，paused 时表示冻结的剩余时间。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scheduled_timeouts: Vec<ScheduledTimeout>,
+    /// timeout 倒计时起点（毫秒时间戳）；paused 或没有 timeout 时为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_anchor_ms: Option<u64>,
 }
 
 /// Action 执行状态

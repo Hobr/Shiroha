@@ -379,6 +379,11 @@ mod tests {
             current_state: flow.manifest.initial_state.clone(),
             context: Some(vec![1, 2, 3]),
             pending_events: Vec::new(),
+            scheduled_timeouts: vec![shiroha_core::job::ScheduledTimeout {
+                event: "expire".into(),
+                remaining_ms: 42,
+            }],
+            timeout_anchor_ms: Some(1_234),
         }
     }
 
@@ -443,6 +448,8 @@ mod tests {
         assert_eq!(stored_flow.wasm_hash, "hash-demo");
         assert_eq!(stored_job.current_state, "idle");
         assert_eq!(stored_job.context, Some(vec![1, 2, 3]));
+        assert_eq!(stored_job.scheduled_timeouts, job.scheduled_timeouts);
+        assert_eq!(stored_job.timeout_anchor_ms, job.timeout_anchor_ms);
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0].kind, EventKind::Created { .. }));
         assert_eq!(jobs.len(), 1);
