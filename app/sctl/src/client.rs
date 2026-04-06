@@ -136,13 +136,12 @@ impl ShirohaClient {
         all: bool,
         json_output: bool,
     ) -> anyhow::Result<()> {
+        let flow_id = flow_id_for_job_list(flow_id, all)?;
         let jobs = if all {
             self.api.list_all_jobs().await?
         } else {
             self.api
-                .list_jobs_for_flow(
-                    flow_id.expect("clap should require --flow-id when --all is absent"),
-                )
+                .list_jobs_for_flow(flow_id.expect("validated flow id"))
                 .await?
         };
         job_presenter::render_jobs(&jobs, json_output)
@@ -334,6 +333,16 @@ fn apply_tail(mut events: Vec<JobEvent>, tail: Option<usize>) -> Vec<JobEvent> {
     events
 }
 
+fn flow_id_for_job_list(flow_id: Option<&str>, all: bool) -> anyhow::Result<Option<&str>> {
+    if all {
+        return Ok(None);
+    }
+
+    flow_id
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("`--flow-id` is required unless `--all` is set"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,5 +426,30 @@ mod tests {
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].id, "event-3");
+    }
+
+    #[test]
+    fn flow_id_for_job_list_accepts_all_without_flow_id() {
+        assert_eq!(flow_id_for_job_list(None, true).unwrap(), None);
+    }
+
+    #[test]
+    fn flow_id_for_job_list_requires_flow_id_when_not_listing_all() {
+        let error =
+            flow_id_for_job_list(None, false).expect_err("missing flow id should return an error");
+
+        assert!(
+            error
+                .to_string()
+                .contains("`--flow-id` is required unless `--all` is set")
+        );
+    }
+
+    #[test]
+    fn flow_id_for_job_list_returns_provided_flow_id() {
+        assert_eq!(
+            flow_id_for_job_list(Some("flow-a"), false).unwrap(),
+            Some("flow-a")
+        );
     }
 }
