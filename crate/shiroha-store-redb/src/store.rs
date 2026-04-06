@@ -24,6 +24,7 @@ use shiroha_core::event::EventRecord;
 use shiroha_core::flow::FlowRegistration;
 use shiroha_core::job::Job;
 use shiroha_core::storage::{CapabilityStore, Storage};
+use tracing::warn;
 use uuid::Uuid;
 
 const FLOWS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("flows");
@@ -70,8 +71,10 @@ impl RedbStorage {
     /// 迁移逻辑：扫描全表，解码 JSON 值取出 `flow_id` 和 `version`，
     /// 若当前键与预期的新格式键不一致，则删除旧键并写入新键。
     fn migrate_flow_version_keys(&self) -> Result<()> {
-        // First pass: collect all entries that need migration (read-only)
-        let to_migrate: Vec<(String, Vec<u8>)> = {
+        // First pass: collect all entries that need migration (read-only).
+        // We keep the decoded FlowRegistration alongside the raw bytes to avoid
+        // a redundant deserialization in the write pass.
+        let to_migrate: Vec<(String, FlowRegistration, Vec<u8>)> = {
             let txn = self.db.begin_read().map_err(s)?;
             let table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
             let mut entries = Vec::new();
@@ -81,11 +84,14 @@ impl RedbStorage {
                 let data = v.value().to_vec();
                 let flow: FlowRegistration = match serde_json::from_slice(&data) {
                     Ok(f) => f,
-                    Err(_) => continue,
+                    Err(e) => {
+                        warn!(key = %stored_key, error = %e, "skipping flow_versions entry with unreadable value during migration");
+                        continue;
+                    }
                 };
                 let expected_key = Self::flow_version_key(&flow.flow_id, flow.version);
                 if stored_key != expected_key {
-                    entries.push((stored_key, data));
+                    entries.push((stored_key, flow, data));
                 }
             }
             entries
@@ -95,12 +101,11 @@ impl RedbStorage {
             return Ok(());
         }
 
-        // Second pass: rewrite keys in a single write transaction
+        // Second pass: rewrite keys in a single write transaction.
         let txn = self.db.begin_write().map_err(s)?;
         {
             let mut table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
-            for (old_key, data) in to_migrate {
-                let flow: FlowRegistration = serde_json::from_slice(&data).map_err(s)?;
+            for (old_key, flow, data) in to_migrate {
                 let new_key = Self::flow_version_key(&flow.flow_id, flow.version);
                 table.remove(old_key.as_str()).map_err(s)?;
                 table.insert(new_key.as_str(), data.as_slice()).map_err(s)?;
