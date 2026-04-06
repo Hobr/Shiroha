@@ -1,6 +1,0 @@
-package shiroha:flow@0.1.0;
-
-world storage-flow {
-  include flow;
-  import store;
-}
