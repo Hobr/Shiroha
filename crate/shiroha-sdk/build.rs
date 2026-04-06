@@ -2,15 +2,6 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const WIT_FILES: &[&str] = &[
-    "flow.wit",
-    "net.wit",
-    "store.wit",
-    "network-flow.wit",
-    "storage-flow.wit",
-    "full-flow.wit",
-];
-
 const GENERATED_MACROS: &[(&str, &str)] = &[
     ("generate_flow", "flow"),
     ("generate_network_flow", "network-flow"),
@@ -20,19 +11,23 @@ const GENERATED_MACROS: &[(&str, &str)] = &[
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    let canonical_wit_dir = manifest_dir.join("../shiroha-wasm/wit");
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let staged_wit_dir = out_dir.join("sdk-wit");
+    let source_wit_dir = shiroha_wit::wit_dir();
 
     println!("cargo:rerun-if-changed=build.rs");
-    for file in WIT_FILES {
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("Cargo.toml").display()
+    );
+    for file in shiroha_wit::WIT_FILES {
         println!(
             "cargo:rerun-if-changed={}",
-            canonical_wit_dir.join(file).display()
+            source_wit_dir.join(file).display()
         );
     }
 
-    stage_wit_files(&canonical_wit_dir, &staged_wit_dir);
+    stage_wit_files(&source_wit_dir, &staged_wit_dir);
     fs::write(
         out_dir.join("generated_wit_macros.rs"),
         render_generate_macros(&staged_wit_dir),
@@ -42,7 +37,7 @@ fn main() {
 
 fn stage_wit_files(source_dir: &Path, target_dir: &Path) {
     fs::create_dir_all(target_dir).expect("create staged wit dir");
-    for file in WIT_FILES {
+    for file in shiroha_wit::WIT_FILES {
         fs::copy(source_dir.join(file), target_dir.join(file))
             .unwrap_or_else(|err| panic!("copy {file} into staged wit dir: {err}"));
     }

@@ -14,6 +14,7 @@ Workspace 库 crate 目录。按关注点分离为 7 个独立 crate，通过 tr
 | `shiroha-client/` | 面向 CLI / 交互端的客户端抽象，包装 proto client 并返回领域类型（见 `shiroha-client/AGENTS.md`） |
 | `shiroha-core/` | 核心类型与 trait 定义（见 `shiroha-core/AGENTS.md`） |
 | `shiroha-sdk/` | Rust guest 开发 SDK，封装 WIT world 生成宏和常用 helper（见 `shiroha-sdk/AGENTS.md`） |
+| `shiroha-wit/` | canonical WIT 定义，供 SDK / 文档 / 宿主侧测试共享 |
 | `shiroha-engine/` | 状态机引擎、Job 管理、定时器（见 `shiroha-engine/AGENTS.md`） |
 | `shiroha-proto/` | gRPC protobuf 服务定义（见 `shiroha-proto/AGENTS.md`） |
 | `shiroha-store-redb/` | Redb 嵌入式存储后端（latest flow、version history、wasm bytes）（见 `shiroha-store-redb/AGENTS.md`） |
@@ -38,7 +39,9 @@ shiroha-proto (独立，不依赖其他内部 crate)
   ↑
 shiroha-client (依赖 proto)
 
-shiroha-sdk (独立，面向 guest 侧，依赖 wit-bindgen)
+shiroha-wit (独立，提供 canonical WIT 定义)
+  ↑
+shiroha-sdk (独立，面向 guest 侧，依赖 wit-bindgen 和 shiroha-wit)
 ```
 
 <!-- MANUAL: -->

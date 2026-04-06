@@ -6,7 +6,7 @@
 - `fan-out`
 - `subprocess`
 
-它实现了仓库里的 [flow.wit](/mnt/data/Project/Shiroha/crate/shiroha-wasm/wit/flow.wit)。
+它实现了仓库里的 [flow.wit](/mnt/data/Project/Shiroha/crate/shiroha-wit/wit/flow.wit)。
 
 ## Flow 结构
 

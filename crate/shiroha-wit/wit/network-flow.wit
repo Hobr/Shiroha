@@ -1,0 +1,6 @@
+package shiroha:flow@0.1.0;
+
+world network-flow {
+  include flow;
+  import net;
+}

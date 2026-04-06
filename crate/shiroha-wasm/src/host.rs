@@ -1,7 +1,7 @@
 //! WASM Host-Guest 桥接层
 //!
 //! [`WasmHost`] 仅支持 component/wasip2 guest。
-//! guest 需按 `wit/flow.wit` 导出 typed exports，host 通过
+//! guest 需按 canonical `shiroha-wit` world 导出 typed exports，host 通过
 //! `wasmtime::component::Instance::get_typed_func` 调用。
 
 mod network_support;
