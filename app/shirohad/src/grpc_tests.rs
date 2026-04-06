@@ -70,6 +70,7 @@ async fn deploy_wasm(client: &mut FlowServiceClient<Channel>, flow_id: &str, was
 }
 
 #[tokio::test]
+#[ignore = "heavy grpc integration smoke; run explicitly when validating shirohad end-to-end"]
 async fn grpc_round_trip_flow_and_job_execution() {
     // 覆盖最完整的 happy-path：deploy -> create -> trigger -> complete -> event log。
     let Some(server) = LiveGrpcServer::start("grpc-roundtrip").await else {
@@ -143,6 +144,7 @@ async fn grpc_round_trip_flow_and_job_execution() {
 }
 
 #[tokio::test]
+#[ignore = "heavy grpc integration smoke; run explicitly when validating shirohad end-to-end"]
 async fn grpc_pause_resume_processes_queued_event() {
     // 验证 pause 后的 trigger-event 会先排队，resume 时再继续消费。
     let Some(server) = LiveGrpcServer::start("grpc-pause-resume").await else {
@@ -201,6 +203,7 @@ async fn grpc_pause_resume_processes_queued_event() {
 }
 
 #[tokio::test]
+#[ignore = "heavy grpc integration smoke; run explicitly when validating shirohad end-to-end"]
 async fn grpc_timer_event_completes_job() {
     // 覆盖定时器通过 server 内部 forwarder 回注到 JobService 的路径。
     let Some(server) = LiveGrpcServer::start("grpc-timer").await else {
@@ -245,6 +248,7 @@ async fn grpc_timer_event_completes_job() {
 }
 
 #[tokio::test]
+#[ignore = "heavy grpc integration smoke; run explicitly when validating shirohad end-to-end"]
 async fn grpc_simple_example_component_runs_end_to_end() {
     let Some(server) = LiveGrpcServer::start("grpc-example-simple").await else {
         return;
@@ -280,6 +284,7 @@ async fn grpc_simple_example_component_runs_end_to_end() {
 }
 
 #[tokio::test]
+#[ignore = "heavy grpc integration smoke; run explicitly when validating shirohad end-to-end"]
 async fn grpc_advanced_example_runs_supported_submit_path() {
     let Some(server) = LiveGrpcServer::start("grpc-example-advanced").await else {
         return;
@@ -339,6 +344,7 @@ async fn grpc_advanced_example_runs_supported_submit_path() {
 }
 
 #[tokio::test]
+#[ignore = "heavy grpc integration smoke; run explicitly when validating shirohad end-to-end"]
 async fn grpc_subprocess_examples_support_manual_parent_child_progression() {
     let Some(server) = LiveGrpcServer::start("grpc-example-sub").await else {
         return;

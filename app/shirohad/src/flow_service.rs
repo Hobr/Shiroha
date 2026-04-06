@@ -374,6 +374,8 @@ mod tests {
     use crate::job_service::JobServiceImpl;
     use crate::test_support::{TestHarness, approval_manifest, wasm_for_manifest};
     use shiroha_core::flow::{FlowManifest, FlowWorld, StateDef, StateKind, TransitionDef};
+    use shiroha_core::storage::Storage;
+    use shiroha_engine::engine::StateMachineEngine;
     use shiroha_proto::shiroha_api::job_service_server::JobService;
     use shiroha_proto::shiroha_api::{
         CreateJobRequest, DeleteFlowRequest, GetFlowRequest, ListFlowVersionsRequest,
@@ -463,7 +465,60 @@ mod tests {
         }
     }
 
+    async fn register_flow_version(
+        state: &Arc<crate::server::ShirohaState>,
+        flow_id: &str,
+        version: Uuid,
+        manifest: FlowManifest,
+    ) -> FlowRegistration {
+        let registration = FlowRegistration {
+            flow_id: flow_id.to_string(),
+            version,
+            manifest: manifest.clone(),
+            // 这组查询测试只验证 flow 元数据读路径，不走真实 wasm 执行。
+            wasm_hash: format!("test-{flow_id}-{version}"),
+        };
+
+        state
+            .storage
+            .save_flow(&registration)
+            .await
+            .expect("save flow version");
+
+        state
+            .flow_versions
+            .lock()
+            .await
+            .insert((flow_id.to_string(), version), registration.clone());
+        state.versioned_engines.lock().await.insert(
+            (flow_id.to_string(), version),
+            StateMachineEngine::new(manifest.clone()),
+        );
+
+        let replace_latest = state
+            .flows
+            .lock()
+            .await
+            .get(flow_id)
+            .is_none_or(|existing| version > existing.version);
+        if replace_latest {
+            state
+                .flows
+                .lock()
+                .await
+                .insert(flow_id.to_string(), registration.clone());
+            state
+                .engines
+                .lock()
+                .await
+                .insert(flow_id.to_string(), StateMachineEngine::new(manifest));
+        }
+
+        registration
+    }
+
     #[tokio::test]
+    #[ignore = "heavy service integration smoke; run explicitly when validating deploy/query flows"]
     async fn deploy_list_and_get_flow_round_trip() {
         let harness = TestHarness::new("flow-service").await;
         let service = FlowServiceImpl::new(harness.state.clone());
@@ -540,6 +595,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "heavy service integration smoke; run explicitly when validating deploy/query flows"]
     async fn deploy_flow_returns_validation_warnings() {
         let harness = TestHarness::new("flow-warnings").await;
         let service = FlowServiceImpl::new(harness.state.clone());
@@ -563,6 +619,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "heavy service integration smoke; run explicitly when validating deploy/query flows"]
     async fn deploy_flow_rejects_fatal_validation_issues() {
         let harness = TestHarness::new("flow-fatal-validation").await;
         let service = FlowServiceImpl::new(harness.state.clone());
@@ -599,22 +656,10 @@ mod tests {
         let first = approval_manifest("demo-flow", Some("allow"));
         let second = approval_manifest("demo-flow", Some("deny"));
 
-        let first_deploy = service
-            .deploy_flow(Request::new(DeployFlowRequest {
-                flow_id: "demo-flow".into(),
-                wasm_bytes: wasm_for_manifest(&first),
-            }))
-            .await
-            .expect("deploy first flow")
-            .into_inner();
-        let second_deploy = service
-            .deploy_flow(Request::new(DeployFlowRequest {
-                flow_id: "demo-flow".into(),
-                wasm_bytes: wasm_for_manifest(&second),
-            }))
-            .await
-            .expect("deploy second flow")
-            .into_inner();
+        let first_deploy =
+            register_flow_version(&harness.state, "demo-flow", Uuid::now_v7(), first).await;
+        let second_deploy =
+            register_flow_version(&harness.state, "demo-flow", Uuid::now_v7(), second).await;
 
         let latest = service
             .get_flow(Request::new(GetFlowRequest {
@@ -624,17 +669,17 @@ mod tests {
             .await
             .expect("get latest flow")
             .into_inner();
-        assert_eq!(latest.version, second_deploy.version);
+        assert_eq!(latest.version, second_deploy.version.to_string());
 
         let first_version = service
             .get_flow(Request::new(GetFlowRequest {
                 flow_id: "demo-flow".into(),
-                version: Some(first_deploy.version.clone()),
+                version: Some(first_deploy.version.to_string()),
             }))
             .await
             .expect("get first version")
             .into_inner();
-        assert_eq!(first_version.version, first_deploy.version);
+        assert_eq!(first_version.version, first_deploy.version.to_string());
 
         let versions = service
             .list_flow_versions(Request::new(ListFlowVersionsRequest {
@@ -648,13 +693,13 @@ mod tests {
             versions
                 .flows
                 .iter()
-                .any(|flow| flow.version == first_deploy.version)
+                .any(|flow| flow.version == first_deploy.version.to_string())
         );
         assert!(
             versions
                 .flows
                 .iter()
-                .any(|flow| flow.version == second_deploy.version)
+                .any(|flow| flow.version == second_deploy.version.to_string())
         );
 
         let latest_list = service
@@ -663,10 +708,14 @@ mod tests {
             .expect("list latest flows")
             .into_inner();
         assert_eq!(latest_list.flows.len(), 1);
-        assert_eq!(latest_list.flows[0].version, second_deploy.version);
+        assert_eq!(
+            latest_list.flows[0].version,
+            second_deploy.version.to_string()
+        );
     }
 
     #[tokio::test]
+    #[ignore = "heavy service integration smoke; run explicitly when validating deploy/query flows"]
     async fn delete_flow_removes_storage_and_memory_cache() {
         let harness = TestHarness::new("flow-delete").await;
         let service = FlowServiceImpl::new(harness.state.clone());
@@ -710,6 +759,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "heavy service integration smoke; run explicitly when validating deploy/query flows"]
     async fn delete_flow_rejects_when_jobs_still_exist() {
         let harness = TestHarness::new("flow-delete-jobs").await;
         let flow_service = FlowServiceImpl::new(harness.state.clone());

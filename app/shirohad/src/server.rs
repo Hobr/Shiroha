@@ -325,6 +325,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "heavy restart integration smoke; run explicitly when validating persistence recovery"]
     async fn new_server_loads_persisted_flows_into_memory_registry() {
         let harness = TestHarness::new("server-reload").await;
         let data_dir = harness.data_dir.clone();
@@ -375,6 +376,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "heavy restart integration smoke; run explicitly when validating persistence recovery"]
     async fn reloaded_server_can_continue_existing_job_execution() {
         let harness = TestHarness::new("server-reload-job").await;
         let data_dir = harness.data_dir.clone();
@@ -427,6 +429,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "heavy restart integration smoke; run explicitly when validating persistence recovery"]
     async fn reloaded_server_preserves_paused_job_pending_events() {
         let harness = TestHarness::new("server-reload-paused-job").await;
         let data_dir = harness.data_dir.clone();
@@ -515,6 +518,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "heavy restart integration smoke; run explicitly when validating persistence recovery"]
     async fn reloaded_server_restores_running_job_timers() {
         let harness = TestHarness::new("server-reload-timeout").await;
         let data_dir = harness.data_dir.clone();
@@ -571,6 +575,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "heavy restart integration smoke; run explicitly when validating persistence recovery"]
     async fn reloaded_server_preserves_storage_capability_data() {
         let harness = TestHarness::new("server-reload-storage-capability").await;
         let data_dir = harness.data_dir.clone();

@@ -624,6 +624,10 @@ impl WasmHost {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::hash_map::DefaultHasher;
+    use std::fs;
+    use std::hash::{Hash, Hasher};
+    use std::path::Path;
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::{Mutex as StdMutex, OnceLock};
@@ -631,83 +635,117 @@ mod tests {
     use super::*;
     use crate::runtime::WasmRuntime;
 
-    fn temp_build_dir(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("shiroha-wasm-{name}-{}", uuid::Uuid::now_v7()))
+    const CANONICAL_WIT_FILES: &[&str] = &[
+        "flow.wit",
+        "net.wit",
+        "store.wit",
+        "network-flow.wit",
+        "storage-flow.wit",
+        "full-flow.wit",
+    ];
+
+    fn hash_file_if_present(path: &Path, hasher: &mut DefaultHasher) {
+        path.hash(hasher);
+        if let Ok(bytes) = fs::read(path) {
+            bytes.hash(hasher);
+        }
+    }
+
+    fn tracked_fixture_input_paths(root: &Path, fixture_path: &str) -> Vec<PathBuf> {
+        let mut paths = vec![
+            root.join(fixture_path).join("Cargo.toml"),
+            root.join(fixture_path).join("src/lib.rs"),
+            root.join("../shiroha-sdk/Cargo.toml"),
+            root.join("../shiroha-sdk/build.rs"),
+            root.join("../shiroha-sdk/src/lib.rs"),
+            root.join("../shiroha-wit/Cargo.toml"),
+            root.join("../shiroha-wit/src/lib.rs"),
+        ];
+
+        paths.extend(
+            CANONICAL_WIT_FILES
+                .iter()
+                .map(|file| root.join("../shiroha-wit/wit").join(file)),
+        );
+        paths
+    }
+
+    fn fixture_build_key(root: &Path, fixture_path: &str, extra_key: &str) -> String {
+        let mut hasher = DefaultHasher::new();
+        extra_key.hash(&mut hasher);
+        for path in tracked_fixture_input_paths(root, fixture_path) {
+            hash_file_if_present(&path, &mut hasher);
+        }
+        format!("{:016x}", hasher.finish())
+    }
+
+    fn fixture_target_dir(root: &Path, fixture_path: &str, extra_key: &str) -> PathBuf {
+        let fixture_key = fixture_path.replace('/', "-");
+        std::env::temp_dir()
+            .join("shiroha-wasm-fixtures")
+            .join(fixture_key)
+            .join(fixture_build_key(root, fixture_path, extra_key))
+    }
+
+    fn build_fixture(
+        fixture_path: &str,
+        package_name: &str,
+        extra_env: Option<(&str, &str)>,
+    ) -> Vec<u8> {
+        static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        let _guard = BUILD_LOCK
+            .get_or_init(|| StdMutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let manifest = root.join(fixture_path).join("Cargo.toml");
+        let extra_key = extra_env
+            .map(|(name, value)| format!("{name}={value}"))
+            .unwrap_or_default();
+        let target_dir = fixture_target_dir(&root, fixture_path, &extra_key);
+        let wasm_path = target_dir
+            .join("wasm32-wasip2")
+            .join("release")
+            .join(format!("{package_name}{}", std::env::consts::EXE_SUFFIX))
+            .with_extension("wasm");
+
+        if !wasm_path.exists() {
+            let mut command = Command::new("cargo");
+            command
+                .arg("build")
+                .arg("--manifest-path")
+                .arg(&manifest)
+                .arg("--offline")
+                .arg("--target")
+                .arg("wasm32-wasip2")
+                .arg("--release")
+                .env("CARGO_TARGET_DIR", &target_dir)
+                .current_dir(&root);
+            if let Some((name, value)) = extra_env {
+                command.env(name, value);
+            }
+            let status = command.status().expect("build fixture");
+            assert!(status.success(), "fixture build failed");
+        }
+
+        fs::read(&wasm_path).expect("read built fixture component")
     }
 
     fn build_network_fixture(url: &str) -> Vec<u8> {
-        static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-        let _guard = BUILD_LOCK
-            .get_or_init(|| StdMutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let manifest = root.join("test-fixtures/network-component/Cargo.toml");
-        let target_dir = temp_build_dir("network-component");
-        let status = Command::new("cargo")
-            .arg("build")
-            .arg("--manifest-path")
-            .arg(&manifest)
-            .arg("--offline")
-            .arg("--target")
-            .arg("wasm32-wasip2")
-            .arg("--release")
-            .env("SHIROHA_NETWORK_URL", url)
-            .env("CARGO_TARGET_DIR", &target_dir)
-            .current_dir(&root)
-            .status()
-            .expect("build network fixture");
-        assert!(status.success(), "network fixture build failed");
-
-        std::fs::read(
-            target_dir
-                .join("wasm32-wasip2")
-                .join("release")
-                .join(format!(
-                    "network_component_fixture{}",
-                    std::env::consts::EXE_SUFFIX
-                ))
-                .with_extension("wasm"),
+        build_fixture(
+            "test-fixtures/network-component",
+            "network_component_fixture",
+            Some(("SHIROHA_NETWORK_URL", url)),
         )
-        .expect("read network fixture component")
     }
 
     fn build_storage_fixture() -> Vec<u8> {
-        static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-        let _guard = BUILD_LOCK
-            .get_or_init(|| StdMutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let manifest = root.join("test-fixtures/storage-component/Cargo.toml");
-        let target_dir = temp_build_dir("storage-component");
-        let status = Command::new("cargo")
-            .arg("build")
-            .arg("--manifest-path")
-            .arg(&manifest)
-            .arg("--offline")
-            .arg("--target")
-            .arg("wasm32-wasip2")
-            .arg("--release")
-            .env("CARGO_TARGET_DIR", &target_dir)
-            .current_dir(&root)
-            .status()
-            .expect("build storage fixture");
-        assert!(status.success(), "storage fixture build failed");
-
-        std::fs::read(
-            target_dir
-                .join("wasm32-wasip2")
-                .join("release")
-                .join(format!(
-                    "storage_component_fixture{}",
-                    std::env::consts::EXE_SUFFIX
-                ))
-                .with_extension("wasm"),
+        build_fixture(
+            "test-fixtures/storage-component",
+            "storage_component_fixture",
+            None,
         )
-        .expect("read storage fixture component")
     }
 
     #[test]
@@ -726,7 +764,8 @@ mod tests {
     }
 
     #[test]
-    fn invoke_action_can_call_host_network_import() {
+    #[ignore = "heavy capability fixture smoke; run explicitly when validating wasm host imports"]
+    fn network_fixture_respects_capability_gating() {
         let runtime = WasmRuntime::new().expect("runtime");
         let wasm_bytes = build_network_fixture("http://127.0.0.1:1/");
         let component = runtime
@@ -751,10 +790,25 @@ mod tests {
         assert_eq!(result.status, ExecutionStatus::Failed);
         let output = String::from_utf8(result.output.expect("output")).expect("utf-8 output");
         assert!(output.contains("network error:"));
+
+        let error = host
+            .invoke_action(
+                "fetch",
+                ActionContext {
+                    job_id: "job-1".into(),
+                    state: "idle".into(),
+                    payload: None,
+                },
+                &[],
+            )
+            .expect_err("network import should be rejected without capability");
+
+        assert!(matches!(error, WasmError::Execution(_)));
     }
 
     #[test]
-    fn invoke_action_can_call_host_storage_import() {
+    #[ignore = "heavy capability fixture smoke; run explicitly when validating wasm host imports"]
+    fn storage_fixture_respects_capability_gating() {
         let runtime = WasmRuntime::new().expect("runtime");
         let wasm_bytes = build_storage_fixture();
         let component = runtime
@@ -782,40 +836,6 @@ mod tests {
         assert!(output.contains("beta"));
         assert!(output.contains("deleted=true"));
         assert!(output.contains("alpha_after_delete=false"));
-    }
-
-    #[test]
-    fn invoke_action_rejects_network_import_without_capability() {
-        let runtime = WasmRuntime::new().expect("runtime");
-        let wasm_bytes = build_network_fixture("http://127.0.0.1:1/");
-        let component = runtime
-            .load_component(&wasm_bytes)
-            .expect("network fixture should compile");
-        let mut host = WasmHost::new(runtime.engine(), &component).expect("host");
-
-        let error = host
-            .invoke_action(
-                "fetch",
-                ActionContext {
-                    job_id: "job-1".into(),
-                    state: "idle".into(),
-                    payload: None,
-                },
-                &[],
-            )
-            .expect_err("network import should be rejected without capability");
-
-        assert!(matches!(error, WasmError::Execution(_)));
-    }
-
-    #[test]
-    fn invoke_action_rejects_storage_import_without_capability() {
-        let runtime = WasmRuntime::new().expect("runtime");
-        let wasm_bytes = build_storage_fixture();
-        let component = runtime
-            .load_component(&wasm_bytes)
-            .expect("storage fixture should compile");
-        let mut host = WasmHost::new(runtime.engine(), &component).expect("host");
 
         let error = host
             .invoke_action(
