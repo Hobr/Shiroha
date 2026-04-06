@@ -31,7 +31,7 @@
 - component guest 默认实现 `crate/shiroha-wit/wit/flow.wit` 的 `world flow`；需要额外能力时选择 `network-flow` / `storage-flow` / `full-flow`
 - `net.wit` 和 `store.wit` 都是独立 capability，新增字段或类型时要同时考虑 host 映射和 guest 侧 `wit-bindgen` 可用性
 - 当前已经拆出 `world flow` / `network-flow` / `storage-flow` / `full-flow`；但文档里提到的更细粒度权限体系仍未落地
-- `WasmModule::compute_hash` 当前使用简易哈希（长度+首尾字节），生产应替换为 SHA-256
+- `WasmModule::compute_hash` 现在使用 SHA-256 内容哈希，避免弱哈希导致的缓存碰撞
 - component guest 实例化时使用 `wasmtime_wasi::p2::add_to_linker_sync` 提供 WASI imports
 - 当前 host 通过 reqwest 提供 `net.send`；配置映射优先保持结构化 WIT，而不是退化为 JSON 字符串黑盒
 - 当前 host 通过 capability store trait 提供 `store`；`WasmHost::new()` 默认落到内存 store，`shirohad` 会显式注入真实存储后端

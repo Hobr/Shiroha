@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use sha2::{Digest, Sha256};
+
 /// 编译后的 WASM component，附带内容哈希用于缓存索引
 pub struct WasmModule {
     component: wasmtime::component::Component,
@@ -26,14 +28,8 @@ impl WasmModule {
         &self.component
     }
 
-    /// 简易哈希（MVP）：长度 + 首尾各16字节的十六进制
-    ///
-    /// 生产环境应替换为 SHA-256；当前实现只够测试和单进程缓存命中。
     fn compute_hash(bytes: &[u8]) -> String {
-        let len = bytes.len();
-        let head: Vec<u8> = bytes.iter().take(16).copied().collect();
-        let tail: Vec<u8> = bytes.iter().rev().take(16).copied().collect();
-        format!("{len:016x}-{}-{}", hex(&head), hex(&tail))
+        hex(&Sha256::digest(bytes))
     }
 }
 
@@ -69,5 +65,23 @@ impl ModuleCache {
 impl Default for ModuleCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WasmModule;
+
+    #[test]
+    fn compute_hash_changes_when_middle_bytes_change() {
+        let left = vec![0_u8; 64];
+        let mut right = left.clone();
+        right[32] = 1;
+
+        assert_ne!(
+            WasmModule::compute_hash(&left),
+            WasmModule::compute_hash(&right),
+            "hash should include the full wasm payload"
+        );
     }
 }
