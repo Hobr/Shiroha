@@ -24,6 +24,8 @@ use crate::job_runtime::action_sequence;
 use crate::server::ShirohaState;
 use crate::service_support::parse_uuid;
 
+pub(crate) const JOB_LIFETIME_EXPIRED_EVENT: &str = "__shiroha.job_lifetime_expired__";
+
 /// JobService 的 standalone 实现。
 ///
 /// 它把 gRPC 请求、定时器回调和 WASM 调用串成一条统一的 Job 处理链路。
@@ -44,6 +46,35 @@ impl JobServiceImpl {
             current_state: job.current_state.clone(),
             flow_version: job.flow_version.to_string(),
             context_bytes: job.context.as_ref().map(|context| context.len() as u64),
+        }
+    }
+
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+
+    fn remaining_lifetime_ms(job: &Job) -> Option<u64> {
+        job.lifetime_deadline_ms
+            .map(|deadline| deadline.saturating_sub(Self::now_ms()))
+    }
+
+    async fn register_lifetime_timer_if_needed(&self, job: &Job) {
+        if !matches!(job.state, JobState::Running | JobState::Paused) {
+            return;
+        }
+        if let Some(remaining) = Self::remaining_lifetime_ms(job) {
+            self.state
+                .timer_wheel
+                .register_with_policy(
+                    job.id,
+                    JOB_LIFETIME_EXPIRED_EVENT.to_string(),
+                    std::time::Duration::from_millis(remaining),
+                    false,
+                )
+                .await;
         }
     }
 
@@ -109,6 +140,21 @@ impl JobServiceImpl {
         payload: Option<Vec<u8>>,
     ) -> Result<(), Status> {
         let job = self.load_job(job_id).await?;
+        if event == JOB_LIFETIME_EXPIRED_EVENT {
+            match job.state {
+                JobState::Running | JobState::Paused => {
+                    self.state
+                        .job_manager
+                        .cancel_job(job_id)
+                        .await
+                        .map_err(|e| Status::failed_precondition(e.to_string()))?;
+                    self.state.timer_wheel.cancel_all_job_timers(job_id).await;
+                    tracing::info!(job_id = %job_id, "job lifetime expired; cancelled job");
+                    return Ok(());
+                }
+                JobState::Cancelled | JobState::Completed => return Ok(()),
+            }
+        }
         match job.state {
             JobState::Running => self.process_running_event(job, event, payload).await,
             JobState::Paused => {
@@ -234,6 +280,7 @@ impl JobServiceImpl {
         } else {
             // timeout 是“状态出边”的属性，所以进入新状态后要重新扫描所有出边注册。
             self.persist_and_register_timeouts(job.id, timeouts).await?;
+            self.register_lifetime_timer_if_needed(&job).await;
         }
 
         tracing::info!(job_id = %job.id, event, from, to, "event processed");
@@ -471,19 +518,29 @@ impl JobService for JobServiceImpl {
         request: Request<CreateJobRequest>,
     ) -> Result<Response<CreateJobResponse>, Status> {
         let req = request.into_inner();
+        if req.max_lifetime_ms == Some(0) {
+            return Err(Status::invalid_argument(
+                "`max_lifetime_ms` must be greater than 0",
+            ));
+        }
         let flow = self
             .flow_registration(&req.flow_id)
             .await
             .map_err(|_| Status::not_found(format!("flow `{}` not found", req.flow_id)))?;
+        let deadline = req
+            .max_lifetime_ms
+            .map(|lifetime_ms| Self::now_ms().saturating_add(lifetime_ms));
 
         let job = self
             .state
             .job_manager
-            .create_job(
+            .create_job_with_lifetime(
                 &flow.flow_id,
                 flow.version,
                 &flow.manifest.initial_state,
                 req.context,
+                req.max_lifetime_ms,
+                deadline,
             )
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -512,6 +569,7 @@ impl JobService for JobServiceImpl {
             .collect::<Vec<_>>();
         self.persist_and_register_timeouts(job.id, initial_timeouts)
             .await?;
+        self.register_lifetime_timer_if_needed(&job).await;
 
         tracing::info!(job_id = %job.id, flow_id = req.flow_id, "job created");
         if !action_failures.is_empty() {
@@ -615,6 +673,8 @@ impl JobService for JobServiceImpl {
             .map_err(|e| Status::failed_precondition(e.to_string()))?;
         self.state.timer_wheel.cancel_all_job_timers(job_id).await;
         self.rearm_persisted_timeouts(job_id).await?;
+        let job = self.load_job(job_id).await?;
+        self.register_lifetime_timer_if_needed(&job).await;
         self.drain_pending_events_locked(job_id).await?;
 
         Ok(Response::new(ResumeJobResponse {}))
@@ -764,6 +824,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "approval".into(),
                 context: Some(vec![1, 2]),
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
@@ -849,6 +910,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "approval".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
@@ -933,6 +995,33 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "heavy job integration smoke; run explicitly when validating shirohad job lifetime"]
+    async fn create_job_with_max_lifetime_auto_cancels_job() {
+        let harness = TestHarness::with_timer_forwarder("job-max-lifetime").await;
+        deploy_flow(
+            harness.state.clone(),
+            "lifetime-flow",
+            &approval_manifest("lifetime-flow", Some("allow")),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "lifetime-flow".into(),
+                context: None,
+                max_lifetime_ms: Some(50),
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        let job = wait_for_job(&service, &created.job_id, "cancelled", "idle").await;
+        assert_eq!(job.state, "cancelled");
+        assert_eq!(job.current_state, "idle");
+    }
+
+    #[tokio::test]
     #[ignore = "heavy job integration smoke; run explicitly when validating shirohad job lifecycle"]
     async fn trigger_event_rejects_guard_without_transition() {
         let harness = TestHarness::new("job-service-guard").await;
@@ -948,6 +1037,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "guarded".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
@@ -1003,6 +1093,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "approval".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
@@ -1062,6 +1153,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "approval".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
@@ -1092,6 +1184,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "timer-flow".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
@@ -1132,6 +1225,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "approval".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create old job")
@@ -1146,6 +1240,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "approval".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create new job")
@@ -1191,6 +1286,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "with-initial-hook".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
@@ -1237,6 +1333,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "with-hooks".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
@@ -1298,6 +1395,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "approval".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")

@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::flow_registry::FlowRegistry;
 use crate::flow_service::FlowServiceImpl;
-use crate::job_service::JobServiceImpl;
+use crate::job_service::{JOB_LIFETIME_EXPIRED_EVENT, JobServiceImpl};
 
 /// 全局共享状态，所有 gRPC handler 共享
 pub struct ShirohaState {
@@ -84,16 +84,34 @@ impl ShirohaServer {
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?
             {
-                if job.state != JobState::Running || job.scheduled_timeouts.is_empty() {
-                    continue;
+                if job.state == JobState::Running && !job.scheduled_timeouts.is_empty() {
+                    let anchor = job.timeout_anchor_ms.unwrap_or(now_ms);
+                    let elapsed = now_ms.saturating_sub(anchor);
+                    for timeout in &job.scheduled_timeouts {
+                        let remaining = timeout.remaining_ms.saturating_sub(elapsed);
+                        state
+                            .timer_wheel
+                            .register(
+                                job.id,
+                                timeout.event.clone(),
+                                Duration::from_millis(remaining),
+                            )
+                            .await;
+                        restored_timers += 1;
+                    }
                 }
-                let anchor = job.timeout_anchor_ms.unwrap_or(now_ms);
-                let elapsed = now_ms.saturating_sub(anchor);
-                for timeout in job.scheduled_timeouts {
-                    let remaining = timeout.remaining_ms.saturating_sub(elapsed);
+                if matches!(job.state, JobState::Running | JobState::Paused)
+                    && let Some(deadline) = job.lifetime_deadline_ms
+                {
+                    let remaining = deadline.saturating_sub(now_ms);
                     state
                         .timer_wheel
-                        .register(job.id, timeout.event, Duration::from_millis(remaining))
+                        .register_with_policy(
+                            job.id,
+                            JOB_LIFETIME_EXPIRED_EVENT.to_string(),
+                            Duration::from_millis(remaining),
+                            false,
+                        )
                         .await;
                     restored_timers += 1;
                 }
@@ -241,7 +259,9 @@ mod tests {
     use super::*;
     use crate::flow_service::FlowServiceImpl;
     use crate::job_service::JobServiceImpl;
-    use crate::test_support::{TestHarness, approval_manifest, deploy_flow, example_wasm};
+    use crate::test_support::{
+        TestHarness, approval_manifest, deploy_flow, example_wasm, wait_for_job,
+    };
     use shiroha_core::flow::{
         FlowManifest, FlowWorld, StateDef, StateKind, TimeoutDef, TransitionDef,
     };
@@ -351,6 +371,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "persisted".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
@@ -401,6 +422,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "persisted".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
@@ -487,6 +509,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "timeout-flow".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
@@ -526,6 +549,46 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "heavy restart integration smoke; run explicitly when validating persistence recovery"]
+    async fn reloaded_server_preserves_job_lifetime_deadline() {
+        let harness = TestHarness::new("server-reload-lifetime").await;
+        let data_dir = harness.data_dir.clone();
+        let job_service = JobServiceImpl::new(harness.state.clone());
+
+        deploy_flow(
+            harness.state.clone(),
+            "lifetime-flow",
+            &approval_manifest("lifetime-flow", Some("allow")),
+        )
+        .await;
+
+        let created = job_service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "lifetime-flow".into(),
+                context: None,
+                max_lifetime_ms: Some(200),
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        sleep(Duration::from_millis(100)).await;
+        drop(job_service);
+        drop(harness);
+
+        let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
+            .await
+            .expect("reload server");
+        let (state, timer_rx) = reloaded.into_test_parts();
+        let _timer_forwarder = spawn_timer_forwarder(state.clone(), timer_rx);
+        let job_service = JobServiceImpl::new(state);
+
+        let job = wait_for_job(&job_service, &created.job_id, "cancelled", "idle").await;
+        assert_eq!(job.state, "cancelled");
+        assert_eq!(job.current_state, "idle");
+    }
+
+    #[tokio::test]
+    #[ignore = "heavy restart integration smoke; run explicitly when validating persistence recovery"]
     async fn reloaded_server_preserves_storage_capability_data() {
         let harness = TestHarness::new("server-reload-storage-capability").await;
         let data_dir = harness.data_dir.clone();
@@ -548,6 +611,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "storage-flow".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create storage job");

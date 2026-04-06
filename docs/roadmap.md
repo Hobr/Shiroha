@@ -17,16 +17,17 @@
 
 - shirohad standalone 模式（Controller + Node 同进程，in-process 通道）
 - 状态机核心引擎：State / Transition / Event 驱动
-- Job 并发控制：每个 Job 串行化事件处理（event inbox）
+- Job 并发控制：每个 Job 串行化事件处理；paused 状态下事件持久化排队
 - 定时器：transition timeout，Controller 本地 timer wheel
 - wasmtime 集成：加载 WASM、调用 get-manifest / invoke-action / invoke-guard
 - 基础 WIT host 接口（sandbox world）
 - 状态级 hook：`on-enter` / `on-exit`
 - Job 生命周期：running / paused / cancelled / completed
+- Job `max_lifetime`：超时自动取消
 - 事件溯源：状态转移事件写入 Storage（与状态更新同事务）
 - Flow 版本绑定：旧 Job 继续使用创建时绑定的版本
 - Redb 持久化（最新 Flow 别名 + 版本历史 + 原始 WASM 字节）
-- 重启恢复：重新加载 Flow 版本和模块缓存，继续执行已持久化 Job
+- 重启恢复：重新加载 Flow 版本和模块缓存，恢复 Job 快照、暂停事件队列和 timeout 计划
 - sctl CLI：部署/列出/查看 Flow，创建/列出/查看/等待 Job，触发事件、暂停/恢复/取消 Job，查询事件日志
 - tracing 结构化日志
 
@@ -42,6 +43,7 @@
 - 基础调度（round-robin）
 - 任务超时 + 重试
 - fan-out 分发 + 聚合
+- 通用持久化 event inbox
 
 ### Phase 3 — 生产就绪
 
@@ -54,6 +56,7 @@
 - WASM 权限系统（network / storage / full world）
 - 高级调度（负载感知、能力标签）
 - WASM Plugin 体系（scheduler / middleware 插件槽）
+- in-flight Action 跟踪 / 取消 / 恢复
 - 子流程：subprocess 状态类型、父子 Job 关联
 - Web 管理界面
 - Flow 版本生命周期管理（清理策略、保留策略、历史查询）
