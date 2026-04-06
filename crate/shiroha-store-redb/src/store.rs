@@ -561,6 +561,8 @@ mod tests {
                 remaining_ms: 42,
             }],
             timeout_anchor_ms: Some(1_234),
+            max_lifetime_ms: None,
+            lifetime_deadline_ms: None,
         }
     }
 

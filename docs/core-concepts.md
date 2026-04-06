@@ -40,7 +40,7 @@
 |------|------|
 | `running` | 正常运行，响应事件和定时器 |
 | `paused` | 暂停，不响应事件（事件入队但不处理），不触发定时器 |
-| `cancelled` | 强制终止，清理 in-flight Execution |
+| `cancelled` | 强制终止，清理本地 timeout 和暂停期间暂存事件 |
 | `completed` | 状态机到达终态，正常结束 |
 
 操作接口：
@@ -48,15 +48,17 @@
 - `pause(job_id)`：暂停 Job，外部事件和定时器事件入队但不推进状态机
 - `resume(job_id)`：恢复 Job，按序处理暂存的事件
 - `cancel(job_id)`：取消 Job，并清理该 Job 相关的本地定时器
-- Job 级别可配置 `max_lifetime`，超时自动取消
+- Job 级别可配置 `max_lifetime`，按绝对 wall-clock deadline 计时；即使执行 `pause(job_id)` 也不会冻结该计时，超时后仍由 Controller 自动取消
 
 ### Job 并发控制
 
-同一个 Job 可能同时收到多个事件（外部触发、定时器到期、Execution 完成回调）。采用**串行化**模型：
+同一个 Job 可能同时收到多个事件（外部触发、定时器到期、Execution 完成回调）。当前 Phase 1 的正确性保证来自 **Job 级串行锁 + 暂停期间事件队列**：
 
-- 每个 Job 持有一个有序的 event inbox（FIFO 队列）
 - Controller 内部每个 Job 同一时刻只有一个事件在处理
-- 事件处理过程：取出事件 → 评估 Guard → 提交状态转移 → 执行 `on-exit` / transition action / `on-enter` → 完成后取下一个事件
+- `running` 状态下，事件在持有该 Job 锁后立即处理
+- `paused` 状态下，事件会持久化到 Job 快照中的队列，`resume` 后按顺序回放
+- 当前还没有一个“所有状态通用、持久化的 FIFO event inbox” 抽象
+- 事件处理过程：获取 Job 锁 → 评估 Guard → 提交状态转移 → 执行 `on-exit` / transition action / `on-enter`
 
 这是正确性保证的基础，避免并发状态转移导致状态不一致。
 
@@ -66,6 +68,7 @@
 - 新创建的 Job 使用最新版本
 - 当前实现会同时持久化最新版本别名、版本历史和原始 WASM 字节
 - Controller 重启后会重建模块缓存，并按 Job 快照恢复暂停事件队列和 timeout 计划，因此旧 Job 可以继续按绑定版本运行
+- 当前重启恢复不恢复运行中的 in-flight Action；恢复边界以持久化的 Job 快照为准
 - “旧版 WASM 自动清理/保留策略”仍属于后续迭代
 
 ## Execution

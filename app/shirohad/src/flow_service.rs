@@ -647,6 +647,7 @@ mod tests {
             .create_job(Request::new(CreateJobRequest {
                 flow_id: "demo-flow".into(),
                 context: None,
+                max_lifetime_ms: None,
             }))
             .await
             .expect("create job");

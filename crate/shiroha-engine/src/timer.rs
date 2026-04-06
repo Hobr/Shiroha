@@ -35,6 +35,7 @@ struct TimerEntry {
     registered_at: Instant,
     duration: Duration,
     paused: bool,
+    pause_with_job: bool,
     /// 暂停时记录的剩余时间
     remaining: Option<Duration>,
 }
@@ -63,6 +64,18 @@ impl TimerWheel {
 
     /// 注册定时器，到期后发送 TimerEvent
     pub async fn register(&self, job_id: Uuid, event: String, duration: Duration) -> TimerHandle {
+        self.register_with_policy(job_id, event, duration, true)
+            .await
+    }
+
+    /// 注册定时器，并指定它是否应在 `pause_job_timers()` 时被冻结。
+    pub async fn register_with_policy(
+        &self,
+        job_id: Uuid,
+        event: String,
+        duration: Duration,
+        pause_with_job: bool,
+    ) -> TimerHandle {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let sender = self.sender.clone();
         let timers = self.timers.clone();
@@ -82,6 +95,7 @@ impl TimerWheel {
             registered_at: Instant::now(),
             duration,
             paused: false,
+            pause_with_job,
             remaining: None,
         };
 
@@ -101,7 +115,7 @@ impl TimerWheel {
     pub async fn pause_job_timers(&self, job_id: Uuid) {
         let mut timers = self.timers.lock().await;
         for entry in timers.values_mut() {
-            if entry.job_id == job_id && !entry.paused {
+            if entry.job_id == job_id && entry.pause_with_job && !entry.paused {
                 entry.abort_handle.abort();
                 let elapsed = entry.registered_at.elapsed();
                 // 暂停时把“原始持续时间 - 已流逝时间”记下来，恢复时继续倒计时。
