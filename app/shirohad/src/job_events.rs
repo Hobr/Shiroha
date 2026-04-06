@@ -11,7 +11,6 @@ use crate::service_support::parse_uuid;
 pub(crate) struct JobEventsQuery {
     pub(crate) job_id: Uuid,
     pub(crate) job_id_text: String,
-    pub(crate) since_id: Option<Uuid>,
     pub(crate) since_id_text: Option<String>,
     pub(crate) since_timestamp_ms: Option<u64>,
     pub(crate) limit: Option<u32>,
@@ -50,10 +49,6 @@ pub(crate) fn validate_query(req: GetJobEventsRequest) -> Result<JobEventsQuery,
     Ok(JobEventsQuery {
         job_id,
         job_id_text: req.job_id,
-        since_id: match since_id_text.as_deref() {
-            Some(id) => Some(parse_uuid(id)?),
-            None => None,
-        },
         since_id_text,
         since_timestamp_ms: req.since_timestamp_ms,
         limit: req.limit,
@@ -65,9 +60,9 @@ pub(crate) fn filter_events(
     mut events: Vec<EventRecord>,
     query: &JobEventsQuery,
 ) -> Result<Vec<EventRecord>, Status> {
-    if let Some(cursor) = query.since_id {
+    if let Some(since_id) = query.since_id_text.as_deref() {
+        let cursor = parse_uuid(since_id)?;
         let Some(index) = events.iter().position(|event| event.id == cursor) else {
-            let since_id = query.since_id_text.as_deref().unwrap_or_default();
             return Err(Status::invalid_argument(format!(
                 "event `{since_id}` not found for job `{}`",
                 query.job_id_text
@@ -171,6 +166,20 @@ mod tests {
         let error = validate_query(request).expect_err("invalid job_id should be rejected first");
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
         assert_eq!(error.message(), "invalid UUID: not-a-uuid");
+    }
+
+    #[test]
+    fn validate_query_does_not_parse_since_id_before_event_loading() {
+        let request = GetJobEventsRequest {
+            job_id: Uuid::from_u128(100).to_string(),
+            since_id: Some("not-a-uuid".into()),
+            since_timestamp_ms: None,
+            kind: Vec::new(),
+            limit: None,
+        };
+
+        let query = validate_query(request).expect("since_id parsing should be deferred");
+        assert_eq!(query.since_id_text.as_deref(), Some("not-a-uuid"));
     }
 
     #[test]
