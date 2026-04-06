@@ -121,7 +121,7 @@ fn assert_crate_has_no_vendored_wit_files(crate_dir: &Path, crate_name: &str) {
 fn stage_workspace(root: &Path, fixture_path: &str) {
     write_file(
         &root.join("Cargo.toml"),
-        "[package]\nname = \"shiroha-sdk\"\nversion = \"0.1.0\"\n",
+        "[package]\nname = \"shiroha-sdk\"\nversion = \"0.1.1\"\n",
     );
     write_file(
         &root.join("build.rs"),
@@ -130,7 +130,7 @@ fn stage_workspace(root: &Path, fixture_path: &str) {
     write_file(&root.join("src/lib.rs"), "pub fn placeholder() {}\n");
     write_file(
         &root.join(fixture_path).join("Cargo.toml"),
-        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+        "[package]\nname = \"fixture\"\nversion = \"0.1.1\"\n",
     );
     write_file(
         &root.join(fixture_path).join("src/lib.rs"),
@@ -138,7 +138,7 @@ fn stage_workspace(root: &Path, fixture_path: &str) {
     );
     write_file(
         &root.join("../shiroha-wit/Cargo.toml"),
-        "[package]\nname = \"shiroha-wit\"\nversion = \"0.1.0\"\n",
+        "[package]\nname = \"shiroha-wit\"\nversion = \"0.1.1\"\n",
     );
     write_file(
         &root.join("../shiroha-wit/src/lib.rs"),
@@ -148,7 +148,7 @@ fn stage_workspace(root: &Path, fixture_path: &str) {
     for file in CANONICAL_WIT_FILES {
         write_file(
             &root.join("../shiroha-wit/wit").join(file),
-            &format!("package shiroha:flow@0.1.0;\n// {file}\n"),
+            &format!("package shiroha:flow@0.1.1;\n// {file}\n"),
         );
     }
 }
@@ -264,7 +264,7 @@ fn build_key_changes_when_shiroha_wit_changes() {
     let before = build_key(&temp_root, fixture_path);
     write_file(
         &temp_root.join("../shiroha-wit/wit/flow.wit"),
-        "package shiroha:flow@0.1.0;\n// shiroha-wit flow changed\n",
+        "package shiroha:flow@0.1.1;\n// shiroha-wit flow changed\n",
     );
     let after = build_key(&temp_root, fixture_path);
 
