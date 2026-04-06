@@ -100,6 +100,24 @@ fn write_file(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write file");
 }
 
+fn assert_crate_has_no_vendored_wit_files(crate_dir: &Path, crate_name: &str) {
+    let wit_dir = crate_dir.join("wit");
+    let vendored_files = if wit_dir.exists() {
+        fs::read_dir(&wit_dir)
+            .expect("read crate wit dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_file())
+            .count()
+    } else {
+        0
+    };
+
+    assert!(
+        vendored_files == 0,
+        "{crate_name} should consume shared WIT instead of vendoring its own copy"
+    );
+}
+
 fn stage_workspace(root: &Path, fixture_path: &str) {
     write_file(
         &root.join("Cargo.toml"),
@@ -172,21 +190,13 @@ fn cargo_package_includes_shiroha_wit_sources() {
 #[test]
 fn sdk_no_longer_vendors_wit_files() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let wit_dir = root.join("wit");
-    let vendored_files = if wit_dir.exists() {
-        fs::read_dir(&wit_dir)
-            .expect("read shiroha-sdk wit dir")
-            .filter_map(Result::ok)
-            .filter(|entry| entry.path().is_file())
-            .count()
-    } else {
-        0
-    };
+    assert_crate_has_no_vendored_wit_files(&root, "shiroha-sdk");
+}
 
-    assert!(
-        vendored_files == 0,
-        "shiroha-sdk should consume shared WIT instead of vendoring its own copy"
-    );
+#[test]
+fn wasm_runtime_no_longer_vendors_wit_files() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    assert_crate_has_no_vendored_wit_files(&root.join("../shiroha-wasm"), "shiroha-wasm");
 }
 
 #[test]
