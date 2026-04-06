@@ -56,14 +56,17 @@ impl Guest for ChildFlow {
                 ActionDef {
                     name: "record-approval".to_string(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "record-rejection".to_string(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "allow-approval".to_string(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
             ],
         }

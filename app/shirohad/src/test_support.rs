@@ -94,9 +94,14 @@ impl LiveGrpcServer {
         let _ = std::fs::remove_file(&socket_path);
         let listener = match tokio::net::UnixListener::bind(&socket_path) {
             Ok(listener) => listener,
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::InvalidInput
+                ) =>
+            {
                 eprintln!(
-                    "skipping grpc test: unix domain sockets are not permitted in this environment ({error})"
+                    "skipping grpc test: unix domain socket is not available in this environment ({error})"
                 );
                 let _ = std::fs::remove_dir_all(&data_dir);
                 return None;
@@ -168,7 +173,7 @@ pub(crate) fn approval_manifest(flow_id: &str, guard: Option<&str>) -> FlowManif
     // 最小 happy-path flow：一次 approve 事件驱动一次转移和一次 action。
     FlowManifest {
         id: flow_id.to_string(),
-        world: FlowWorld::Sandbox,
+        host_world: FlowWorld::Sandbox,
         states: vec![
             StateDef {
                 name: "idle".into(),
@@ -198,14 +203,17 @@ pub(crate) fn approval_manifest(flow_id: &str, guard: Option<&str>) -> FlowManif
             ActionDef {
                 name: "ship".into(),
                 dispatch: DispatchMode::Local,
+                capabilities: Vec::new(),
             },
             ActionDef {
                 name: "allow".into(),
                 dispatch: DispatchMode::Local,
+                capabilities: Vec::new(),
             },
             ActionDef {
                 name: "deny".into(),
                 dispatch: DispatchMode::Local,
+                capabilities: Vec::new(),
             },
         ],
     }
@@ -215,7 +223,7 @@ pub(crate) fn timeout_manifest(flow_id: &str) -> FlowManifest {
     // 专门用于覆盖 timeout -> enqueue_event -> terminal transition 这条链路。
     FlowManifest {
         id: flow_id.to_string(),
-        world: FlowWorld::Sandbox,
+        host_world: FlowWorld::Sandbox,
         states: vec![
             StateDef {
                 name: "waiting".into(),

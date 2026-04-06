@@ -74,14 +74,17 @@ impl Guest for ParentFlow {
                 ActionDef {
                     name: "prepare-parent-context".to_string(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "finalize-parent".to_string(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "has-payload".to_string(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
             ],
         }

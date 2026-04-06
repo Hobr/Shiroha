@@ -12,6 +12,11 @@ pub(super) fn add_to_linker(
         "get",
         |caller: wasmtime::StoreContextMut<'_, ComponentStoreState>,
          (namespace, key): (String, String)| {
+            if !caller.data().allow_storage {
+                return Err(wasmtime::Error::msg(
+                    "storage capability is not allowed in the current invocation",
+                ));
+            }
             let value = caller
                 .data()
                 .capability_store
@@ -25,6 +30,11 @@ pub(super) fn add_to_linker(
         "put",
         |caller: wasmtime::StoreContextMut<'_, ComponentStoreState>,
          (namespace, key, value): (String, String, Vec<u8>)| {
+            if !caller.data().allow_storage {
+                return Err(wasmtime::Error::msg(
+                    "storage capability is not allowed in the current invocation",
+                ));
+            }
             caller
                 .data()
                 .capability_store
@@ -38,6 +48,11 @@ pub(super) fn add_to_linker(
         "delete",
         |caller: wasmtime::StoreContextMut<'_, ComponentStoreState>,
          (namespace, key): (String, String)| {
+            if !caller.data().allow_storage {
+                return Err(wasmtime::Error::msg(
+                    "storage capability is not allowed in the current invocation",
+                ));
+            }
             let deleted = caller
                 .data()
                 .capability_store
@@ -51,6 +66,11 @@ pub(super) fn add_to_linker(
         "list-keys",
         |caller: wasmtime::StoreContextMut<'_, ComponentStoreState>,
          (namespace, prefix, limit): (String, Option<String>, Option<u32>)| {
+            if !caller.data().allow_storage {
+                return Err(wasmtime::Error::msg(
+                    "storage capability is not allowed in the current invocation",
+                ));
+            }
             let keys = caller
                 .data()
                 .capability_store

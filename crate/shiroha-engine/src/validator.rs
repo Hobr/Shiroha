@@ -11,18 +11,30 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
-use shiroha_core::flow::FlowManifest;
+use shiroha_core::flow::{FlowManifest, FlowWorld};
 
 /// 验证警告
 #[derive(Debug)]
 pub enum ValidationWarning {
     InvalidInitialState(String),
-    MissingState { field: String, state: String },
+    MissingState {
+        field: String,
+        state: String,
+    },
     UnreachableState(String),
     DeadlockState(String),
     TerminalWithOutgoing(String),
     MissingAction(String),
     MissingGuard(String),
+    ActionCapabilityOutsideWorld {
+        action: String,
+        capability: String,
+        host_world: String,
+    },
+    GuardUsesCapability {
+        guard: String,
+        capability: String,
+    },
 }
 
 impl fmt::Display for ValidationWarning {
@@ -47,6 +59,18 @@ impl fmt::Display for ValidationWarning {
             Self::MissingGuard(s) => {
                 write!(f, "guard `{s}` referenced in transitions but not declared")
             }
+            Self::ActionCapabilityOutsideWorld {
+                action,
+                capability,
+                host_world,
+            } => write!(
+                f,
+                "action `{action}` requires capability `{capability}` which is not allowed by host world `{host_world}`"
+            ),
+            Self::GuardUsesCapability { guard, capability } => write!(
+                f,
+                "guard `{guard}` cannot require capability `{capability}`; guards must stay in sandbox"
+            ),
         }
     }
 }
@@ -61,7 +85,24 @@ impl FlowValidator {
         let state_names: HashSet<&str> = manifest.states.iter().map(|s| s.name.as_str()).collect();
         let action_names: HashSet<&str> =
             manifest.actions.iter().map(|a| a.name.as_str()).collect();
+        let action_defs = manifest
+            .actions
+            .iter()
+            .map(|action| (action.name.as_str(), action))
+            .collect::<HashMap<_, _>>();
         // 当前 manifest 没有单独的 guard 注册表，因此 guard/action 都从 actions 列表校验。
+
+        for action in &manifest.actions {
+            for capability in &action.capabilities {
+                if !manifest.host_world.allows(*capability) {
+                    warnings.push(ValidationWarning::ActionCapabilityOutsideWorld {
+                        action: action.name.clone(),
+                        capability: capability_name(*capability).to_string(),
+                        host_world: host_world_name(manifest.host_world).to_string(),
+                    });
+                }
+            }
+        }
 
         // 初始状态必须存在
         if !state_names.contains(manifest.initial_state.as_str()) {
@@ -93,6 +134,16 @@ impl FlowValidator {
                 && !action_names.contains(guard.as_str())
             {
                 warnings.push(ValidationWarning::MissingGuard(guard.clone()));
+            }
+            if let Some(ref guard) = t.guard
+                && let Some(action) = action_defs.get(guard.as_str())
+            {
+                for capability in &action.capabilities {
+                    warnings.push(ValidationWarning::GuardUsesCapability {
+                        guard: guard.clone(),
+                        capability: capability_name(*capability).to_string(),
+                    });
+                }
             }
         }
         for state in &manifest.states {
@@ -186,10 +237,26 @@ impl FlowValidator {
     }
 }
 
+fn capability_name(capability: shiroha_core::flow::ActionCapability) -> &'static str {
+    match capability {
+        shiroha_core::flow::ActionCapability::Network => "network",
+        shiroha_core::flow::ActionCapability::Storage => "storage",
+    }
+}
+
+fn host_world_name(world: FlowWorld) -> &'static str {
+    match world {
+        FlowWorld::Sandbox => "sandbox",
+        FlowWorld::Network => "network",
+        FlowWorld::Storage => "storage",
+        FlowWorld::Full => "full",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use shiroha_core::flow::{
-        ActionDef, DispatchMode, FlowWorld, StateDef, StateKind, TransitionDef,
+        ActionCapability, ActionDef, DispatchMode, FlowWorld, StateDef, StateKind, TransitionDef,
     };
 
     use super::*;
@@ -197,7 +264,7 @@ mod tests {
     fn valid_manifest() -> FlowManifest {
         FlowManifest {
             id: "valid".into(),
-            world: FlowWorld::Sandbox,
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
@@ -227,10 +294,12 @@ mod tests {
                 ActionDef {
                     name: "ship".into(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "allow".into(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
             ],
         }
@@ -302,7 +371,7 @@ mod tests {
     fn deadlock_and_missing_state_hook_are_reported() {
         let manifest = FlowManifest {
             id: "deadlock".into(),
-            world: FlowWorld::Sandbox,
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
@@ -362,5 +431,63 @@ mod tests {
         assert!(warnings.iter().any(
             |warning| matches!(warning, ValidationWarning::DeadlockState(state) if state == "loop")
         ));
+    }
+
+    #[test]
+    fn action_capability_outside_world_and_guard_capability_are_reported() {
+        let manifest = FlowManifest {
+            id: "capability-errors".into(),
+            host_world: FlowWorld::Network,
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![TransitionDef {
+                from: "idle".into(),
+                to: "done".into(),
+                event: "approve".into(),
+                guard: Some("allow".into()),
+                action: Some("ship".into()),
+                timeout: None,
+            }],
+            initial_state: "idle".into(),
+            actions: vec![
+                ActionDef {
+                    name: "ship".into(),
+                    dispatch: DispatchMode::Local,
+                    capabilities: vec![ActionCapability::Storage],
+                },
+                ActionDef {
+                    name: "allow".into(),
+                    dispatch: DispatchMode::Local,
+                    capabilities: vec![ActionCapability::Network],
+                },
+            ],
+        };
+
+        let warnings = FlowValidator::validate(&manifest);
+
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            ValidationWarning::ActionCapabilityOutsideWorld { action, capability, host_world }
+                if action == "ship" && capability == "storage" && host_world == "network"
+        )));
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            ValidationWarning::GuardUsesCapability { guard, capability }
+                if guard == "allow" && capability == "network"
+        )));
     }
 }

@@ -85,7 +85,7 @@ mod tests {
     fn sample_manifest() -> FlowManifest {
         FlowManifest {
             id: "demo".into(),
-            world: FlowWorld::Sandbox,
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
@@ -140,14 +140,17 @@ mod tests {
                 ActionDef {
                     name: "ship".into(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "fallback".into(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "allow".into(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
             ],
         }

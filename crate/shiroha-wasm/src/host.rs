@@ -14,8 +14,8 @@ use wasmtime::component::{ComponentNamedList, ComponentType, Lift, Lower, Resour
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use shiroha_core::flow::{
-    ActionDef, DispatchMode, FanOutConfig, FanOutStrategy, FlowManifest, FlowWorld, StateDef,
-    StateKind, SubprocessDef, TimeoutDef, TransitionDef,
+    ActionCapability, ActionDef, DispatchMode, FanOutConfig, FanOutStrategy, FlowManifest,
+    FlowWorld, StateDef, StateKind, SubprocessDef, TimeoutDef, TransitionDef,
 };
 use shiroha_core::job::{ActionResult, AggregateDecision, ExecutionStatus, NodeResult};
 use shiroha_core::storage::{CapabilityStore, MemoryStorage};
@@ -58,6 +58,8 @@ struct ComponentStoreState {
     ctx: WasiCtx,
     table: ResourceTable,
     capability_store: Arc<dyn CapabilityStore>,
+    allow_network: bool,
+    allow_storage: bool,
 }
 
 impl Default for ComponentStoreState {
@@ -66,6 +68,8 @@ impl Default for ComponentStoreState {
             ctx: WasiCtx::default(),
             table: ResourceTable::new(),
             capability_store: default_capability_store(),
+            allow_network: false,
+            allow_storage: false,
         }
     }
 }
@@ -238,6 +242,18 @@ struct ComponentTimeoutDef {
 struct ComponentActionDef {
     name: String,
     dispatch: ComponentDispatchMode,
+    capabilities: Vec<ComponentActionCapability>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, ComponentType, Lift, Lower)]
+#[component(enum)]
+#[repr(u8)]
+enum ComponentActionCapability {
+    #[component(name = "network")]
+    Network,
+    #[component(name = "storage")]
+    Storage,
 }
 
 #[derive(Debug, Clone, ComponentType, Lift, Lower)]
@@ -313,7 +329,7 @@ impl From<ComponentFlowManifest> for FlowManifest {
     fn from(value: ComponentFlowManifest) -> Self {
         Self {
             id: value.id,
-            world: value.world.into(),
+            host_world: value.world.into(),
             states: value.states.into_iter().map(Into::into).collect(),
             transitions: value.transitions.into_iter().map(Into::into).collect(),
             initial_state: value.initial_state,
@@ -393,6 +409,16 @@ impl From<ComponentActionDef> for ActionDef {
         Self {
             name: value.name,
             dispatch: value.dispatch.into(),
+            capabilities: value.capabilities.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<ComponentActionCapability> for ActionCapability {
+    fn from(value: ComponentActionCapability) -> Self {
+        match value {
+            ComponentActionCapability::Network => Self::Network,
+            ComponentActionCapability::Storage => Self::Storage,
         }
     }
 }
@@ -510,6 +536,17 @@ impl WasmHost {
         ComponentGuest::new(&self.engine, &self.component, self.capability_store.clone())
     }
 
+    fn set_allowed_capabilities(guest: &mut ComponentGuest, capabilities: &[ActionCapability]) {
+        guest.store.data_mut().allow_network = false;
+        guest.store.data_mut().allow_storage = false;
+        for capability in capabilities {
+            match capability {
+                ActionCapability::Network => guest.store.data_mut().allow_network = true,
+                ActionCapability::Storage => guest.store.data_mut().allow_storage = true,
+            }
+        }
+    }
+
     pub fn validate_required_exports(&self) -> Result<(), WasmError> {
         let mut guest = self.guest()?;
         let _ = guest.get_typed_func::<(), (ComponentFlowManifest,)>(GET_MANIFEST_EXPORTS)?;
@@ -526,6 +563,7 @@ impl WasmHost {
 
     pub fn get_manifest(&mut self) -> Result<FlowManifest, WasmError> {
         let mut guest = self.guest()?;
+        Self::set_allowed_capabilities(&mut guest, &[]);
         let get_manifest =
             guest.get_typed_func::<(), (ComponentFlowManifest,)>(GET_MANIFEST_EXPORTS)?;
         let (manifest,) = get_manifest
@@ -538,8 +576,10 @@ impl WasmHost {
         &mut self,
         name: &str,
         ctx: ActionContext,
+        capabilities: &[ActionCapability],
     ) -> Result<ActionResult, WasmError> {
         let mut guest = self.guest()?;
+        Self::set_allowed_capabilities(&mut guest, capabilities);
         let invoke_action = guest
             .get_typed_func::<(String, ActionContext), (ComponentActionResult,)>(
                 INVOKE_ACTION_EXPORTS,
@@ -552,6 +592,7 @@ impl WasmHost {
 
     pub fn invoke_guard(&mut self, name: &str, ctx: GuardContext) -> Result<bool, WasmError> {
         let mut guest = self.guest()?;
+        Self::set_allowed_capabilities(&mut guest, &[]);
         let invoke_guard =
             guest.get_typed_func::<(String, GuardContext), (bool,)>(INVOKE_GUARD_EXPORTS)?;
         let (accepted,) = invoke_guard
@@ -567,6 +608,7 @@ impl WasmHost {
     ) -> Result<AggregateDecision, WasmError> {
         // fan-out 聚合要先把领域层结果重新编码为 WIT 记录数组，再交给 guest 聚合函数。
         let mut guest = self.guest()?;
+        Self::set_allowed_capabilities(&mut guest, &[]);
         let typed_results: Vec<ComponentNodeResult> =
             results.iter().map(ComponentNodeResult::from).collect();
         let aggregate = guest
@@ -702,6 +744,7 @@ mod tests {
                     state: "idle".into(),
                     payload: None,
                 },
+                &[ActionCapability::Network],
             )
             .expect("invoke action");
 
@@ -729,6 +772,7 @@ mod tests {
                     state: "idle".into(),
                     payload: None,
                 },
+                &[ActionCapability::Storage],
             )
             .expect("invoke action");
 
@@ -738,5 +782,53 @@ mod tests {
         assert!(output.contains("beta"));
         assert!(output.contains("deleted=true"));
         assert!(output.contains("alpha_after_delete=false"));
+    }
+
+    #[test]
+    fn invoke_action_rejects_network_import_without_capability() {
+        let runtime = WasmRuntime::new().expect("runtime");
+        let wasm_bytes = build_network_fixture("http://127.0.0.1:1/");
+        let component = runtime
+            .load_component(&wasm_bytes)
+            .expect("network fixture should compile");
+        let mut host = WasmHost::new(runtime.engine(), &component).expect("host");
+
+        let error = host
+            .invoke_action(
+                "fetch",
+                ActionContext {
+                    job_id: "job-1".into(),
+                    state: "idle".into(),
+                    payload: None,
+                },
+                &[],
+            )
+            .expect_err("network import should be rejected without capability");
+
+        assert!(matches!(error, WasmError::Execution(_)));
+    }
+
+    #[test]
+    fn invoke_action_rejects_storage_import_without_capability() {
+        let runtime = WasmRuntime::new().expect("runtime");
+        let wasm_bytes = build_storage_fixture();
+        let component = runtime
+            .load_component(&wasm_bytes)
+            .expect("storage fixture should compile");
+        let mut host = WasmHost::new(runtime.engine(), &component).expect("host");
+
+        let error = host
+            .invoke_action(
+                "store",
+                ActionContext {
+                    job_id: "job-1".into(),
+                    state: "idle".into(),
+                    payload: None,
+                },
+                &[],
+            )
+            .expect_err("storage import should be rejected without capability");
+
+        assert!(matches!(error, WasmError::Execution(_)));
     }
 }

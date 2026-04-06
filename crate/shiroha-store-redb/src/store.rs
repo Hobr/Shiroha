@@ -411,7 +411,7 @@ mod tests {
             version: Uuid::now_v7(),
             manifest: FlowManifest {
                 id: "demo".into(),
-                world: FlowWorld::Sandbox,
+                host_world: FlowWorld::Sandbox,
                 states: vec![
                     StateDef {
                         name: "idle".into(),
@@ -440,6 +440,7 @@ mod tests {
                 actions: vec![ActionDef {
                     name: "ship".into(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 }],
             },
             wasm_hash: "hash-demo".into(),

@@ -24,6 +24,7 @@ impl Guest for StorageFlow {
             actions: vec![ActionDef {
                 name: "store".to_string(),
                 dispatch: DispatchMode::Local,
+                capabilities: vec![ActionCapability::Storage],
             }],
         }
     }
