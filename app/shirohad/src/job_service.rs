@@ -728,152 +728,16 @@ impl JobService for JobServiceImpl {
 
 #[cfg(test)]
 mod tests {
-    use tokio::time::{Duration, sleep, timeout};
-
     use super::*;
-    use crate::flow_service::FlowServiceImpl;
     use crate::test_support::{
-        TestHarness, approval_manifest, timeout_manifest, wasm_for_manifest,
+        TestHarness, approval_manifest, approval_manifest_to, deploy_flow, register_flow_version,
+        timeout_manifest, wait_for_job,
     };
     use shiroha_core::event::EventKind;
     use shiroha_core::flow::{
-        ActionDef, DispatchMode, FlowManifest, FlowRegistration, FlowWorld, StateDef, StateKind,
-        TransitionDef,
+        ActionDef, DispatchMode, FlowManifest, FlowWorld, StateDef, StateKind, TransitionDef,
     };
-    use shiroha_core::storage::Storage;
-    use shiroha_engine::engine::StateMachineEngine;
     use shiroha_proto::shiroha_api::DeleteJobRequest;
-    use shiroha_proto::shiroha_api::flow_service_server::FlowService;
-
-    async fn deploy_flow(
-        state: Arc<ShirohaState>,
-        flow_id: &str,
-        manifest: &shiroha_core::flow::FlowManifest,
-    ) {
-        let flow_service = FlowServiceImpl::new(state);
-        flow_service
-            .deploy_flow(Request::new(
-                shiroha_proto::shiroha_api::DeployFlowRequest {
-                    flow_id: flow_id.to_string(),
-                    wasm_bytes: wasm_for_manifest(manifest),
-                },
-            ))
-            .await
-            .expect("deploy flow");
-    }
-
-    async fn register_flow_version(
-        state: Arc<ShirohaState>,
-        flow_id: &str,
-        version: Uuid,
-        manifest: FlowManifest,
-    ) -> FlowRegistration {
-        let registration = FlowRegistration {
-            flow_id: flow_id.to_string(),
-            version,
-            manifest: manifest.clone(),
-            // 版本绑定测试只需要 flow/engine 选择，不需要真实 wasm 调用。
-            wasm_hash: format!("test-{flow_id}-{version}"),
-        };
-
-        state
-            .storage
-            .save_flow(&registration)
-            .await
-            .expect("save flow");
-        state
-            .flow_versions
-            .lock()
-            .await
-            .insert((flow_id.to_string(), version), registration.clone());
-        state.versioned_engines.lock().await.insert(
-            (flow_id.to_string(), version),
-            StateMachineEngine::new(manifest.clone()),
-        );
-
-        let replace_latest = state
-            .flows
-            .lock()
-            .await
-            .get(flow_id)
-            .is_none_or(|existing| version > existing.version);
-        if replace_latest {
-            state
-                .flows
-                .lock()
-                .await
-                .insert(flow_id.to_string(), registration.clone());
-            state
-                .engines
-                .lock()
-                .await
-                .insert(flow_id.to_string(), StateMachineEngine::new(manifest));
-        }
-
-        registration
-    }
-
-    async fn wait_for_job(
-        service: &JobServiceImpl,
-        job_id: &str,
-        expected_state: &str,
-        expected_current_state: &str,
-    ) -> GetJobResponse {
-        timeout(Duration::from_millis(400), async {
-            loop {
-                let job = service
-                    .get_job(Request::new(GetJobRequest {
-                        job_id: job_id.to_string(),
-                    }))
-                    .await
-                    .expect("get job")
-                    .into_inner();
-                if job.state == expected_state && job.current_state == expected_current_state {
-                    break job;
-                }
-                sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("job should reach expected state")
-    }
-
-    fn approval_manifest_to(flow_id: &str, terminal_state: &str) -> FlowManifest {
-        FlowManifest {
-            id: flow_id.to_string(),
-            host_world: FlowWorld::Sandbox,
-            states: vec![
-                StateDef {
-                    name: "idle".into(),
-                    kind: StateKind::Normal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-                StateDef {
-                    name: terminal_state.into(),
-                    kind: StateKind::Terminal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-            ],
-            transitions: vec![TransitionDef {
-                from: "idle".into(),
-                to: terminal_state.into(),
-                event: "approve".into(),
-                guard: None,
-                action: Some("ship".into()),
-                timeout: None,
-            }],
-            initial_state: "idle".into(),
-            actions: vec![ActionDef {
-                name: "ship".into(),
-                dispatch: DispatchMode::Local,
-                capabilities: Vec::new(),
-            }],
-        }
-    }
 
     fn initial_on_enter_manifest(flow_id: &str) -> FlowManifest {
         FlowManifest {
@@ -1317,7 +1181,7 @@ mod tests {
         let mut first = approval_manifest_to("approval", "done");
         first.transitions[0].action = None;
         first.actions.clear();
-        register_flow_version(harness.state.clone(), "approval", Uuid::now_v7(), first).await;
+        register_flow_version(&harness.state, "approval", Uuid::now_v7(), first).await;
 
         let service = JobServiceImpl::new(harness.state.clone());
         let old_job = service
@@ -1332,7 +1196,7 @@ mod tests {
         let mut second = approval_manifest_to("approval", "rerouted");
         second.transitions[0].action = None;
         second.actions.clear();
-        register_flow_version(harness.state.clone(), "approval", Uuid::now_v7(), second).await;
+        register_flow_version(&harness.state, "approval", Uuid::now_v7(), second).await;
 
         let new_job = service
             .create_job(Request::new(CreateJobRequest {
