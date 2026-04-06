@@ -49,6 +49,8 @@ impl FlowServiceImpl {
                 | ValidationWarning::MissingState { .. }
                 | ValidationWarning::MissingAction(_)
                 | ValidationWarning::MissingGuard(_)
+                | ValidationWarning::ActionCapabilityOutsideWorld { .. }
+                | ValidationWarning::GuardUsesCapability { .. }
         )
     }
 
@@ -161,7 +163,7 @@ impl FlowService for FlowServiceImpl {
         let manifest = host
             .get_manifest()
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        Self::validate_component_imports(&actual_imports, manifest.world)?;
+        Self::validate_component_imports(&actual_imports, manifest.host_world)?;
 
         // 静态验证
         let warnings = FlowValidator::validate(&manifest);
@@ -381,7 +383,7 @@ mod tests {
     fn warning_manifest() -> FlowManifest {
         FlowManifest {
             id: "warning-demo".into(),
-            world: FlowWorld::Sandbox,
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
@@ -431,7 +433,7 @@ mod tests {
     fn invalid_reference_manifest() -> FlowManifest {
         FlowManifest {
             id: "invalid-reference".into(),
-            world: FlowWorld::Sandbox,
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
@@ -454,39 +456,6 @@ mod tests {
                 event: "approve".into(),
                 guard: Some("allow".into()),
                 action: Some("ship".into()),
-                timeout: None,
-            }],
-            initial_state: "idle".into(),
-            actions: Vec::new(),
-        }
-    }
-
-    fn mismatched_world_manifest() -> FlowManifest {
-        FlowManifest {
-            id: "mismatched-world".into(),
-            world: FlowWorld::Network,
-            states: vec![
-                StateDef {
-                    name: "idle".into(),
-                    kind: StateKind::Normal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-                StateDef {
-                    name: "done".into(),
-                    kind: StateKind::Terminal,
-                    on_enter: None,
-                    on_exit: None,
-                    subprocess: None,
-                },
-            ],
-            transitions: vec![TransitionDef {
-                from: "idle".into(),
-                to: "done".into(),
-                event: "approve".into(),
-                guard: None,
-                action: None,
                 timeout: None,
             }],
             initial_state: "idle".into(),
@@ -611,18 +580,13 @@ mod tests {
         assert!(error.message().contains("guard `allow`"));
     }
 
-    #[tokio::test]
-    async fn deploy_flow_rejects_manifest_world_mismatch() {
-        let harness = TestHarness::new("flow-world-mismatch").await;
-        let service = FlowServiceImpl::new(harness.state.clone());
+    #[test]
+    fn validate_component_imports_rejects_manifest_world_mismatch() {
+        let actual_imports = std::collections::BTreeSet::new();
 
-        let error = service
-            .deploy_flow(Request::new(DeployFlowRequest {
-                flow_id: "mismatched-world".into(),
-                wasm_bytes: wasm_for_manifest(&mismatched_world_manifest()),
-            }))
-            .await
-            .expect_err("world mismatch should fail deploy");
+        let error =
+            FlowServiceImpl::validate_component_imports(&actual_imports, FlowWorld::Network)
+                .expect_err("world mismatch should fail");
 
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
         assert!(error.message().contains("manifest world `network`"));

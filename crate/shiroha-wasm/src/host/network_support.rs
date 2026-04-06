@@ -248,8 +248,13 @@ pub(super) fn add_to_linker(
         .map_err(|e| WasmError::Instantiation(e.to_string()))?;
     inst.func_wrap(
         "send",
-        |_caller: wasmtime::StoreContextMut<'_, ComponentStoreState>,
+        |caller: wasmtime::StoreContextMut<'_, ComponentStoreState>,
          (client, request): (Option<NetworkClientConfig>, NetworkRequestOptions)| {
+            if !caller.data().allow_network {
+                return Err(wasmtime::Error::msg(
+                    "network capability is not allowed in the current invocation",
+                ));
+            }
             Ok((send(client, request),))
         },
     )

@@ -56,10 +56,12 @@ impl Guest for ApprovalFlow {
                 ActionDef {
                     name: "ship".to_string(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "allow-approve".to_string(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
             ],
         }

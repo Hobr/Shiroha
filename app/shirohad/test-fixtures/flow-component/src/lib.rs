@@ -16,7 +16,7 @@ struct FlowComponent;
 #[derive(Debug, Deserialize)]
 struct ManifestTemplate {
     id: String,
-    #[serde(default)]
+    #[serde(default, alias = "host_world")]
     world: Option<FlowWorldTemplate>,
     states: Vec<StateTemplate>,
     transitions: Vec<TransitionTemplate>,
@@ -69,6 +69,15 @@ struct TimeoutTemplate {
 struct ActionTemplate {
     name: String,
     dispatch: DispatchTemplate,
+    #[serde(default)]
+    capabilities: Vec<ActionCapabilityTemplate>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ActionCapabilityTemplate {
+    Network,
+    Storage,
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,6 +248,16 @@ impl From<ActionTemplate> for ActionDef {
         Self {
             name: value.name,
             dispatch: value.dispatch.into(),
+            capabilities: value.capabilities.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<ActionCapabilityTemplate> for ActionCapability {
+    fn from(value: ActionCapabilityTemplate) -> Self {
+        match value {
+            ActionCapabilityTemplate::Network => Self::Network,
+            ActionCapabilityTemplate::Storage => Self::Storage,
         }
     }
 }

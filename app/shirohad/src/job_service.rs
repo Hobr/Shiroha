@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use shiroha_core::error::ShirohaError;
 use shiroha_core::event::EventKind;
-use shiroha_core::flow::{DispatchMode, FlowRegistration, TimeoutDef};
+use shiroha_core::flow::{ActionCapability, DispatchMode, FlowRegistration, TimeoutDef};
 use shiroha_core::job::{ActionResult, ExecutionStatus, Job, JobState, ScheduledTimeout};
 use shiroha_proto::shiroha_api::job_service_server::JobService;
 use shiroha_proto::shiroha_api::{
@@ -406,17 +406,18 @@ impl JobServiceImpl {
         state: &str,
         payload: Option<Vec<u8>>,
     ) -> Result<ActionResult, Status> {
-        let dispatch = flow
+        let action = flow
             .manifest
             .actions
             .iter()
             .find(|candidate| candidate.name == action_name)
-            .map(|candidate| &candidate.dispatch)
             .ok_or_else(|| {
                 Status::failed_precondition(format!(
                     "action `{action_name}` not declared in manifest"
                 ))
             })?;
+        let dispatch = &action.dispatch;
+        let capabilities: &[ActionCapability] = &action.capabilities;
 
         match dispatch {
             DispatchMode::Local | DispatchMode::Remote => {
@@ -430,6 +431,7 @@ impl JobServiceImpl {
                         state: state.to_string(),
                         payload,
                     },
+                    capabilities,
                 )
                 .map_err(|e| Status::internal(e.to_string()))
             }
@@ -785,7 +787,7 @@ mod tests {
     fn approval_manifest_to(flow_id: &str, terminal_state: &str) -> FlowManifest {
         FlowManifest {
             id: flow_id.to_string(),
-            world: FlowWorld::Sandbox,
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
@@ -814,6 +816,7 @@ mod tests {
             actions: vec![ActionDef {
                 name: "ship".into(),
                 dispatch: DispatchMode::Local,
+                capabilities: Vec::new(),
             }],
         }
     }
@@ -821,7 +824,7 @@ mod tests {
     fn initial_on_enter_manifest(flow_id: &str) -> FlowManifest {
         FlowManifest {
             id: flow_id.to_string(),
-            world: FlowWorld::Sandbox,
+            host_world: FlowWorld::Sandbox,
             states: vec![StateDef {
                 name: "idle".into(),
                 kind: StateKind::Normal,
@@ -834,6 +837,7 @@ mod tests {
             actions: vec![ActionDef {
                 name: "enter".into(),
                 dispatch: DispatchMode::Local,
+                capabilities: Vec::new(),
             }],
         }
     }
@@ -841,7 +845,7 @@ mod tests {
     fn state_hooks_manifest(flow_id: &str) -> FlowManifest {
         FlowManifest {
             id: flow_id.to_string(),
-            world: FlowWorld::Sandbox,
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "idle".into(),
@@ -871,10 +875,12 @@ mod tests {
                 ActionDef {
                     name: "enter".into(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "exit".into(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
             ],
         }

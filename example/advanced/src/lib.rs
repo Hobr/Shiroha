@@ -122,6 +122,7 @@ impl Guest for AdvancedFlow {
                 ActionDef {
                     name: "normalize-request".to_string(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "collect-quotes".to_string(),
@@ -131,18 +132,22 @@ impl Guest for AdvancedFlow {
                         timeout_ms: Some(15_000),
                         min_success: Some(1),
                     }),
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "ship".to_string(),
                     dispatch: DispatchMode::Remote,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "has-minimum-payload".to_string(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
                 ActionDef {
                     name: "allow-approve".to_string(),
                     dispatch: DispatchMode::Local,
+                    capabilities: Vec::new(),
                 },
             ],
         }

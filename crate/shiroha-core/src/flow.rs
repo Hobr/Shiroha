@@ -13,7 +13,8 @@ pub struct FlowManifest {
     /// guest 自描述的 flow 标识；部署时平台侧也会额外维护自己的注册键。
     pub id: String,
     /// guest 声明所需的 capability world，部署时会与组件实际 imports 做一致性校验。
-    pub world: FlowWorld,
+    #[serde(rename = "host_world")]
+    pub host_world: FlowWorld,
     /// 完整状态集合，和 `transitions` 一起构成静态拓扑快照。
     pub states: Vec<StateDef>,
     pub transitions: Vec<TransitionDef>,
@@ -30,6 +31,18 @@ pub enum FlowWorld {
     Network,
     Storage,
     Full,
+}
+
+impl FlowWorld {
+    pub fn allows(self, capability: ActionCapability) -> bool {
+        match (self, capability) {
+            (Self::Sandbox, _) => false,
+            (Self::Network, ActionCapability::Network) => true,
+            (Self::Storage, ActionCapability::Storage) => true,
+            (Self::Full, _) => true,
+            _ => false,
+        }
+    }
 }
 
 /// 状态节点定义
@@ -103,6 +116,15 @@ pub struct TimeoutDef {
 pub struct ActionDef {
     pub name: String,
     pub dispatch: DispatchMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<ActionCapability>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionCapability {
+    Network,
+    Storage,
 }
 
 /// Action 分发模式

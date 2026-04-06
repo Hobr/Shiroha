@@ -291,7 +291,7 @@ mod tests {
     fn restart_timeout_manifest(flow_id: &str) -> FlowManifest {
         FlowManifest {
             id: flow_id.to_string(),
-            world: FlowWorld::Sandbox,
+            host_world: FlowWorld::Sandbox,
             states: vec![
                 StateDef {
                     name: "waiting".into(),

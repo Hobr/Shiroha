@@ -24,6 +24,7 @@ impl Guest for NetworkFlow {
             actions: vec![ActionDef {
                 name: "fetch".to_string(),
                 dispatch: DispatchMode::Local,
+                capabilities: vec![ActionCapability::Network],
             }],
         }
     }

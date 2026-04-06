@@ -55,6 +55,12 @@ world flow {
   record action-def {
     name: string,
     dispatch: dispatch-mode,
+    capabilities: list<action-capability>,
+  }
+
+  enum action-capability {
+    network,
+    storage,
   }
 
   variant dispatch-mode {
