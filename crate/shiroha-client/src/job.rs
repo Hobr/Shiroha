@@ -228,15 +228,30 @@ impl ControlClient {
     }
 
     pub async fn list_job_event_names(&mut self, job_id: &str) -> anyhow::Result<Vec<String>> {
-        let job = self.get_job(job_id).await?;
-        let flow = self.get_flow(&job.flow_id, None).await?;
+        let flow = self.get_bound_flow_for_job(job_id).await?;
         Ok(manifest_event_names(&flow.manifest))
     }
 
     pub async fn list_wait_states(&mut self, job_id: &str) -> anyhow::Result<Vec<String>> {
-        let job = self.get_job(job_id).await?;
-        let flow = self.get_flow(&job.flow_id, None).await?;
+        let flow = self.get_bound_flow_for_job(job_id).await?;
         Ok(manifest_state_names(&flow.manifest))
+    }
+
+    async fn get_bound_flow_for_job(
+        &mut self,
+        job_id: &str,
+    ) -> anyhow::Result<crate::flow::FlowDetails> {
+        let job = self.get_job(job_id).await?;
+        let request = bound_flow_request(&job);
+        self.get_flow(&request.flow_id, request.version.as_deref())
+            .await
+    }
+}
+
+fn bound_flow_request(job: &JobDetails) -> GetFlowRequest {
+    GetFlowRequest {
+        flow_id: job.flow_id.clone(),
+        version: Some(job.flow_version.clone()),
     }
 }
 
@@ -260,7 +275,6 @@ fn sort_job_details(jobs: &mut [JobDetails]) {
 mod tests {
     use super::*;
     use serde_json::json;
-
     #[test]
     fn force_delete_result_carries_state_information() {
         let result = ForceDeleteJobResult {
@@ -305,5 +319,20 @@ mod tests {
 
         assert_eq!(event.id, "event-1");
         assert_eq!(event.kind, json!({"type": "created"}));
+    }
+
+    #[test]
+    fn bound_flow_request_uses_job_bound_version() {
+        let request = bound_flow_request(&JobDetails {
+            job_id: "job-1".into(),
+            flow_id: "flow-a".into(),
+            state: "running".into(),
+            current_state: "draft".into(),
+            flow_version: "bound-version".into(),
+            context_bytes: None,
+        });
+
+        assert_eq!(request.flow_id, "flow-a");
+        assert_eq!(request.version.as_deref(), Some("bound-version"));
     }
 }
