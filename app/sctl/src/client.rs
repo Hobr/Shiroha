@@ -136,13 +136,9 @@ impl ShirohaClient {
         all: bool,
         json_output: bool,
     ) -> anyhow::Result<()> {
-        let flow_id = flow_id_for_job_list(flow_id, all)?;
-        let jobs = if all {
-            self.api.list_all_jobs().await?
-        } else {
-            self.api
-                .list_jobs_for_flow(flow_id.expect("validated flow id"))
-                .await?
+        let jobs = match flow_id_for_job_list(flow_id, all)? {
+            Some(flow_id) => self.api.list_jobs_for_flow(flow_id).await?,
+            None => self.api.list_all_jobs().await?,
         };
         job_presenter::render_jobs(&jobs, json_output)
     }
