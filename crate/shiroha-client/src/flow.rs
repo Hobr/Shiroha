@@ -28,6 +28,7 @@ impl From<FlowSummary> for FlowVersionSummary {
 pub struct FlowDetails {
     pub flow_id: String,
     pub version: String,
+    pub host_world: Option<String>,
     pub manifest: Value,
 }
 
@@ -35,13 +36,22 @@ impl TryFrom<GetFlowResponse> for FlowDetails {
     type Error = anyhow::Error;
 
     fn try_from(value: GetFlowResponse) -> Result<Self, Self::Error> {
+        let manifest = parse_json_value_required(&value.manifest_json, "manifest_json")
+            .context("invalid flow manifest returned by server")?;
         Ok(Self {
             flow_id: value.flow_id,
             version: value.version,
-            manifest: parse_json_value_required(&value.manifest_json, "manifest_json")
-                .context("invalid flow manifest returned by server")?,
+            host_world: manifest_host_world(&manifest),
+            manifest,
         })
     }
+}
+
+fn manifest_host_world(manifest: &Value) -> Option<String> {
+    manifest
+        .get("host_world")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,12 +166,16 @@ mod tests {
         let details = FlowDetails::try_from(GetFlowResponse {
             flow_id: "flow-a".into(),
             version: "v1".into(),
-            manifest_json: r#"{"initial_state":"idle"}"#.into(),
+            manifest_json: r#"{"host_world":"sandbox","initial_state":"idle"}"#.into(),
         })
         .expect("manifest json should parse");
 
         assert_eq!(details.flow_id, "flow-a");
         assert_eq!(details.version, "v1");
-        assert_eq!(details.manifest, json!({"initial_state": "idle"}));
+        assert_eq!(details.host_world.as_deref(), Some("sandbox"));
+        assert_eq!(
+            details.manifest,
+            json!({"host_world": "sandbox", "initial_state": "idle"})
+        );
     }
 }

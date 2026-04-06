@@ -15,7 +15,7 @@ impl Guest for StorageFlow {
             states: vec![StateDef {
                 name: "idle".to_string(),
                 kind: StateKind::Normal,
-                on_enter: None,
+                on_enter: Some("store".to_string()),
                 on_exit: None,
                 subprocess: None,
             }],

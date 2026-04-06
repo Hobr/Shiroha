@@ -16,6 +16,7 @@ pub(crate) fn render_deploy_result(
         return print_json_value(&json!({
             "flow_id": flow_id,
             "version": version,
+            "host_world": flow.and_then(|flow| flow.host_world.clone()),
             "manifest": flow.map(|flow| flow.manifest.clone()),
             "warnings": warnings,
         }));
@@ -26,7 +27,8 @@ pub(crate) fn render_deploy_result(
         && let Some(summary) = manifest_summary(&flow.manifest)
     {
         println!(
-            "initial_state={} states={} transitions={} actions={}",
+            "host_world={} initial_state={} states={} transitions={} actions={}",
+            flow.host_world.as_deref().unwrap_or("<unknown>"),
             summary.initial_state,
             summary.state_count,
             summary.transition_count,
@@ -78,6 +80,7 @@ pub(crate) fn render_flow_details(
         return print_json_value(&json!({
             "flow_id": flow.flow_id,
             "version": flow.version,
+            "host_world": flow.host_world.clone(),
             "manifest": flow.manifest.clone(),
         }));
     }
@@ -89,6 +92,10 @@ pub(crate) fn render_flow_details(
 
     println!("flow_id:  {}", flow.flow_id);
     println!("version:  {}", flow.version);
+    println!(
+        "host_world: {}",
+        flow.host_world.as_deref().unwrap_or("<unknown>")
+    );
     println!("manifest:");
     print_json_block(&flow.manifest, true);
     Ok(())
@@ -224,6 +231,10 @@ fn print_flow_summary(flow: &FlowDetails) {
 
     println!("flow_id:       {}", flow.flow_id);
     println!("version:       {}", flow.version);
+    println!(
+        "host_world:    {}",
+        flow.host_world.as_deref().unwrap_or("<unknown>")
+    );
     println!("initial_state: {}", summary.initial_state);
     println!("states:        {}", summary.states.len());
     println!("transitions:   {}", summary.transitions.len());

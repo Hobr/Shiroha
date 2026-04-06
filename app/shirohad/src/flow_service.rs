@@ -149,9 +149,10 @@ impl FlowService for FlowServiceImpl {
         let wasm_module = Arc::new(WasmModule::new(component, &wasm_bytes));
 
         // 从 WASM 提取 manifest
-        let mut host = shiroha_wasm::host::WasmHost::new(
+        let mut host = shiroha_wasm::host::WasmHost::new_with_capability_store(
             self.state.wasm_runtime.engine(),
             wasm_module.component(),
+            self.state.storage.clone(),
         )
         .map_err(|e| Status::internal(e.to_string()))?;
         host.validate_required_exports()
