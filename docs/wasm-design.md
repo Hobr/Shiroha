@@ -83,12 +83,12 @@ WASM 模块导出以下执行接口供框架调用：
 
 当前实现仅支持 component model 路线：
 
-- 不需要额外能力的 guest 实现 `crate/shiroha-wasm/wit/flow.wit` 中定义的 `world flow`
-- 需要 HTTP 的 guest 实现 `crate/shiroha-wasm/wit/network-flow.wit` 中定义的 `world network-flow`
-- 需要 KV 存储的 guest 实现 `crate/shiroha-wasm/wit/storage-flow.wit` 中定义的 `world storage-flow`
-- 同时需要 HTTP + KV 存储的 guest 实现 `crate/shiroha-wasm/wit/full-flow.wit` 中定义的 `world full-flow`
-- HTTP capability 类型定义位于 `crate/shiroha-wasm/wit/net.wit`
-- KV capability 类型定义位于 `crate/shiroha-wasm/wit/store.wit`
+- 不需要额外能力的 guest 实现 `crate/shiroha-wit/wit/flow.wit` 中定义的 `world flow`
+- 需要 HTTP 的 guest 实现 `crate/shiroha-wit/wit/network-flow.wit` 中定义的 `world network-flow`
+- 需要 KV 存储的 guest 实现 `crate/shiroha-wit/wit/storage-flow.wit` 中定义的 `world storage-flow`
+- 同时需要 HTTP + KV 存储的 guest 实现 `crate/shiroha-wit/wit/full-flow.wit` 中定义的 `world full-flow`
+- HTTP capability 类型定义位于 `crate/shiroha-wit/wit/net.wit`
+- KV capability 类型定义位于 `crate/shiroha-wit/wit/store.wit`
 - host 使用 `wasmtime::component` typed exports 调用 `get-manifest` / `invoke-action` / `invoke-guard` / `aggregate`
 - component 实例化时接入 `wasmtime_wasi::p2`，因此 guest 应编译为 `wasm32-wasip2`
 - 上传的二进制必须是合法 component；core module 已不再接受

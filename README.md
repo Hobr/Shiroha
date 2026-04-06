@@ -195,6 +195,7 @@ export!(MyFlow);
 ```
 
 也就是说，guest crate 不再需要自己直接声明 `wit-bindgen` 依赖。
+canonical WIT 定义现在位于 `crate/shiroha-wit/wit/*`，`shiroha-sdk` 和宿主侧测试都从这里共享。
 
 ## 开发说明
 

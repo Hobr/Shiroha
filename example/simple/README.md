@@ -2,7 +2,7 @@
 
 一个最小的 Shiroha Flow component 示例，目标平台是 `wasm32-wasip2`。
 
-它实现了仓库里的 [flow.wit](/mnt/data/Project/Shiroha/crate/shiroha-wasm/wit/flow.wit)：
+它实现了仓库里的 [flow.wit](/mnt/data/Project/Shiroha/crate/shiroha-wit/wit/flow.wit)：
 
 - `get-manifest`
 - `invoke-action`

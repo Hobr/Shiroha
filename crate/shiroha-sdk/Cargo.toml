@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+include = ["AGENTS.md", "Cargo.toml", "build.rs", "src/**", "tests/**"]
 
 [dependencies]
 wit-bindgen = "0.51"
+
+[build-dependencies]
+shiroha-wit = { workspace = true }

@@ -310,26 +310,25 @@ pub(crate) fn example_wasm(manifest_path: &str, package_name: &str) -> Vec<u8> {
         bytes.extend(fs::read(&manifest_path).expect("read example manifest"));
         bytes.extend(fs::read(example_dir.join("src/lib.rs")).expect("read example source"));
         bytes.extend(
-            fs::read(workspace_root.join("crate/shiroha-wasm/wit/flow.wit"))
-                .expect("read flow wit"),
+            fs::read(workspace_root.join("crate/shiroha-wit/wit/flow.wit")).expect("read flow wit"),
         );
         bytes.extend(
-            fs::read(workspace_root.join("crate/shiroha-wasm/wit/net.wit")).expect("read net wit"),
+            fs::read(workspace_root.join("crate/shiroha-wit/wit/net.wit")).expect("read net wit"),
         );
         bytes.extend(
-            fs::read(workspace_root.join("crate/shiroha-wasm/wit/store.wit"))
+            fs::read(workspace_root.join("crate/shiroha-wit/wit/store.wit"))
                 .expect("read store wit"),
         );
         bytes.extend(
-            fs::read(workspace_root.join("crate/shiroha-wasm/wit/network-flow.wit"))
+            fs::read(workspace_root.join("crate/shiroha-wit/wit/network-flow.wit"))
                 .expect("read network-flow wit"),
         );
         bytes.extend(
-            fs::read(workspace_root.join("crate/shiroha-wasm/wit/storage-flow.wit"))
+            fs::read(workspace_root.join("crate/shiroha-wit/wit/storage-flow.wit"))
                 .expect("read storage-flow wit"),
         );
         bytes.extend(
-            fs::read(workspace_root.join("crate/shiroha-wasm/wit/full-flow.wit"))
+            fs::read(workspace_root.join("crate/shiroha-wit/wit/full-flow.wit"))
                 .expect("read full-flow wit"),
         );
         compute_hash(&bytes)

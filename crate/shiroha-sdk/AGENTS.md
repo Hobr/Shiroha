@@ -19,7 +19,7 @@ Rust guest component 开发 SDK。为 Flow / Network Flow / Storage Flow / Full 
 ### Working In This Directory
 
 - 这是 guest-facing API，优先关注“接入成本”和“升级兼容性”
-- 宏展开后的 WIT 内容必须和 `crate/shiroha-wasm/wit/` 保持同步
+- 宏展开使用的 canonical WIT 定义位于 `crate/shiroha-wit/wit/`
 - 这里的 helper 宏应尽量只依赖 guest 作用域里已经生成的类型名，避免引入额外样板
 - 如果新增 capability world，优先先补 SDK 生成宏，再补 examples
 

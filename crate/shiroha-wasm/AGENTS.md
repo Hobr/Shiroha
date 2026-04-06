@@ -17,18 +17,18 @@
 | `src/host/network_support.rs` | reqwest 驱动的 `net` host import，实现 HTTP client 配置与请求执行 |
 | `src/host/storage_support.rs` | `store` host import，实现命名空间 KV 读写；`shirohad` 路径下注入真实存储后端 |
 | `src/error.rs` | `WasmError` 错误类型 + 到 `ShirohaError` 的转换 |
-| `wit/flow.wit` | 基础 `world flow`，只导出 Flow manifest / action / guard / aggregate |
-| `wit/net.wit` | 独立的 HTTP capability interface，定义 client/request/response/TLS/proxy 结构 |
-| `wit/network-flow.wit` | `world network-flow`：`include flow` + `import net`，用于需要 HTTP 的 guest |
-| `wit/store.wit` | 独立的 KV capability interface，定义 get/put/delete/list-keys |
-| `wit/storage-flow.wit` | `world storage-flow`：`include flow` + `import store` |
-| `wit/full-flow.wit` | `world full-flow`：`include flow` + `import net` + `import store` |
+| `../shiroha-wit/wit/flow.wit` | 基础 `world flow`，只导出 Flow manifest / action / guard / aggregate |
+| `../shiroha-wit/wit/net.wit` | 独立的 HTTP capability interface，定义 client/request/response/TLS/proxy 结构 |
+| `../shiroha-wit/wit/network-flow.wit` | `world network-flow`：`include flow` + `import net`，用于需要 HTTP 的 guest |
+| `../shiroha-wit/wit/store.wit` | 独立的 KV capability interface，定义 get/put/delete/list-keys |
+| `../shiroha-wit/wit/storage-flow.wit` | `world storage-flow`：`include flow` + `import store` |
+| `../shiroha-wit/wit/full-flow.wit` | `world full-flow`：`include flow` + `import net` + `import store` |
 
 ## For AI Agents
 
 ### Working In This Directory
 
-- component guest 默认实现 `wit/flow.wit` 的 `world flow`；需要额外能力时选择 `network-flow` / `storage-flow` / `full-flow`
+- component guest 默认实现 `crate/shiroha-wit/wit/flow.wit` 的 `world flow`；需要额外能力时选择 `network-flow` / `storage-flow` / `full-flow`
 - `net.wit` 和 `store.wit` 都是独立 capability，新增字段或类型时要同时考虑 host 映射和 guest 侧 `wit-bindgen` 可用性
 - 当前已经拆出 `world flow` / `network-flow` / `storage-flow` / `full-flow`；但文档里提到的更细粒度权限体系仍未落地
 - `WasmModule::compute_hash` 当前使用简易哈希（长度+首尾字节），生产应替换为 SHA-256

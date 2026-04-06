@@ -7,7 +7,7 @@
 - 子流程：
   [child/src/lib.rs](/mnt/data/Project/Shiroha/example/sub/child/src/lib.rs)
 
-两者都实现了 [flow.wit](/mnt/data/Project/Shiroha/crate/shiroha-wasm/wit/flow.wit)，目标平台都是 `wasm32-wasip2`。
+两者都实现了 [flow.wit](/mnt/data/Project/Shiroha/crate/shiroha-wit/wit/flow.wit)，目标平台都是 `wasm32-wasip2`。
 
 ## 设计关系
 

@@ -33,12 +33,14 @@ fn tracked_input_paths(root: &Path, fixture_path: &str) -> Vec<PathBuf> {
         root.join("src/lib.rs"),
         root.join(fixture_path).join("Cargo.toml"),
         root.join(fixture_path).join("src/lib.rs"),
+        root.join("../shiroha-wit/Cargo.toml"),
+        root.join("../shiroha-wit/src/lib.rs"),
     ];
 
     paths.extend(
         CANONICAL_WIT_FILES
             .iter()
-            .map(|file| root.join("../shiroha-wasm/wit").join(file)),
+            .map(|file| root.join("../shiroha-wit/wit").join(file)),
     );
     paths
 }
@@ -105,7 +107,7 @@ fn stage_workspace(root: &Path, fixture_path: &str) {
     );
     write_file(
         &root.join("build.rs"),
-        "fn main() {\n    println!(\"cargo:rerun-if-changed=../shiroha-wasm/wit/flow.wit\");\n}\n",
+        "fn main() {\n    let _ = shiroha_wit::wit_dir();\n}\n",
     );
     write_file(&root.join("src/lib.rs"), "pub fn placeholder() {}\n");
     write_file(
@@ -116,23 +118,85 @@ fn stage_workspace(root: &Path, fixture_path: &str) {
         &root.join(fixture_path).join("src/lib.rs"),
         "pub fn fixture_placeholder() {}\n",
     );
+    write_file(
+        &root.join("../shiroha-wit/Cargo.toml"),
+        "[package]\nname = \"shiroha-wit\"\nversion = \"0.1.0\"\n",
+    );
+    write_file(
+        &root.join("../shiroha-wit/src/lib.rs"),
+        "pub fn wit_dir() -> &'static str { \"wit\" }\n",
+    );
 
     for file in CANONICAL_WIT_FILES {
         write_file(
-            &root.join("../shiroha-wasm/wit").join(file),
+            &root.join("../shiroha-wit/wit").join(file),
             &format!("package shiroha:flow@0.1.0;\n// {file}\n"),
         );
     }
 }
 
 #[test]
-fn sdk_build_script_uses_canonical_wit_directory() {
+fn cargo_package_includes_shiroha_wit_sources() {
+    static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    let _guard = BUILD_LOCK
+        .get_or_init(|| StdMutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new("cargo")
+        .arg("package")
+        .arg("-p")
+        .arg("shiroha-wit")
+        .arg("--allow-dirty")
+        .arg("--list")
+        .current_dir(root.join("../.."))
+        .output()
+        .expect("run cargo package --list");
+
+    assert!(
+        output.status.success(),
+        "cargo package --list failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let listed = String::from_utf8(output.stdout).expect("package list should be utf-8");
+    for file in CANONICAL_WIT_FILES {
+        assert!(
+            listed.contains(&format!("wit/{file}")),
+            "cargo package output should include shiroha-wit wit/{file}, got:\n{listed}"
+        );
+    }
+}
+
+#[test]
+fn sdk_no_longer_vendors_wit_files() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let wit_dir = root.join("wit");
+    let vendored_files = if wit_dir.exists() {
+        fs::read_dir(&wit_dir)
+            .expect("read shiroha-sdk wit dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_file())
+            .count()
+    } else {
+        0
+    };
+
+    assert!(
+        vendored_files == 0,
+        "shiroha-sdk should consume shared WIT instead of vendoring its own copy"
+    );
+}
+
+#[test]
+fn sdk_build_script_uses_shiroha_wit_dependency() {
     let source = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("build.rs"))
         .expect("read sdk build script");
 
     assert!(
-        source.contains("../shiroha-wasm/wit"),
-        "sdk build script should reference the canonical wit directory"
+        source.contains("shiroha_wit::wit_dir"),
+        "sdk build script should resolve WIT through the shiroha-wit build dependency"
     );
 }
 
@@ -156,7 +220,7 @@ fn build_key_changes_when_sdk_manifest_changes() {
 }
 
 #[test]
-fn build_key_changes_when_canonical_wit_changes() {
+fn build_key_changes_when_shiroha_wit_changes() {
     let temp_root = std::env::temp_dir()
         .join("shiroha-sdk-build-key-tests")
         .join("wit-change")
@@ -166,14 +230,36 @@ fn build_key_changes_when_canonical_wit_changes() {
 
     let before = build_key(&temp_root, fixture_path);
     write_file(
-        &temp_root.join("../shiroha-wasm/wit/flow.wit"),
-        "package shiroha:flow@0.1.0;\n// flow changed\n",
+        &temp_root.join("../shiroha-wit/wit/flow.wit"),
+        "package shiroha:flow@0.1.0;\n// shiroha-wit flow changed\n",
     );
     let after = build_key(&temp_root, fixture_path);
 
     assert_ne!(
         before, after,
-        "build key should include canonical wit files"
+        "build key should include shared shiroha-wit files"
+    );
+}
+
+#[test]
+fn build_key_changes_when_shiroha_wit_manifest_changes() {
+    let temp_root = std::env::temp_dir()
+        .join("shiroha-sdk-build-key-tests")
+        .join("shiroha-wit-manifest-change")
+        .join("shiroha-sdk");
+    let fixture_path = "test-fixtures/sdk-smoke";
+    stage_workspace(&temp_root, fixture_path);
+
+    let before = build_key(&temp_root, fixture_path);
+    write_file(
+        &temp_root.join("../shiroha-wit/Cargo.toml"),
+        "[package]\nname = \"shiroha-wit\"\nversion = \"0.2.0\"\n",
+    );
+    let after = build_key(&temp_root, fixture_path);
+
+    assert_ne!(
+        before, after,
+        "build key should include shiroha-wit Cargo.toml"
     );
 }
 
