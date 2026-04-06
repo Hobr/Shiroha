@@ -48,7 +48,7 @@
 - `pause(job_id)`：暂停 Job，外部事件和定时器事件入队但不推进状态机
 - `resume(job_id)`：恢复 Job，按序处理暂存的事件
 - `cancel(job_id)`：取消 Job，并清理该 Job 相关的本地定时器
-- Job 级别可配置 `max_lifetime`，超时后由 Controller 自动取消
+- Job 级别可配置 `max_lifetime`，按绝对 wall-clock deadline 计时；即使执行 `pause(job_id)` 也不会冻结该计时，超时后仍由 Controller 自动取消
 
 ### Job 并发控制
 
