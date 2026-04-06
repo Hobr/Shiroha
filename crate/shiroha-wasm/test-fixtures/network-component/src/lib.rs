@@ -1,4 +1,5 @@
 shiroha_sdk::generate_network_flow!();
+use shiroha_sdk::prelude::*;
 
 use crate::shiroha::flow::net;
 
@@ -6,32 +7,19 @@ struct NetworkFlow;
 
 impl Guest for NetworkFlow {
     fn get_manifest() -> FlowManifest {
-        FlowManifest {
-            id: "network-fixture".to_string(),
-            host_world: FlowWorld::Network,
-            states: vec![StateDef {
-                name: "idle".to_string(),
-                kind: StateKind::Normal,
-                on_enter: None,
-                on_exit: None,
-                subprocess: None,
-            }],
+        flow_manifest! {
+            id: "network-fixture",
+            world: Network,
+            states: vec![flow_state!("idle", Normal)],
             transitions: vec![],
-            initial_state: "idle".to_string(),
-            actions: vec![ActionDef {
-                name: "fetch".to_string(),
-                dispatch: DispatchMode::Local,
-                capabilities: vec![ActionCapability::Network],
-            }],
+            initial_state: "idle",
+            actions: vec![local_action!("fetch", caps: [Network])],
         }
     }
 
     fn invoke_action(name: String, _ctx: ActionContext) -> ActionResult {
         if name != "fetch" {
-            return ActionResult {
-                status: ExecutionStatus::Failed,
-                output: Some(format!("unexpected action: {name}").into_bytes()),
-            };
+            return action_fail!(Some(format!("unexpected action: {name}").into_bytes()));
         }
 
         let client = net::ClientConfig {
@@ -81,22 +69,16 @@ impl Guest for NetworkFlow {
         let response = net::send(Some(&client), &request);
 
         match response {
-            Ok(response) => ActionResult {
-                status: ExecutionStatus::Success,
-                output: Some(
-                    format!(
-                        "status={} version={:?} body={}",
-                        response.status,
-                        response.version,
-                        String::from_utf8_lossy(&response.body)
-                    )
-                    .into_bytes(),
-                ),
-            },
-            Err(error) => ActionResult {
-                status: ExecutionStatus::Failed,
-                output: Some(format!("network error: {}", error.message).into_bytes()),
-            },
+            Ok(response) => action_ok!(Some(
+                format!(
+                    "status={} version={:?} body={}",
+                    response.status,
+                    response.version,
+                    String::from_utf8_lossy(&response.body)
+                )
+                .into_bytes(),
+            )),
+            Err(error) => action_fail!(Some(format!("network error: {}", error.message).into_bytes())),
         }
     }
 
@@ -105,10 +87,7 @@ impl Guest for NetworkFlow {
     }
 
     fn aggregate(_name: String, _results: Vec<NodeResult>) -> AggregateDecision {
-        AggregateDecision {
-            event: "noop".to_string(),
-            context_patch: None,
-        }
+        aggregate_event!("noop".to_string(), None)
     }
 }
 
