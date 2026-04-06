@@ -244,7 +244,7 @@ pub(super) fn add_to_linker(
     linker: &mut wasmtime::component::Linker<ComponentStoreState>,
 ) -> Result<(), WasmError> {
     let mut inst = linker
-        .instance("shiroha:flow/net@0.1.0")
+        .instance("shiroha:flow/net@0.1.1")
         .map_err(|e| WasmError::Instantiation(e.to_string()))?;
     inst.func_wrap(
         "send",
