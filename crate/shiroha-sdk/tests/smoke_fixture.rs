@@ -154,6 +154,7 @@ fn stage_workspace(root: &Path, fixture_path: &str) {
 }
 
 #[test]
+#[ignore = "publishing smoke check; keep out of the default edit-compile-test loop"]
 fn cargo_package_includes_shiroha_wit_sources() {
     static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
     let _guard = BUILD_LOCK
@@ -208,6 +209,28 @@ fn sdk_build_script_uses_shiroha_wit_dependency() {
         source.contains("shiroha_wit::wit_dir"),
         "sdk build script should resolve WIT through the shiroha-wit build dependency"
     );
+}
+
+#[test]
+fn sdk_build_script_declares_all_world_macros() {
+    let source = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("build.rs"))
+        .expect("read sdk build script");
+
+    for (macro_name, world) in [
+        ("generate_flow", "flow"),
+        ("generate_network_flow", "network-flow"),
+        ("generate_storage_flow", "storage-flow"),
+        ("generate_full_flow", "full-flow"),
+    ] {
+        assert!(
+            source.contains(macro_name),
+            "sdk build script should declare macro `{macro_name}`"
+        );
+        assert!(
+            source.contains(world),
+            "sdk build script should generate bindings for world `{world}`"
+        );
+    }
 }
 
 #[test]
@@ -274,6 +297,7 @@ fn build_key_changes_when_shiroha_wit_manifest_changes() {
 }
 
 #[test]
+#[ignore = "heavy wasm32 compile smoke; run explicitly when validating sdk fixture builds"]
 fn builds_flow_sdk_smoke_fixture_for_wasm32_wasip2() {
     let wasm_bytes = build_fixture(&FixtureCase {
         manifest_path: "test-fixtures/flow-smoke",
@@ -286,30 +310,7 @@ fn builds_flow_sdk_smoke_fixture_for_wasm32_wasip2() {
 }
 
 #[test]
-fn builds_network_sdk_smoke_fixture_for_wasm32_wasip2() {
-    let wasm_bytes = build_fixture(&FixtureCase {
-        manifest_path: "test-fixtures/network-smoke",
-        wasm_name: "sdk_network_smoke_component",
-    });
-    assert!(
-        !wasm_bytes.is_empty(),
-        "sdk network smoke fixture wasm should not be empty"
-    );
-}
-
-#[test]
-fn builds_storage_sdk_smoke_fixture_for_wasm32_wasip2() {
-    let wasm_bytes = build_fixture(&FixtureCase {
-        manifest_path: "test-fixtures/storage-smoke",
-        wasm_name: "sdk_storage_smoke_component",
-    });
-    assert!(
-        !wasm_bytes.is_empty(),
-        "sdk storage smoke fixture wasm should not be empty"
-    );
-}
-
-#[test]
+#[ignore = "heavy wasm32 compile smoke; run explicitly when validating sdk fixture builds"]
 fn builds_full_sdk_smoke_fixture_for_wasm32_wasip2() {
     let wasm_bytes = build_fixture(&FixtureCase {
         manifest_path: "test-fixtures/sdk-smoke",

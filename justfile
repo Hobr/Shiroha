@@ -57,8 +57,7 @@ fmt:
     pre-commit run --all-files
 
 test:
-    cargo test --workspace
-    cargo test -p sctl --test cli_roundtrip -- --ignored
+    cargo nextest run --all-features --run-ignored all
 
 doc:
     cargo doc --open --workspace
