@@ -71,7 +71,7 @@ config = "0.15"
 # 错误处理
 thiserror = "2.0"
 anyhow = "1.0"
-sha2 = "0.10"
+sha2 = "0.11"
 
 # 信息
 shadow-rs = { version = "1.7", features = ["cargo_metadata"] }
