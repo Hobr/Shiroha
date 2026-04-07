@@ -2,19 +2,24 @@
 
 ## 节点管理
 
-- **注册/发现**：Node 启动时向 Controller 注册，上报能力标签
-- **心跳**：Node 定期上报健康状态和负载信息
-- **健康检查**：Controller 检测 Node 存活，超时标记为不可用
-- **优雅停机**：Node 下线前通知 Controller，drain 当前任务
+以下内容仍属于分布式阶段目标：
+
+- Node 注册 / 发现
+- 心跳与健康检查
+- 优雅停机 / drain
 
 ## 观测性
 
-统一到 tracing + OpenTelemetry 栈：
+当前 Phase 1 已实现：
 
-- **结构化日志**：tracing crate（兼容 log facade）
-- **分布式追踪**：trace-id 贯穿 Controller → Node → WASM 执行
-- **Metrics**：Prometheus / OpenTelemetry 导出
-- **事件系统**：状态转移、任务完成、节点上下线等关键事件
+- `tracing` 日志接入
+- Job 生命周期、状态转移和 action 完成事件
+
+以下仍属于后续阶段目标：
+
+- OpenTelemetry / Prometheus 指标
+- 分布式追踪
+- 节点上下线事件
 
 ## 拓扑模式
 

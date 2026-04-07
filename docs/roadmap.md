@@ -39,9 +39,8 @@
 
 当前与 Phase 1 目标相比仍有这些已知缺口：
 
-- 多条 `(from, event)` 候选转移时，运行时会先按声明顺序选第一条，再评估它的 guard；尚未实现“在候选边之间根据 guard 选择可行转移”的完整分支语义
 - `remote` dispatch 在 standalone 中仍只是 manifest 语义标签，实际复用与 `local` 相同的同进程 WASM 调用路径，没有独立的 Controller/Node 执行边界
-- `fan-out` manifest / guest ABI / aggregate host 调用已具备形状，但 flow 仍可在 deploy 阶段通过，实际执行到 `fan-out` action 时会返回 `unimplemented`
+- `fan-out` manifest / guest ABI / aggregate host 调用已具备形状，但 Phase 1 运行时仍未实现；当前 deploy 会直接拒绝 `fan-out` action
 - tracing 已接入，但当前默认仍是 `tracing_subscriber::fmt()` 的文本输出；若以独立的结构化日志管道为验收标准，则此项仍属部分实现
 
 更细的收敛项见 [Phase 1 审计清单](phase1-audit-checklist.md)。
