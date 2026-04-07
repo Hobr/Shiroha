@@ -12,9 +12,9 @@
 - [x] 修正 `create_job` 的初始 `on-enter` 语义：不要在 Job 已创建后再返回 `aborted` 且不返回 `job_id`
 - [x] 修正 `trigger_event` / 转移后 action 失败的 RPC 语义：不要在状态转移已提交后仍对调用方表现为原子失败
 - [ ] 明确 timeout 的绑定语义；当前 runtime 只会注入 `timeout_event` 再走普通事件匹配，不会把 timeout 绑定回声明它的那条 transition
-- [ ] 补齐 manifest 基础合法性校验：当前不会拒绝重复 state/action 名称、空字符串标识、`timeout.duration_ms = 0`、`FanOutStrategy::Count(0)`、空 `aggregator` / `timeout_event` 等明显无效配置
-- [ ] 为 timeout 配置增加静态约束，确保 `timeout_event` 在同一源状态上匹配到唯一且明确的转移
-- [ ] 为当前 Phase 1 不支持的 shape 增加 deploy 期前置拒绝策略，例如 `fan-out` action、`fork` / `join`、未落地的 `subprocess` 运行时语义
+- [x] 补齐 manifest 基础合法性校验：当前不会拒绝重复 state/action 名称、空字符串标识、`timeout.duration_ms = 0`、`FanOutStrategy::Count(0)`、空 `aggregator` / `timeout_event` 等明显无效配置
+- [x] 为 timeout 配置增加静态约束，确保 `timeout_event` 在同一源状态上匹配到唯一且明确的转移
+- [x] 为当前 Phase 1 不支持的 shape 增加 deploy 期前置拒绝策略，例如 `fan-out` action、`fork` / `join`、未落地的 `subprocess` 运行时语义
 - [x] 修正 latest Flow alias 语义；当前 `save_flow` 在 `MemoryStorage` 和 `RedbStorage` 中都是“最后一次写入覆盖”，并不保证 `get_flow` / `list_flows` 返回版本号最大的注册版本
 - [x] 统一“latest Flow”在查询与执行路径中的来源；当前 `GetFlow` / `ListFlows` 读 storage latest alias，而 `CreateJob` 读内存 `flow_registry.latest_registration()`
 - [x] 统一 `GetJobEvents` 的服务端排序契约，并在过滤/`limit`/cursor 之前先按稳定顺序排序
@@ -77,8 +77,8 @@
 - [x] 增加“同一 `(from, event)` 下多候选转移按 guard 选边”的失败用例
 - [x] 增加“初始 `on-enter` 失败时 create-job 的可见语义”测试
 - [x] 增加“转移已提交但 action 失败时 trigger-event 的可见语义”测试
-- [ ] 增加“`fan-out` flow 在 deploy 期被拒绝或被明确标记 unsupported”测试
-- [ ] 增加“`kind = subprocess` 但缺少 subprocess 配置”的 deploy 校验测试
+- [x] 增加“`fan-out` flow 在 deploy 期被拒绝或被明确标记 unsupported”测试
+- [x] 增加“`kind = subprocess` 但缺少 subprocess 配置”的 deploy 校验测试
 - [x] 增加“旧版本后写入时 latest alias 不能回退”的存储测试
 - [x] 增加“同毫秒多事件时 `GetJobEvents.since_id` 仍稳定”的查询测试
 - [ ] 增加“`GetJobEvents.limit` 与后端无关”的测试
