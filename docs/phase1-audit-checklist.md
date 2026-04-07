@@ -45,7 +45,7 @@
 - [ ] 收紧 `docs/operations.md` 中 Node 注册、发现、健康检查、优雅停机、OpenTelemetry 指标/追踪的现状表述
 - [ ] 修正文档里对定时器实现的性能/结构暗示；当前实现是一计时器一 `tokio::sleep` 任务，不是 hierarchical timer wheel
 - [ ] 明确 action `output` 当前会被 runtime 丢弃，不会持久化，也不会反馈给后续流程
-- [ ] 明确 `CreateJobRequest.context` 当前更像持久化元数据，而不是 guest 可读的正式运行时上下文
+- [x] 明确 `CreateJobRequest.context` 当前更像持久化元数据，而不是 guest 可读的正式运行时上下文
 - [ ] 明确 Flow 删除后 `wasm_modules` 与 `module_cache` 当前没有引用计数/共享生命周期策略
 - [ ] 统一示例中的平台 `flow_id` 与 guest `manifest.id` 叙事；当前部分 example 在测试里被部署到不同外部 flow_id，会强化身份漂移的默认印象
 
@@ -56,17 +56,17 @@
 - [ ] 真正实现 `fork` / `join` 的运行时语义
 - [ ] 真正实现 `subprocess` 的父子 Job 编排、回注和关联管理
 - [ ] 如需保留 `force_delete_job` / `force_delete_flow`，下沉为服务端原子/半原子操作，而不是继续由客户端顺序拼装
-- [ ] 如需保留 `job ls --all`，增加服务端 `ListJobsAll` 能力，而不是继续通过 flow 清单拼接
+- [x] 如需保留 `job ls --all`，增加服务端 `ListJobsAll` 能力，而不是继续通过 flow 清单拼接
 - [ ] 明确 `save_job_with_event` 的跨后端原子性契约；当前只有覆写该方法的后端才真正单事务提交
 - [ ] 为内存中的 `flow_registry.versioned_*` / `module_cache` 建立 retention / GC 策略
 - [ ] 为 `wasm_modules` 建立引用计数或共享生命周期策略，避免孤儿字节长期堆积
 - [ ] 如果继续开放 `fanout_action!` / `remote_action!`，给它们明确的 stable/experimental 分层
 - [ ] 收紧 `shiroha-sdk` 宏对非法 manifest shape 的放行；当前 `flow_state!(..., Subprocess)` 可在缺少 `subprocess` 配置时照样生成 manifest
 - [ ] 清理 `shiroha-sdk` build script 的 staged WIT 目录；当前只会复制现有文件，不会删除已移除/重命名的旧文件
-- [ ] 修正测试夹具缓存键；当前 `wasm_for_manifest()` 只按 manifest JSON 缓存，`example_wasm()` 也不会跟踪 `shiroha-sdk` 代码变化
+- [x] 修正测试夹具缓存键；当前 `wasm_for_manifest()` 只按 manifest JSON 缓存，`example_wasm()` 也不会跟踪 `shiroha-sdk` 代码变化
 - [ ] 强化 fixture/example 缓存哈希；当前 `compute_hash()` 只取长度、前 16 字节和后 16 字节，理论上会发生碰撞并复用错误产物
 - [ ] 如果要把 `action output` 变成正式能力，设计并实现其持久化/传递语义
-- [ ] 如果要把 `CreateJobRequest.context` 变成正式能力，设计并实现其进入 guest 的 ABI 和读取方式
+- [x] 如果要把 `CreateJobRequest.context` 变成正式能力，设计并实现其进入 guest 的 ABI 和读取方式
 - [ ] 如果要保留 network capability 的安全承诺，实现真正的 allowlist / policy 层
 - [ ] 如果要把 storage capability 作为安全边界，实现 flow/job 级 namespace 隔离
 - [ ] 如果要把事件溯源作为完整审计系统，补齐 actor/source/payload ref/guard reject/triggered-event 等事件模型
