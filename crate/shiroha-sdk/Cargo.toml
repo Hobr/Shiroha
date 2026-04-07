@@ -9,7 +9,7 @@ repository.workspace = true
 include = ["AGENTS.md", "Cargo.toml", "build.rs", "src/**", "tests/**"]
 
 [dependencies]
-wit-bindgen = "0.51"
+wit-bindgen = "0.55"
 
 [build-dependencies]
 shiroha-wit = { workspace = true }
