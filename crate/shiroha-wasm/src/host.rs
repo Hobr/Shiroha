@@ -36,6 +36,7 @@ pub struct ActionContext {
     #[component(name = "job-id")]
     pub job_id: String,
     pub state: String,
+    pub context: Option<Vec<u8>>,
     pub payload: Option<Vec<u8>>,
 }
 
@@ -50,6 +51,7 @@ pub struct GuardContext {
     #[component(name = "to-state")]
     pub to_state: String,
     pub event: String,
+    pub context: Option<Vec<u8>>,
     pub payload: Option<Vec<u8>>,
 }
 
@@ -781,6 +783,7 @@ mod tests {
                 ActionContext {
                     job_id: "job-1".into(),
                     state: "idle".into(),
+                    context: None,
                     payload: None,
                 },
                 &[ActionCapability::Network],
@@ -797,6 +800,7 @@ mod tests {
                 ActionContext {
                     job_id: "job-1".into(),
                     state: "idle".into(),
+                    context: None,
                     payload: None,
                 },
                 &[],
@@ -824,6 +828,7 @@ mod tests {
                 ActionContext {
                     job_id: "job-1".into(),
                     state: "idle".into(),
+                    context: None,
                     payload: None,
                 },
                 &[ActionCapability::Storage],
@@ -843,6 +848,7 @@ mod tests {
                 ActionContext {
                     job_id: "job-1".into(),
                     state: "idle".into(),
+                    context: None,
                     payload: None,
                 },
                 &[],

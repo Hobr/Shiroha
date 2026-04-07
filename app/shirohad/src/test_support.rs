@@ -178,8 +178,12 @@ impl Drop for LiveGrpcServer {
 
 pub(crate) fn wasm_for_manifest(manifest: &FlowManifest) -> Vec<u8> {
     let manifest_json = serde_json::to_string(manifest).expect("serialize manifest");
-    // 生成结果按 manifest 内容缓存，避免每个测试都重新编译同一个 component fixture。
-    let build_key = compute_hash(manifest_json.as_bytes());
+    // 生成结果按 manifest + fixture/sdk/wit 输入共同缓存，避免在源码或 WIT 变化后复用陈旧 component。
+    let mut build_key_bytes = manifest_json.clone().into_bytes();
+    for path in tracked_flow_fixture_input_paths() {
+        build_key_bytes.extend(fs::read(path).expect("read tracked fixture input"));
+    }
+    let build_key = compute_hash(&build_key_bytes);
     let build_root = std::env::temp_dir()
         .join("shiroha-component-fixtures")
         .join(&build_key);
@@ -229,6 +233,12 @@ pub(crate) fn example_wasm(manifest_path: &str, package_name: &str) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend(fs::read(&manifest_path).expect("read example manifest"));
         bytes.extend(fs::read(example_dir.join("src/lib.rs")).expect("read example source"));
+        bytes.extend(
+            fs::read(workspace_root.join("crate/shiroha-sdk/build.rs")).expect("read sdk build"),
+        );
+        bytes.extend(
+            fs::read(workspace_root.join("crate/shiroha-sdk/src/lib.rs")).expect("read sdk lib"),
+        );
         bytes.extend(
             fs::read(workspace_root.join("crate/shiroha-wit/wit/flow.wit")).expect("read flow wit"),
         );
@@ -289,6 +299,22 @@ pub(crate) fn example_wasm(manifest_path: &str, package_name: &str) -> Vec<u8> {
 
     assert!(status.success(), "example component build failed");
     fs::read(&wasm_path).expect("read built example component")
+}
+
+fn tracked_flow_fixture_input_paths() -> Vec<PathBuf> {
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    vec![
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/flow-component/Cargo.toml"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/flow-component/src/lib.rs"),
+        workspace_root.join("crate/shiroha-sdk/build.rs"),
+        workspace_root.join("crate/shiroha-sdk/src/lib.rs"),
+        workspace_root.join("crate/shiroha-wit/wit/flow.wit"),
+        workspace_root.join("crate/shiroha-wit/wit/net.wit"),
+        workspace_root.join("crate/shiroha-wit/wit/store.wit"),
+        workspace_root.join("crate/shiroha-wit/wit/network-flow.wit"),
+        workspace_root.join("crate/shiroha-wit/wit/storage-flow.wit"),
+        workspace_root.join("crate/shiroha-wit/wit/full-flow.wit"),
+    ]
 }
 
 fn temp_data_dir(prefix: &str) -> PathBuf {

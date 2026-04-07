@@ -144,6 +144,7 @@ impl Guest for FlowComponent {
         match name.as_str() {
             "allow" => ctx.event == "approve" && ctx.to_state == "done",
             "allow_approve" => ctx.event == "approve",
+            "require-context" => ctx.context.as_ref().is_some_and(|bytes| !bytes.is_empty()),
             _ => false,
         }
     }

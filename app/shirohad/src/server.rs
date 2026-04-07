@@ -152,27 +152,50 @@ impl ShirohaServer {
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         if !persisted_flows.is_empty() {
             // 重启时先恢复 Flow 拓扑和编译入口；Job timeout 会在后面按 Job 快照重建。
+            let mut skipped_flows = 0usize;
             for registration in persisted_flows {
-                let wasm_bytes = state
-                    .storage
-                    .get_wasm_module(&registration.wasm_hash)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "missing wasm bytes for flow `{}` version {}",
-                            registration.flow_id,
-                            registration.version
-                        )
-                    })?;
+                let wasm_bytes = match state.storage.get_wasm_module(&registration.wasm_hash).await
+                {
+                    Ok(Some(bytes)) => bytes,
+                    Ok(None) => {
+                        skipped_flows += 1;
+                        tracing::warn!(
+                            flow_id = registration.flow_id,
+                            version = %registration.version,
+                            wasm_hash = registration.wasm_hash,
+                            "skipping persisted flow version because wasm bytes are missing"
+                        );
+                        continue;
+                    }
+                    Err(error) => {
+                        skipped_flows += 1;
+                        tracing::warn!(
+                            flow_id = registration.flow_id,
+                            version = %registration.version,
+                            error = %error,
+                            "skipping persisted flow version because wasm bytes could not be loaded"
+                        );
+                        continue;
+                    }
+                };
                 if state.module_cache.get(&registration.wasm_hash).is_none() {
-                    let component = state
-                        .wasm_runtime
-                        .load_component(&wasm_bytes)
-                        .map_err(|e| anyhow::anyhow!("{e}"))?;
-                    state
-                        .module_cache
-                        .insert(Arc::new(WasmModule::new(component, &wasm_bytes)));
+                    match state.wasm_runtime.load_component(&wasm_bytes) {
+                        Ok(component) => {
+                            state
+                                .module_cache
+                                .insert(Arc::new(WasmModule::new(component, &wasm_bytes)));
+                        }
+                        Err(error) => {
+                            skipped_flows += 1;
+                            tracing::warn!(
+                                flow_id = registration.flow_id,
+                                version = %registration.version,
+                                error = %error,
+                                "skipping persisted flow version because wasm component could not be rebuilt"
+                            );
+                            continue;
+                        }
+                    }
                 }
 
                 state.flow_registry.register(registration).await;
@@ -183,6 +206,12 @@ impl ShirohaServer {
                 version_count,
                 "loaded persisted flows into memory registry"
             );
+            if skipped_flows > 0 {
+                tracing::warn!(
+                    skipped_flows,
+                    "some persisted flow versions were skipped during reload"
+                );
+            }
         }
         Self::restore_persisted_timers(&state).await?;
 
@@ -260,7 +289,8 @@ mod tests {
     use crate::flow_service::FlowServiceImpl;
     use crate::job_service::JobServiceImpl;
     use crate::test_support::{
-        TestHarness, approval_manifest, deploy_flow, example_wasm, wait_for_job,
+        TestHarness, approval_manifest, deploy_flow, example_wasm, register_flow_version,
+        wait_for_job,
     };
     use shiroha_core::flow::{
         FlowManifest, FlowWorld, StateDef, StateKind, TimeoutDef, TransitionDef,
@@ -640,6 +670,33 @@ mod tests {
                 .get_value("fixture", "beta")
                 .expect("get stored beta after reload"),
             Some(b"two".to_vec())
+        );
+    }
+
+    #[tokio::test]
+    async fn new_server_skips_persisted_flow_versions_without_wasm_bytes() {
+        let harness = TestHarness::new("server-reload-missing-wasm").await;
+        let data_dir = harness.data_dir.clone();
+        register_flow_version(
+            &harness.state,
+            "broken",
+            Uuid::now_v7(),
+            approval_manifest("broken", Some("allow")),
+        )
+        .await;
+        drop(harness);
+
+        let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
+            .await
+            .expect("reload server should skip broken flow");
+
+        assert!(
+            reloaded
+                .state
+                .flow_registry
+                .latest_registration("broken")
+                .await
+                .is_none()
         );
     }
 }
