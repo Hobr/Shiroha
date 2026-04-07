@@ -85,6 +85,7 @@ world flow {
   record action-context {
     job-id: string,
     state: string,
+    context: option<list<u8>>,
     payload: option<list<u8>>,
   }
 
@@ -93,6 +94,7 @@ world flow {
     from-state: string,
     to-state: string,
     event: string,
+    context: option<list<u8>>,
     payload: option<list<u8>>,
   }
 

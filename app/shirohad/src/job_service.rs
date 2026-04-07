@@ -164,6 +164,7 @@ impl JobServiceImpl {
                         .await
                         .map_err(|e| Status::failed_precondition(e.to_string()))?;
                     self.state.timer_wheel.cancel_all_job_timers(job_id).await;
+                    self.remove_job_lock(job_id).await;
                     tracing::info!(job_id = %job_id, "job lifetime expired; cancelled job");
                     return Ok(());
                 }
@@ -263,6 +264,7 @@ impl JobServiceImpl {
                             from_state: candidate.from.clone(),
                             to_state: candidate.to.clone(),
                             event: event.clone(),
+                            context: job.context.clone(),
                             payload: payload.clone(),
                         },
                     )
@@ -314,6 +316,7 @@ impl JobServiceImpl {
                     scheduled.action_name(),
                     job.id,
                     scheduled.action_state(),
+                    job.context.clone(),
                     payload.clone(),
                 )
                 .await?
@@ -330,6 +333,7 @@ impl JobServiceImpl {
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?;
             self.state.timer_wheel.cancel_all_job_timers(job.id).await;
+            self.remove_job_lock(job.id).await;
         } else {
             // timeout 是“状态出边”的属性，所以进入新状态后要重新扫描所有出边注册。
             self.persist_and_register_timeouts(job.id, timeouts).await?;
@@ -405,12 +409,13 @@ impl JobServiceImpl {
         action_name: &str,
         job_id: Uuid,
         state: &str,
+        context: Option<Vec<u8>>,
         payload: Option<Vec<u8>>,
     ) -> Result<Option<String>, Status> {
         // 当前语义里 action / state hook 都属于“状态推进后的副作用”：
         // 即使执行状态失败，转移和事件日志也已经提交，便于后续审计/补偿。
         let action_result = match self
-            .invoke_action(flow, action_name, job_id, state, payload)
+            .invoke_action(flow, action_name, job_id, state, context, payload)
             .await
         {
             Ok(result) => result,
@@ -490,9 +495,11 @@ impl JobServiceImpl {
         Ok(())
     }
 
-    fn wasm_host(&self, flow: &FlowRegistration) -> Result<WasmHost, Status> {
-        let module = self
-            .state
+    fn wasm_host_for_state(
+        state: &Arc<ShirohaState>,
+        flow: &FlowRegistration,
+    ) -> Result<WasmHost, Status> {
+        let module = state
             .module_cache
             .get(&flow.wasm_hash)
             .ok_or_else(|| {
@@ -504,9 +511,9 @@ impl JobServiceImpl {
 
         // 缓存中保存的是编译后的 component；每次调用仍会创建新的 guest 实例。
         WasmHost::new_with_capability_store(
-            self.state.wasm_runtime.engine(),
+            state.wasm_runtime.engine(),
             module.component(),
-            self.state.storage.clone(),
+            state.storage.clone(),
         )
         .map_err(|e| Status::internal(e.to_string()))
     }
@@ -517,9 +524,16 @@ impl JobServiceImpl {
         guard_name: &str,
         ctx: GuardContext,
     ) -> Result<bool, Status> {
-        let mut host = self.wasm_host(flow)?;
-        host.invoke_guard(guard_name, ctx)
-            .map_err(|e| Status::internal(e.to_string()))
+        let state = self.state.clone();
+        let flow = flow.clone();
+        let guard_name = guard_name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut host = Self::wasm_host_for_state(&state, &flow)?;
+            host.invoke_guard(&guard_name, ctx)
+                .map_err(|e| Status::internal(e.to_string()))
+        })
+        .await
+        .map_err(|error| Status::internal(format!("guard task join error: {error}")))?
     }
 
     async fn invoke_action(
@@ -528,6 +542,7 @@ impl JobServiceImpl {
         action_name: &str,
         job_id: Uuid,
         state: &str,
+        context: Option<Vec<u8>>,
         payload: Option<Vec<u8>>,
     ) -> Result<ActionResult, Status> {
         let action = flow
@@ -547,17 +562,23 @@ impl JobServiceImpl {
             DispatchMode::Local | DispatchMode::Remote => {
                 // standalone 模式下本地执行和远端执行暂时走同一条 WASM 调用路径；
                 // 真正的集群调度会在这里分叉。
-                let mut host = self.wasm_host(flow)?;
-                host.invoke_action(
-                    action_name,
-                    ActionContext {
-                        job_id: job_id.to_string(),
-                        state: state.to_string(),
-                        payload,
-                    },
-                    capabilities,
-                )
-                .map_err(|e| Status::internal(e.to_string()))
+                let state_handle = self.state.clone();
+                let flow = flow.clone();
+                let action_name = action_name.to_string();
+                let action_ctx = ActionContext {
+                    job_id: job_id.to_string(),
+                    state: state.to_string(),
+                    context,
+                    payload,
+                };
+                let capabilities = capabilities.to_vec();
+                tokio::task::spawn_blocking(move || {
+                    let mut host = Self::wasm_host_for_state(&state_handle, &flow)?;
+                    host.invoke_action(&action_name, action_ctx, &capabilities)
+                        .map_err(|e| Status::internal(e.to_string()))
+                })
+                .await
+                .map_err(|error| Status::internal(format!("action task join error: {error}")))?
             }
             DispatchMode::FanOut(_) => Err(Status::unimplemented(
                 "fan-out action dispatch is not implemented in standalone mode yet",
@@ -631,6 +652,7 @@ impl JobService for JobServiceImpl {
                     on_enter,
                     job.id,
                     &flow.manifest.initial_state,
+                    job.context.clone(),
                     None,
                 )
                 .await?
@@ -792,6 +814,7 @@ impl JobService for JobServiceImpl {
             .await
             .map_err(|e| Status::failed_precondition(e.to_string()))?;
         self.state.timer_wheel.cancel_all_job_timers(job_id).await;
+        self.remove_job_lock(job_id).await;
 
         Ok(Response::new(CancelJobResponse {}))
     }
@@ -954,6 +977,43 @@ mod tests {
             initial_state: "idle".into(),
             actions: vec![ActionDef {
                 name: "deny".into(),
+                dispatch: DispatchMode::Local,
+                capabilities: Vec::new(),
+            }],
+        }
+    }
+
+    fn context_guard_manifest(flow_id: &str) -> FlowManifest {
+        FlowManifest {
+            id: flow_id.to_string(),
+            host_world: FlowWorld::Sandbox,
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![TransitionDef {
+                from: "idle".into(),
+                to: "done".into(),
+                event: "approve".into(),
+                guard: Some("require-context".into()),
+                action: None,
+                timeout: None,
+            }],
+            initial_state: "idle".into(),
+            actions: vec![ActionDef {
+                name: "require-context".into(),
                 dispatch: DispatchMode::Local,
                 capabilities: Vec::new(),
             }],
@@ -1539,6 +1599,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn guard_can_see_persisted_job_context() {
+        let harness = TestHarness::new("job-service-context-guard").await;
+        deploy_flow(
+            harness.state.clone(),
+            "approval",
+            &context_guard_manifest("approval"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: Some(b"context-present".to_vec()),
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect("trigger event");
+
+        let final_job = wait_for_job(&service, &created.job_id, "completed", "done").await;
+        assert_eq!(final_job.current_state, "done");
+    }
+
+    #[tokio::test]
     async fn create_job_succeeds_even_if_initial_hook_cannot_execute() {
         let harness = TestHarness::new("job-service-initial-hook-failure").await;
         register_flow_version(
@@ -1641,6 +1735,42 @@ mod tests {
                 if action == "ship" && *status == ExecutionStatus::Failed
         ));
         assert!(matches!(kinds[3], EventKind::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn terminal_job_releases_job_lock() {
+        let harness = TestHarness::new("job-service-release-lock-on-complete").await;
+        register_flow_version(
+            &harness.state,
+            "approval",
+            Uuid::now_v7(),
+            approval_manifest_to("approval", "done"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+        let job_uuid = created.job_id.parse::<Uuid>().expect("uuid");
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect("trigger event");
+
+        let _ = wait_for_job(&service, &created.job_id, "completed", "done").await;
+        assert!(!harness.state.job_locks.lock().await.contains_key(&job_uuid));
     }
 
     #[tokio::test]
