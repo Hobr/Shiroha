@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use shiroha_core::flow::{FlowRegistration, FlowWorld};
+use shiroha_core::flow::{DispatchMode, FlowManifest, FlowRegistration, FlowWorld, StateKind};
 use shiroha_core::storage::Storage;
 use shiroha_engine::validator::{FlowValidator, ValidationWarning};
 use shiroha_proto::shiroha_api::flow_service_server::FlowService;
@@ -122,6 +122,167 @@ impl FlowServiceImpl {
 
         Ok(())
     }
+
+    fn validate_phase1_manifest_contract(manifest: &FlowManifest) -> Result<(), Status> {
+        if manifest.id.trim().is_empty() {
+            return Err(Status::invalid_argument("manifest `id` must not be empty"));
+        }
+        if manifest.initial_state.trim().is_empty() {
+            return Err(Status::invalid_argument(
+                "manifest `initial_state` must not be empty",
+            ));
+        }
+
+        let mut state_names = std::collections::HashSet::new();
+        for state in &manifest.states {
+            if state.name.trim().is_empty() {
+                return Err(Status::invalid_argument("state `name` must not be empty"));
+            }
+            if !state_names.insert(state.name.as_str()) {
+                return Err(Status::invalid_argument(format!(
+                    "duplicate state name `{}`",
+                    state.name
+                )));
+            }
+            match state.kind {
+                StateKind::Fork | StateKind::Join => {
+                    return Err(Status::unimplemented(format!(
+                        "state kind `{}` is not implemented in Phase 1 runtime",
+                        match state.kind {
+                            StateKind::Fork => "fork",
+                            StateKind::Join => "join",
+                            _ => unreachable!(),
+                        }
+                    )));
+                }
+                StateKind::Subprocess => {
+                    let subprocess = state.subprocess.as_ref().ok_or_else(|| {
+                        Status::invalid_argument(format!(
+                            "subprocess state `{}` must declare subprocess config",
+                            state.name
+                        ))
+                    })?;
+                    if subprocess.flow_id.trim().is_empty() {
+                        return Err(Status::invalid_argument(format!(
+                            "subprocess state `{}` must declare non-empty subprocess.flow_id",
+                            state.name
+                        )));
+                    }
+                    if subprocess.completion_event.trim().is_empty() {
+                        return Err(Status::invalid_argument(format!(
+                            "subprocess state `{}` must declare non-empty subprocess.completion_event",
+                            state.name
+                        )));
+                    }
+                    return Err(Status::unimplemented(format!(
+                        "subprocess state `{}` is not implemented in Phase 1 runtime",
+                        state.name
+                    )));
+                }
+                StateKind::Normal | StateKind::Terminal => {}
+            }
+        }
+
+        let mut action_names = std::collections::HashSet::new();
+        for action in &manifest.actions {
+            if action.name.trim().is_empty() {
+                return Err(Status::invalid_argument("action `name` must not be empty"));
+            }
+            if !action_names.insert(action.name.as_str()) {
+                return Err(Status::invalid_argument(format!(
+                    "duplicate action name `{}`",
+                    action.name
+                )));
+            }
+            if let DispatchMode::FanOut(config) = &action.dispatch {
+                if config.aggregator.trim().is_empty() {
+                    return Err(Status::invalid_argument(format!(
+                        "fan-out action `{}` must declare non-empty aggregator",
+                        action.name
+                    )));
+                }
+                if matches!(
+                    config.strategy,
+                    shiroha_core::flow::FanOutStrategy::Count(0)
+                ) {
+                    return Err(Status::invalid_argument(format!(
+                        "fan-out action `{}` must use count > 0",
+                        action.name
+                    )));
+                }
+                if config.timeout_ms == Some(0) {
+                    return Err(Status::invalid_argument(format!(
+                        "fan-out action `{}` timeout_ms must be greater than 0",
+                        action.name
+                    )));
+                }
+                if config.min_success == Some(0) {
+                    return Err(Status::invalid_argument(format!(
+                        "fan-out action `{}` min_success must be greater than 0",
+                        action.name
+                    )));
+                }
+                return Err(Status::unimplemented(format!(
+                    "fan-out action `{}` is not implemented in Phase 1 runtime",
+                    action.name
+                )));
+            }
+        }
+
+        for transition in &manifest.transitions {
+            if transition.from.trim().is_empty() {
+                return Err(Status::invalid_argument(
+                    "transition `from` must not be empty",
+                ));
+            }
+            if transition.to.trim().is_empty() {
+                return Err(Status::invalid_argument(
+                    "transition `to` must not be empty",
+                ));
+            }
+            if transition.event.trim().is_empty() {
+                return Err(Status::invalid_argument(
+                    "transition `event` must not be empty",
+                ));
+            }
+            if let Some(timeout) = &transition.timeout {
+                if timeout.duration_ms == 0 {
+                    return Err(Status::invalid_argument(format!(
+                        "transition {} --{}--> {} must use timeout.duration_ms > 0",
+                        transition.from, transition.event, transition.to
+                    )));
+                }
+                if timeout.timeout_event.trim().is_empty() {
+                    return Err(Status::invalid_argument(format!(
+                        "transition {} --{}--> {} must use non-empty timeout.timeout_event",
+                        transition.from, transition.event, transition.to
+                    )));
+                }
+                if timeout.timeout_event != transition.event {
+                    return Err(Status::invalid_argument(format!(
+                        "transition {} --{}--> {} must use timeout_event matching transition event",
+                        transition.from, transition.event, transition.to
+                    )));
+                }
+                let matching = manifest
+                    .transitions
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.from == transition.from
+                            && candidate.event == timeout.timeout_event
+                    })
+                    .count();
+                if matching != 1 {
+                    return Err(Status::invalid_argument(format!(
+                        "timeout_event `{}` from state `{}` must resolve to exactly one transition",
+                        timeout.timeout_event, transition.from
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[tonic::async_trait]
@@ -164,6 +325,7 @@ impl FlowService for FlowServiceImpl {
             .get_manifest()
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         Self::validate_component_imports(&actual_imports, manifest.host_world)?;
+        Self::validate_phase1_manifest_contract(&manifest)?;
 
         // 静态验证
         let warnings = FlowValidator::validate(&manifest);
@@ -341,7 +503,10 @@ mod tests {
     use crate::test_support::{
         TestHarness, approval_manifest, register_flow_version, warning_manifest, wasm_for_manifest,
     };
-    use shiroha_core::flow::{FlowManifest, FlowWorld, StateDef, StateKind, TransitionDef};
+    use shiroha_core::flow::{
+        ActionDef, DispatchMode, FanOutConfig, FanOutStrategy, FlowManifest, FlowWorld, StateDef,
+        StateKind, TimeoutDef, TransitionDef,
+    };
     use shiroha_core::storage::Storage;
     use shiroha_proto::shiroha_api::job_service_server::JobService;
     use shiroha_proto::shiroha_api::{
@@ -378,6 +543,101 @@ mod tests {
                 timeout: None,
             }],
             initial_state: "idle".into(),
+            actions: Vec::new(),
+        }
+    }
+
+    fn unsupported_fanout_manifest() -> FlowManifest {
+        FlowManifest {
+            id: "fanout-demo".into(),
+            host_world: FlowWorld::Sandbox,
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![TransitionDef {
+                from: "idle".into(),
+                to: "done".into(),
+                event: "collect".into(),
+                guard: None,
+                action: Some("collect".into()),
+                timeout: None,
+            }],
+            initial_state: "idle".into(),
+            actions: vec![ActionDef {
+                name: "collect".into(),
+                dispatch: DispatchMode::FanOut(FanOutConfig {
+                    strategy: FanOutStrategy::Count(2),
+                    aggregator: "pick-success".into(),
+                    timeout_ms: Some(100),
+                    min_success: Some(1),
+                }),
+                capabilities: Vec::new(),
+            }],
+        }
+    }
+
+    fn invalid_timeout_manifest() -> FlowManifest {
+        FlowManifest {
+            id: "timeout-invalid".into(),
+            host_world: FlowWorld::Sandbox,
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![TransitionDef {
+                from: "idle".into(),
+                to: "done".into(),
+                event: "approve".into(),
+                guard: None,
+                action: None,
+                timeout: Some(TimeoutDef {
+                    duration_ms: 10,
+                    timeout_event: "expire".into(),
+                }),
+            }],
+            initial_state: "idle".into(),
+            actions: Vec::new(),
+        }
+    }
+
+    fn invalid_subprocess_manifest() -> FlowManifest {
+        FlowManifest {
+            id: "subprocess-invalid".into(),
+            host_world: FlowWorld::Sandbox,
+            states: vec![StateDef {
+                name: "legal-review".into(),
+                kind: StateKind::Subprocess,
+                on_enter: None,
+                on_exit: None,
+                subprocess: None,
+            }],
+            transitions: Vec::new(),
+            initial_state: "legal-review".into(),
             actions: Vec::new(),
         }
     }
@@ -500,6 +760,64 @@ mod tests {
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
         assert!(error.message().contains("action `ship`"));
         assert!(error.message().contains("guard `allow`"));
+    }
+
+    #[tokio::test]
+    #[ignore = "heavy service integration smoke; run explicitly when validating deploy/query flows"]
+    async fn deploy_flow_rejects_phase1_unsupported_fanout() {
+        let harness = TestHarness::new("flow-fanout-unsupported").await;
+        let service = FlowServiceImpl::new(harness.state.clone());
+
+        let error = service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "fanout-demo".into(),
+                wasm_bytes: wasm_for_manifest(&unsupported_fanout_manifest()),
+            }))
+            .await
+            .expect_err("fanout should fail in phase1");
+
+        assert_eq!(error.code(), tonic::Code::Unimplemented);
+        assert!(error.message().contains("fan-out action `collect`"));
+    }
+
+    #[tokio::test]
+    #[ignore = "heavy service integration smoke; run explicitly when validating deploy/query flows"]
+    async fn deploy_flow_rejects_timeout_event_mismatch() {
+        let harness = TestHarness::new("flow-timeout-invalid").await;
+        let service = FlowServiceImpl::new(harness.state.clone());
+
+        let error = service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "timeout-invalid".into(),
+                wasm_bytes: wasm_for_manifest(&invalid_timeout_manifest()),
+            }))
+            .await
+            .expect_err("timeout mismatch should fail");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(
+            error
+                .message()
+                .contains("timeout_event matching transition event")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "heavy service integration smoke; run explicitly when validating deploy/query flows"]
+    async fn deploy_flow_rejects_subprocess_without_config() {
+        let harness = TestHarness::new("flow-subprocess-invalid").await;
+        let service = FlowServiceImpl::new(harness.state.clone());
+
+        let error = service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "subprocess-invalid".into(),
+                wasm_bytes: wasm_for_manifest(&invalid_subprocess_manifest()),
+            }))
+            .await
+            .expect_err("subprocess config should fail");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().contains("must declare subprocess config"));
     }
 
     #[test]
