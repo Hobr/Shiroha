@@ -69,6 +69,7 @@ pub trait Storage: Send + Sync {
     }
     fn get_job(&self, job_id: Uuid) -> impl Future<Output = Result<Option<Job>>> + Send;
     fn list_jobs(&self, flow_id: &str) -> impl Future<Output = Result<Vec<Job>>> + Send;
+    fn list_all_jobs(&self) -> impl Future<Output = Result<Vec<Job>>> + Send;
     fn delete_job(&self, job_id: Uuid) -> impl Future<Output = Result<()>> + Send;
 
     fn append_event(&self, event: &EventRecord) -> impl Future<Output = Result<()>> + Send;
@@ -203,6 +204,10 @@ impl Storage for MemoryStorage {
             .filter(|j| j.flow_id == flow_id)
             .cloned()
             .collect())
+    }
+
+    async fn list_all_jobs(&self) -> Result<Vec<Job>> {
+        Ok(self.jobs.read().await.values().cloned().collect())
     }
 
     async fn delete_job(&self, job_id: Uuid) -> Result<()> {

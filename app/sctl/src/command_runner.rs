@@ -139,6 +139,7 @@ async fn dispatch_job_command(
                 .wait_job(
                     &args.job.job_id,
                     args.state.as_deref(),
+                    args.current_state.as_deref(),
                     args.timeout_ms,
                     args.interval_ms,
                     json_output,

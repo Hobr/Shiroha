@@ -12,8 +12,8 @@ use shiroha_proto::shiroha_api::job_service_server::JobService;
 use shiroha_proto::shiroha_api::{
     CancelJobRequest, CancelJobResponse, CreateJobRequest, CreateJobResponse, DeleteJobRequest,
     DeleteJobResponse, GetJobEventsRequest, GetJobEventsResponse, GetJobRequest, GetJobResponse,
-    ListJobsRequest, ListJobsResponse, PauseJobRequest, PauseJobResponse, ResumeJobRequest,
-    ResumeJobResponse, TriggerEventRequest, TriggerEventResponse,
+    ListAllJobsRequest, ListJobsRequest, ListJobsResponse, PauseJobRequest, PauseJobResponse,
+    ResumeJobRequest, ResumeJobResponse, TriggerEventRequest, TriggerEventResponse,
 };
 use shiroha_wasm::host::{ActionContext, GuardContext, WasmHost};
 use tonic::{Request, Response, Status};
@@ -58,6 +58,9 @@ impl JobServiceImpl {
             current_state: job.current_state.clone(),
             flow_version: job.flow_version.to_string(),
             context_bytes: job.context.as_ref().map(|context| context.len() as u64),
+            max_lifetime_ms: job.max_lifetime_ms,
+            lifetime_deadline_ms: job.lifetime_deadline_ms,
+            remaining_lifetime_ms: Self::remaining_lifetime_ms(job),
         }
     }
 
@@ -623,7 +626,13 @@ impl JobService for JobServiceImpl {
             .ok_or_else(|| Status::internal("initial state not found in manifest"))?;
         if let Some(on_enter) = initial_state.on_enter.as_deref()
             && let Some(message) = self
-                .run_declared_action(&flow, on_enter, job.id, &flow.manifest.initial_state, None)
+                .run_declared_action(
+                    &flow,
+                    on_enter,
+                    job.id,
+                    &flow.manifest.initial_state,
+                    None,
+                )
                 .await?
         {
             action_failures.push(message);
@@ -672,6 +681,22 @@ impl JobService for JobServiceImpl {
             .state
             .job_manager
             .list_jobs(&flow_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let resp = jobs.iter().map(Self::job_response).collect();
+
+        Ok(Response::new(ListJobsResponse { jobs: resp }))
+    }
+
+    async fn list_all_jobs(
+        &self,
+        _request: Request<ListAllJobsRequest>,
+    ) -> Result<Response<ListJobsResponse>, Status> {
+        let jobs = self
+            .state
+            .job_manager
+            .list_all_jobs()
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -1395,6 +1420,88 @@ mod tests {
 
         assert_eq!(old_state.current_state, "done");
         assert_eq!(new_state.current_state, "rerouted");
+    }
+
+    #[tokio::test]
+    async fn list_all_jobs_returns_jobs_across_flows() {
+        let harness = TestHarness::new("job-service-list-all").await;
+        register_flow_version(
+            &harness.state,
+            "alpha",
+            Uuid::now_v7(),
+            approval_manifest_to("alpha", "done"),
+        )
+        .await;
+        register_flow_version(
+            &harness.state,
+            "beta",
+            Uuid::now_v7(),
+            approval_manifest_to("beta", "done"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "alpha".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create alpha job");
+        service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "beta".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create beta job");
+
+        let listed = service
+            .list_all_jobs(Request::new(ListAllJobsRequest {}))
+            .await
+            .expect("list all jobs")
+            .into_inner();
+
+        assert_eq!(listed.jobs.len(), 2);
+        assert!(listed.jobs.iter().any(|job| job.flow_id == "alpha"));
+        assert!(listed.jobs.iter().any(|job| job.flow_id == "beta"));
+    }
+
+    #[tokio::test]
+    async fn get_job_exposes_lifetime_fields() {
+        let harness = TestHarness::new("job-service-lifetime-observable").await;
+        register_flow_version(
+            &harness.state,
+            "approval",
+            Uuid::now_v7(),
+            approval_manifest_to("approval", "done"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: None,
+                max_lifetime_ms: Some(500),
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        let job = service
+            .get_job(Request::new(GetJobRequest {
+                job_id: created.job_id,
+            }))
+            .await
+            .expect("get job")
+            .into_inner();
+
+        assert_eq!(job.max_lifetime_ms, Some(500));
+        assert!(job.lifetime_deadline_ms.is_some());
+        assert!(job.remaining_lifetime_ms.is_some());
     }
 
     #[tokio::test]

@@ -37,6 +37,9 @@ mod tests {
                 current_state: "s1".into(),
                 flow_version: "v1".into(),
                 context_bytes: None,
+                max_lifetime_ms: None,
+                lifetime_deadline_ms: None,
+                remaining_lifetime_ms: None,
             },
             JobDetails {
                 job_id: "job-3".into(),
@@ -45,6 +48,9 @@ mod tests {
                 current_state: "s1".into(),
                 flow_version: "v1".into(),
                 context_bytes: None,
+                max_lifetime_ms: None,
+                lifetime_deadline_ms: None,
+                remaining_lifetime_ms: None,
             },
             JobDetails {
                 job_id: "job-1".into(),
@@ -53,6 +59,9 @@ mod tests {
                 current_state: "s1".into(),
                 flow_version: "v1".into(),
                 context_bytes: None,
+                max_lifetime_ms: None,
+                lifetime_deadline_ms: None,
+                remaining_lifetime_ms: None,
             },
         ];
 
