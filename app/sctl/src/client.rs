@@ -208,7 +208,8 @@ impl ShirohaClient {
     pub async fn wait_job(
         &mut self,
         job_id: &str,
-        target_state: Option<&str>,
+        target_lifecycle_state: Option<&str>,
+        target_current_state: Option<&str>,
         timeout_ms: Option<u64>,
         interval_ms: u64,
         json_output: bool,
@@ -216,7 +217,7 @@ impl ShirohaClient {
         let wait_future = async {
             loop {
                 let job = self.api.get_job(job_id).await?;
-                if job_matches_target(&job, target_state) {
+                if job_matches_target(&job, target_lifecycle_state, target_current_state) {
                     return Ok::<JobDetails, anyhow::Error>(job);
                 }
                 sleep(Duration::from_millis(interval_ms)).await;
@@ -229,7 +230,9 @@ impl ShirohaClient {
                 .with_context(|| {
                     format!(
                         "timed out waiting for job `{job_id}` to reach {}",
-                        target_state.unwrap_or("a terminal state")
+                        target_lifecycle_state
+                            .or(target_current_state)
+                            .unwrap_or("a terminal state")
                     )
                 })??
         } else {
@@ -322,10 +325,16 @@ fn decode_hex(input: &str) -> anyhow::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn job_matches_target(job: &JobDetails, target_state: Option<&str>) -> bool {
-    match target_state {
-        Some(target) => job.state == target || job.current_state == target,
-        None => matches!(job.state.as_str(), "completed" | "cancelled"),
+fn job_matches_target(
+    job: &JobDetails,
+    target_lifecycle_state: Option<&str>,
+    target_current_state: Option<&str>,
+) -> bool {
+    match (target_lifecycle_state, target_current_state) {
+        (Some(target), None) => job.state == target,
+        (None, Some(target)) => job.current_state == target,
+        (None, None) => matches!(job.state.as_str(), "completed" | "cancelled"),
+        (Some(_), Some(_)) => false,
     }
 }
 
@@ -378,6 +387,9 @@ mod tests {
             current_state: "approved".into(),
             flow_version: "version-1".into(),
             context_bytes: None,
+            max_lifetime_ms: None,
+            lifetime_deadline_ms: None,
+            remaining_lifetime_ms: None,
         };
         let cancelled = JobDetails {
             job_id: "job-2".into(),
@@ -386,6 +398,9 @@ mod tests {
             current_state: "idle".into(),
             flow_version: "version-1".into(),
             context_bytes: Some(0),
+            max_lifetime_ms: None,
+            lifetime_deadline_ms: None,
+            remaining_lifetime_ms: None,
         };
         let running = JobDetails {
             job_id: "job-3".into(),
@@ -394,13 +409,22 @@ mod tests {
             current_state: "waiting-approval".into(),
             flow_version: "version-2".into(),
             context_bytes: Some(12),
+            max_lifetime_ms: None,
+            lifetime_deadline_ms: None,
+            remaining_lifetime_ms: None,
         };
 
-        assert!(job_matches_target(&completed, None));
-        assert!(job_matches_target(&cancelled, None));
-        assert!(!job_matches_target(&running, None));
-        assert!(job_matches_target(&running, Some("running")));
-        assert!(job_matches_target(&running, Some("waiting-approval")));
+        assert!(job_matches_target(&completed, None, None));
+        assert!(job_matches_target(&cancelled, None, None));
+        assert!(!job_matches_target(&running, None, None));
+        assert!(job_matches_target(&running, Some("running"), None));
+        assert!(job_matches_target(&running, None, Some("waiting-approval")));
+        assert!(!job_matches_target(
+            &running,
+            Some("waiting-approval"),
+            None
+        ));
+        assert!(!job_matches_target(&running, None, Some("running")));
     }
 
     #[test]

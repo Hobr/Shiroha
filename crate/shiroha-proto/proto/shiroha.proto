@@ -14,6 +14,7 @@ service JobService {
   rpc CreateJob(CreateJobRequest) returns (CreateJobResponse);
   rpc GetJob(GetJobRequest) returns (GetJobResponse);
   rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc ListAllJobs(ListAllJobsRequest) returns (ListJobsResponse);
   rpc DeleteJob(DeleteJobRequest) returns (DeleteJobResponse);
   rpc TriggerEvent(TriggerEventRequest) returns (TriggerEventResponse);
   rpc PauseJob(PauseJobRequest) returns (PauseJobResponse);
@@ -98,11 +99,16 @@ message GetJobResponse {
   string current_state = 4;
   string flow_version = 5;
   optional uint64 context_bytes = 6;
+  optional uint64 max_lifetime_ms = 7;
+  optional uint64 lifetime_deadline_ms = 8;
+  optional uint64 remaining_lifetime_ms = 9;
 }
 
 message ListJobsRequest {
   string flow_id = 1;
 }
+
+message ListAllJobsRequest {}
 
 message ListJobsResponse {
   repeated GetJobResponse jobs = 1;

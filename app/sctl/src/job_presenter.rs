@@ -37,6 +37,18 @@ pub(crate) fn render_job(job: &JobDetails, json_output: bool) -> anyhow::Result<
     println!("state:         {}", job.state);
     println!("current_state: {}", job.current_state);
     println!("context_bytes: {}", format_optional_u64(job.context_bytes));
+    println!(
+        "max_lifetime_ms: {}",
+        format_optional_u64(job.max_lifetime_ms)
+    );
+    println!(
+        "lifetime_deadline_ms: {}",
+        format_optional_u64(job.lifetime_deadline_ms)
+    );
+    println!(
+        "remaining_lifetime_ms: {}",
+        format_optional_u64(job.remaining_lifetime_ms)
+    );
     Ok(())
 }
 
@@ -162,6 +174,9 @@ fn job_to_json_value(job: &JobDetails) -> Value {
         "current_state": job.current_state,
         "flow_version": job.flow_version,
         "context_bytes": job.context_bytes,
+        "max_lifetime_ms": job.max_lifetime_ms,
+        "lifetime_deadline_ms": job.lifetime_deadline_ms,
+        "remaining_lifetime_ms": job.remaining_lifetime_ms,
     })
 }
 
@@ -178,6 +193,9 @@ mod tests {
             current_state: "idle".into(),
             flow_version: "version-a".into(),
             context_bytes: Some(42),
+            max_lifetime_ms: Some(1000),
+            lifetime_deadline_ms: Some(2000),
+            remaining_lifetime_ms: Some(500),
         }]);
 
         assert_eq!(
@@ -188,7 +206,10 @@ mod tests {
                 "state": "running",
                 "current_state": "idle",
                 "flow_version": "version-a",
-                "context_bytes": 42
+                "context_bytes": 42,
+                "max_lifetime_ms": 1000,
+                "lifetime_deadline_ms": 2000,
+                "remaining_lifetime_ms": 500
             }])
         );
     }

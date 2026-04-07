@@ -364,6 +364,18 @@ impl Storage for RedbStorage {
         Ok(jobs)
     }
 
+    async fn list_all_jobs(&self) -> Result<Vec<Job>> {
+        let txn = self.db.begin_read().map_err(s)?;
+        let table = txn.open_table(JOBS_TABLE).map_err(s)?;
+        let mut jobs = Vec::new();
+        for entry in table.iter().map_err(s)? {
+            let (_, v) = entry.map_err(s)?;
+            let job: Job = serde_json::from_slice(v.value()).map_err(s)?;
+            jobs.push(job);
+        }
+        Ok(jobs)
+    }
+
     async fn delete_job(&self, job_id: Uuid) -> Result<()> {
         let txn = self.db.begin_write().map_err(s)?;
         {

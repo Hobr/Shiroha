@@ -54,19 +54,25 @@ pub fn job_event_completer(current: &OsStr) -> Vec<CompletionCandidate> {
     filter_candidates(current, candidates)
 }
 
-pub fn wait_state_completer(current: &OsStr) -> Vec<CompletionCandidate> {
+pub fn wait_lifecycle_state_completer(current: &OsStr) -> Vec<CompletionCandidate> {
+    filter_candidates(
+        current,
+        LIFECYCLE_STATES
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub fn wait_current_state_completer(current: &OsStr) -> Vec<CompletionCandidate> {
     let context = CompletionContext::from_process_args();
-    let job_id = context.job_id.clone();
+    let Some(job_id) = context.job_id.clone() else {
+        return Vec::new();
+    };
 
     let candidates = run_query(async move {
         let mut client = ControlClient::connect(&context.server).await?;
-        let mut states = LIFECYCLE_STATES
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        if let Some(job_id) = job_id.as_deref() {
-            states.extend(client.list_wait_states(job_id).await?);
-        }
+        let mut states = client.list_wait_states(&job_id).await?;
         sort_dedup(&mut states);
         Ok(states)
     })
@@ -306,5 +312,13 @@ mod tests {
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].get_value(), OsStr::new("completed"));
+    }
+
+    #[test]
+    fn wait_lifecycle_state_completer_returns_lifecycle_states() {
+        let candidates = wait_lifecycle_state_completer(OsStr::new("pa"));
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].get_value(), OsStr::new("paused"));
     }
 }

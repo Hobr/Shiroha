@@ -212,12 +212,26 @@ struct JobEventsArgs {
 struct JobWaitArgs {
     #[command(flatten)]
     job: JobIdArgs,
-    /// 目标 lifecycle state 或 current_state，未指定时等待 completed/cancelled
+    /// 目标 lifecycle state，未指定时等待 completed/cancelled
     #[arg(
         long,
-        add = clap_complete::engine::ArgValueCompleter::new(completion::wait_state_completer)
+        value_name = "STATE",
+        conflicts_with = "current_state",
+        add = clap_complete::engine::ArgValueCompleter::new(
+            completion::wait_lifecycle_state_completer,
+        )
     )]
     state: Option<String>,
+    /// 目标 current_state
+    #[arg(
+        long,
+        value_name = "STATE",
+        conflicts_with = "state",
+        add = clap_complete::engine::ArgValueCompleter::new(
+            completion::wait_current_state_completer,
+        )
+    )]
+    current_state: Option<String>,
     /// 最大等待时间（毫秒），未指定则一直等待
     #[arg(long)]
     timeout_ms: Option<u64>,

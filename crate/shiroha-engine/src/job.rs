@@ -110,6 +110,10 @@ impl<S: Storage> JobManager<S> {
         self.storage.list_jobs(flow_id).await
     }
 
+    pub async fn list_all_jobs(&self) -> Result<Vec<Job>> {
+        self.storage.list_all_jobs().await
+    }
+
     pub async fn get_events(&self, job_id: Uuid) -> Result<Vec<EventRecord>> {
         self.storage.get_events(job_id).await
     }

@@ -29,6 +29,9 @@ pub struct JobDetails {
     pub current_state: String,
     pub flow_version: String,
     pub context_bytes: Option<u64>,
+    pub max_lifetime_ms: Option<u64>,
+    pub lifetime_deadline_ms: Option<u64>,
+    pub remaining_lifetime_ms: Option<u64>,
 }
 
 impl From<GetJobResponse> for JobDetails {
@@ -40,6 +43,9 @@ impl From<GetJobResponse> for JobDetails {
             current_state: value.current_state,
             flow_version: value.flow_version,
             context_bytes: value.context_bytes,
+            max_lifetime_ms: value.max_lifetime_ms,
+            lifetime_deadline_ms: value.lifetime_deadline_ms,
+            remaining_lifetime_ms: value.remaining_lifetime_ms,
         }
     }
 }
@@ -109,10 +115,15 @@ impl ControlClient {
     }
 
     pub async fn list_all_jobs(&mut self) -> anyhow::Result<Vec<JobDetails>> {
-        let mut jobs = Vec::new();
-        for flow_id in self.list_flow_ids().await? {
-            jobs.extend(self.list_jobs_for_flow(&flow_id).await?);
-        }
+        let mut jobs = self
+            .job
+            .list_all_jobs(ListAllJobsRequest {})
+            .await?
+            .into_inner()
+            .jobs
+            .into_iter()
+            .map(JobDetails::from)
+            .collect::<Vec<_>>();
         sort_job_details(&mut jobs);
         Ok(jobs)
     }
@@ -277,6 +288,9 @@ mod tests {
             current_state: "review".into(),
             flow_version: "v1".into(),
             context_bytes: Some(42),
+            max_lifetime_ms: Some(1000),
+            lifetime_deadline_ms: Some(2000),
+            remaining_lifetime_ms: Some(500),
         });
 
         assert_eq!(details.job_id, "job-1");
@@ -285,6 +299,9 @@ mod tests {
         assert_eq!(details.current_state, "review");
         assert_eq!(details.flow_version, "v1");
         assert_eq!(details.context_bytes, Some(42));
+        assert_eq!(details.max_lifetime_ms, Some(1000));
+        assert_eq!(details.lifetime_deadline_ms, Some(2000));
+        assert_eq!(details.remaining_lifetime_ms, Some(500));
     }
 
     #[test]
@@ -310,6 +327,9 @@ mod tests {
             current_state: "draft".into(),
             flow_version: "bound-version".into(),
             context_bytes: None,
+            max_lifetime_ms: None,
+            lifetime_deadline_ms: None,
+            remaining_lifetime_ms: None,
         });
 
         assert_eq!(request.flow_id, "flow-a");
