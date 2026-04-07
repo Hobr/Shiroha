@@ -26,6 +26,18 @@ use crate::service_support::parse_uuid;
 
 pub(crate) const JOB_LIFETIME_EXPIRED_EVENT: &str = "__shiroha.job_lifetime_expired__";
 
+#[derive(Debug, Clone)]
+struct TransitionCandidatePlan {
+    from: String,
+    to: String,
+    action: Option<String>,
+    guard: Option<String>,
+    on_exit: Option<String>,
+    on_enter: Option<String>,
+    is_terminal: bool,
+    timeouts: Vec<TimeoutDef>,
+}
+
 /// JobService 的 standalone 实现。
 ///
 /// 它把 gRPC 请求、定时器回调和 WASM 调用串成一条统一的 Job 处理链路。
@@ -180,64 +192,102 @@ impl JobServiceImpl {
         payload: Option<Vec<u8>>,
     ) -> Result<(), Status> {
         let flow = self.flow_registration_for_job(&job).await?;
-        // 只在 engine 锁里完成“查拓扑、算下一步”这类纯读操作，
-        // 拿到执行计划后立刻释放锁，避免后续 WASM 调用阻塞其他 Job 读取同一个 Flow。
-        let (from, to, action, guard, on_exit, on_enter, is_terminal, timeouts) = {
+        // 只在 engine 访问阶段完成“查拓扑、拿候选边”这类纯读操作，
+        // guard 选择和后续 WASM 调用都在锁外完成，避免阻塞其他 Job 读取同一个 Flow。
+        let candidates = {
             let engine = self
                 .state
                 .flow_registry
                 .versioned_engine(&job.flow_id, job.flow_version)
                 .await
                 .ok_or_else(|| Status::internal("engine not found for flow"))?;
-            let result = engine
-                .process_event(&job.current_state, &event)
-                .map_err(|e| Status::failed_precondition(e.to_string()))?;
             let from_state = engine
-                .get_state(&result.from)
+                .get_state(&job.current_state)
                 .ok_or_else(|| Status::internal("source state not found in manifest"))?;
-            let to_state = engine
-                .get_state(&result.to)
-                .ok_or_else(|| Status::internal("target state not found in manifest"))?;
-            let next_timeouts = if engine.is_terminal(&result.to) {
-                Vec::new()
-            } else {
-                engine
-                    .manifest()
-                    .transitions
-                    .iter()
-                    .filter(|t| t.from == result.to)
-                    .filter_map(|t| t.timeout.clone())
-                    .collect()
-            };
-
-            (
-                result.from,
-                result.to.clone(),
-                result.action,
-                result.guard,
-                from_state.on_exit.clone(),
-                to_state.on_enter.clone(),
-                engine.is_terminal(&result.to),
-                next_timeouts,
-            )
-        };
-
-        if let Some(guard_name) = guard.as_deref() {
-            // guard 失败时不能提交转移，所以必须先于 transition_job 执行。
-            let guard_ctx = GuardContext {
-                job_id: job.id.to_string(),
-                from_state: from.clone(),
-                to_state: to.clone(),
-                event: event.clone(),
-                payload: payload.clone(),
-            };
-            let allowed = self.invoke_guard(&flow, guard_name, guard_ctx).await?;
-            if !allowed {
+            let transitions = engine.find_transitions(&job.current_state, &event);
+            if transitions.is_empty() {
                 return Err(Status::failed_precondition(
-                    ShirohaError::GuardRejected.to_string(),
+                    ShirohaError::InvalidTransition {
+                        from: job.current_state.clone(),
+                        to: String::new(),
+                        event: event.clone(),
+                    }
+                    .to_string(),
                 ));
             }
+
+            transitions
+                .into_iter()
+                .map(|transition| {
+                    let to_state = engine
+                        .get_state(&transition.to)
+                        .ok_or_else(|| Status::internal("target state not found in manifest"))?;
+                    let next_timeouts = if engine.is_terminal(&transition.to) {
+                        Vec::new()
+                    } else {
+                        engine
+                            .manifest()
+                            .transitions
+                            .iter()
+                            .filter(|candidate| candidate.from == transition.to)
+                            .filter_map(|candidate| candidate.timeout.clone())
+                            .collect()
+                    };
+
+                    Ok(TransitionCandidatePlan {
+                        from: transition.from.clone(),
+                        to: transition.to.clone(),
+                        action: transition.action.clone(),
+                        guard: transition.guard.clone(),
+                        on_exit: from_state.on_exit.clone(),
+                        on_enter: to_state.on_enter.clone(),
+                        is_terminal: engine.is_terminal(&transition.to),
+                        timeouts: next_timeouts,
+                    })
+                })
+                .collect::<Result<Vec<_>, Status>>()?
+        };
+
+        let mut selected = None;
+        for candidate in candidates {
+            if let Some(guard_name) = candidate.guard.as_deref() {
+                let allowed = self
+                    .invoke_guard(
+                        &flow,
+                        guard_name,
+                        GuardContext {
+                            job_id: job.id.to_string(),
+                            from_state: candidate.from.clone(),
+                            to_state: candidate.to.clone(),
+                            event: event.clone(),
+                            payload: payload.clone(),
+                        },
+                    )
+                    .await?;
+                if !allowed {
+                    continue;
+                }
+            }
+
+            selected = Some(candidate);
+            break;
         }
+
+        let Some(TransitionCandidatePlan {
+            from,
+            to,
+            action,
+            on_exit,
+            on_enter,
+            is_terminal,
+            timeouts,
+            ..
+        }) = selected
+        else {
+            return Err(Status::failed_precondition(
+                ShirohaError::GuardRejected.to_string(),
+            ));
+        };
 
         // 一旦离开旧状态，旧状态上的 timeout 全部失效，因此先整体撤销再按新状态重建。
         self.state.timer_wheel.cancel_all_job_timers(job.id).await;
@@ -286,7 +336,11 @@ impl JobServiceImpl {
         tracing::info!(job_id = %job.id, event, from, to, "event processed");
 
         if !action_failures.is_empty() {
-            return Err(Status::aborted(action_failures.join("; ")));
+            tracing::warn!(
+                job_id = %job.id,
+                failures = ?action_failures,
+                "event committed with action failures"
+            );
         }
 
         Ok(())
@@ -352,9 +406,24 @@ impl JobServiceImpl {
     ) -> Result<Option<String>, Status> {
         // 当前语义里 action / state hook 都属于“状态推进后的副作用”：
         // 即使执行状态失败，转移和事件日志也已经提交，便于后续审计/补偿。
-        let action_result = self
+        let action_result = match self
             .invoke_action(flow, action_name, job_id, state, payload)
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                let synthetic = ActionResult {
+                    status: ExecutionStatus::Failed,
+                    output: None,
+                };
+                self.record_action_result(job_id, action_name, &synthetic)
+                    .await?;
+                return Ok(Some(format!(
+                    "transition committed but action `{action_name}` failed to execute: {}",
+                    error.message()
+                )));
+            }
+        };
         self.record_action_result(job_id, action_name, &action_result)
             .await?;
         if action_result.status == ExecutionStatus::Success {
@@ -573,7 +642,11 @@ impl JobService for JobServiceImpl {
 
         tracing::info!(job_id = %job.id, flow_id = req.flow_id, "job created");
         if !action_failures.is_empty() {
-            return Err(Status::aborted(action_failures.join("; ")));
+            tracing::warn!(
+                job_id = %job.id,
+                failures = ?action_failures,
+                "job created with initial action failures"
+            );
         }
         Ok(Response::new(CreateJobResponse {
             job_id: job.id.to_string(),
@@ -805,6 +878,60 @@ mod tests {
                     capabilities: Vec::new(),
                 },
             ],
+        }
+    }
+
+    fn first_guard_rejects_second_transition_accepts(flow_id: &str) -> FlowManifest {
+        FlowManifest {
+            id: flow_id.to_string(),
+            host_world: FlowWorld::Sandbox,
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "blocked".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "fallback".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![
+                TransitionDef {
+                    from: "idle".into(),
+                    to: "blocked".into(),
+                    event: "approve".into(),
+                    guard: Some("deny".into()),
+                    action: None,
+                    timeout: None,
+                },
+                TransitionDef {
+                    from: "idle".into(),
+                    to: "fallback".into(),
+                    event: "approve".into(),
+                    guard: None,
+                    action: None,
+                    timeout: None,
+                },
+            ],
+            initial_state: "idle".into(),
+            actions: vec![ActionDef {
+                name: "deny".into(),
+                dispatch: DispatchMode::Local,
+                capabilities: Vec::new(),
+            }],
         }
     }
 
@@ -1268,6 +1395,145 @@ mod tests {
 
         assert_eq!(old_state.current_state, "done");
         assert_eq!(new_state.current_state, "rerouted");
+    }
+
+    #[tokio::test]
+    async fn later_transition_can_win_after_earlier_guard_rejects() {
+        let harness = TestHarness::new("job-service-guard-fallback").await;
+        deploy_flow(
+            harness.state.clone(),
+            "approval",
+            &first_guard_rejects_second_transition_accepts("approval"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect("trigger fallback transition");
+
+        let final_job = wait_for_job(&service, &created.job_id, "completed", "fallback").await;
+        assert_eq!(final_job.current_state, "fallback");
+    }
+
+    #[tokio::test]
+    async fn create_job_succeeds_even_if_initial_hook_cannot_execute() {
+        let harness = TestHarness::new("job-service-initial-hook-failure").await;
+        register_flow_version(
+            &harness.state,
+            "approval",
+            Uuid::now_v7(),
+            initial_on_enter_manifest("approval"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id.clone(),
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        let kinds: Vec<EventKind> = events
+            .events
+            .into_iter()
+            .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
+            .collect();
+        assert!(matches!(kinds[0], EventKind::Created { .. }));
+        assert!(matches!(
+            &kinds[1],
+            EventKind::ActionComplete { action, status, .. }
+                if action == "enter" && *status == ExecutionStatus::Failed
+        ));
+    }
+
+    #[tokio::test]
+    async fn trigger_event_succeeds_even_if_post_transition_action_cannot_execute() {
+        let harness = TestHarness::new("job-service-action-failure-after-commit").await;
+        register_flow_version(
+            &harness.state,
+            "approval",
+            Uuid::now_v7(),
+            approval_manifest_to("approval", "done"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "approval".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect("trigger event should still succeed");
+
+        let final_job = wait_for_job(&service, &created.job_id, "completed", "done").await;
+        assert_eq!(final_job.current_state, "done");
+
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id,
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        let kinds: Vec<EventKind> = events
+            .events
+            .into_iter()
+            .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
+            .collect();
+        assert!(matches!(kinds[1], EventKind::Transition { .. }));
+        assert!(matches!(
+            &kinds[2],
+            EventKind::ActionComplete { action, status, .. }
+                if action == "ship" && *status == ExecutionStatus::Failed
+        ));
+        assert!(matches!(kinds[3], EventKind::Completed { .. }));
     }
 
     #[tokio::test]

@@ -167,9 +167,19 @@ impl Storage for RedbStorage {
         let txn = self.db.begin_write().map_err(s)?;
         {
             let mut table = txn.open_table(FLOWS_TABLE).map_err(s)?;
-            table
-                .insert(flow.flow_id.as_str(), data.as_slice())
-                .map_err(s)?;
+            let replace_latest = match table.get(flow.flow_id.as_str()).map_err(s)? {
+                Some(existing) => {
+                    let existing: FlowRegistration =
+                        serde_json::from_slice(existing.value()).map_err(s)?;
+                    flow.version > existing.version
+                }
+                None => true,
+            };
+            if replace_latest {
+                table
+                    .insert(flow.flow_id.as_str(), data.as_slice())
+                    .map_err(s)?;
+            }
         }
         {
             let mut table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
@@ -407,7 +417,11 @@ impl Storage for RedbStorage {
             events.push(event);
         }
         // 对外统一按事件发生时间返回，避免上层依赖底层 B-tree 迭代顺序。
-        events.sort_by_key(|e: &EventRecord| e.timestamp_ms);
+        events.sort_by(|left, right| {
+            left.timestamp_ms
+                .cmp(&right.timestamp_ms)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         Ok(events)
     }
 }
@@ -676,6 +690,34 @@ mod tests {
         assert_eq!(second_version.version, second.version);
         assert_eq!(latest_list.len(), 1);
         assert_eq!(all_versions.len(), 2);
+
+        drop(storage);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn save_flow_does_not_roll_back_latest_alias_to_older_version() {
+        let path = temp_db_path("flow-latest-alias");
+        let newer = FlowRegistration {
+            version: Uuid::from_u128(10),
+            ..sample_flow_registration_with_id("alpha")
+        };
+        let older = FlowRegistration {
+            version: Uuid::from_u128(5),
+            wasm_hash: "hash-alpha-old".into(),
+            ..newer.clone()
+        };
+        let storage = RedbStorage::new(&path).expect("open db");
+
+        storage.save_flow(&newer).await.expect("save newer flow");
+        storage.save_flow(&older).await.expect("save older flow");
+
+        let latest = storage
+            .get_flow("alpha")
+            .await
+            .expect("get latest")
+            .expect("latest flow exists");
+        assert_eq!(latest.version, newer.version);
 
         drop(storage);
         let _ = std::fs::remove_file(path);
