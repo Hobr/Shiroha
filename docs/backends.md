@@ -14,7 +14,7 @@
 备注：
 
 - Phase 1 真正可用的是 standalone 路径
-- `Transport` trait 已定义，但分布式 transport 仍属于后续阶段
+- `Transport` trait 已定义，但当前主执行链路并未通过该抽象做 `remote` / `fan-out` 分发
 
 ## Storage
 
@@ -35,6 +35,9 @@
 
 ## Context 传递
 
-- 小 context（< 256KB，可配置阈值）：直接内联在消息中
-- 大数据：由 WASM action 通过 network/storage 能力自行处理，框架只传引用
-- 不强制引入共享存储（S3/NFS），减少运维负担
+当前 Phase 1 里，`CreateJobRequest.context` 会跟随 Job 一起持久化，并在 action / guard 调用时传给 guest。
+
+分布式阶段的跨节点 context 传递策略仍属于后续设计：
+
+- 小 context 直接内联
+- 大数据通过 network/storage 能力自行处理，框架只传引用

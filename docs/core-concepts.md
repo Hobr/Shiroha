@@ -15,14 +15,17 @@
 - 状态转移时，按 `on-exit -> transition action -> on-enter` 的顺序执行
 - 这些执行结果和普通 Action 一样会记录到事件日志里
 
-当前限制：
+当前实现状态：
 
-- 如果同一状态下存在多条 `event` 相同的候选转移，运行时会先按声明顺序选中第一条，再评估这条边的 guard
-- 这意味着当前还不支持通过多个 guard 在候选边之间做完整分支选择；建模时应避免依赖这种语义
+- 如果同一状态下存在多条 `event` 相同的候选转移，运行时会按声明顺序逐条评估 guard，并选择第一条通过的边
+- 如果所有候选 guard 都拒绝，则当前事件会失败，不会提交任何状态转移
 
 ## Job
 
 一个 Flow 的运行实例。绑定特定版本的 Flow WASM 模块。
+
+- `CreateJobRequest.context` 会持久化到 Job，并在当前实现里传给 guest 的 action / guard 上下文
+- 但当前 API 仍只返回 `context_bytes`，不会直接暴露原始 context 内容
 
 ### Job 生命周期
 
@@ -78,7 +81,7 @@
 
 ## Execution
 
-一次 Action 的执行。可能在本地、远程单节点、或多节点并行执行。
+一次 Action 的执行。当前 Phase 1 真正可用的是本地执行路径。
 
 当前实现状态：
 
