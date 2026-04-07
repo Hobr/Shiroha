@@ -11,7 +11,7 @@
 - [x] 让多条 `(from, event)` 候选转移真正按 guard 选择可行边，而不是先固定第一条再决定成功/失败
 - [x] 修正 `create_job` 的初始 `on-enter` 语义：不要在 Job 已创建后再返回 `aborted` 且不返回 `job_id`
 - [x] 修正 `trigger_event` / 转移后 action 失败的 RPC 语义：不要在状态转移已提交后仍对调用方表现为原子失败
-- [ ] 明确 timeout 的绑定语义；当前 runtime 只会注入 `timeout_event` 再走普通事件匹配，不会把 timeout 绑定回声明它的那条 transition
+- [x] 明确 timeout 的绑定语义；当前 runtime 只会注入 `timeout_event` 再走普通事件匹配，不会把 timeout 绑定回声明它的那条 transition
 - [x] 补齐 manifest 基础合法性校验：当前不会拒绝重复 state/action 名称、空字符串标识、`timeout.duration_ms = 0`、`FanOutStrategy::Count(0)`、空 `aggregator` / `timeout_event` 等明显无效配置
 - [x] 为 timeout 配置增加静态约束，确保 `timeout_event` 在同一源状态上匹配到唯一且明确的转移
 - [x] 为当前 Phase 1 不支持的 shape 增加 deploy 期前置拒绝策略，例如 `fan-out` action、`fork` / `join`、未落地的 `subprocess` 运行时语义
@@ -21,13 +21,13 @@
 - [x] 为事件排序补充显式 tie-breaker；当前 `RedbStorage` 只显式按 `timestamp_ms` 排序，等 timestamp 的相对顺序没有写进契约
 - [x] 修正 follow 模式的 cursor 推进；当前客户端会对服务端返回事件重新排序，再把“重排后的最后一个 id”作为下一轮 `since_id`
 - [x] 修正 `follow --tail N` 的批次语义；当前实现会对每一批新事件都截尾，不只是首批历史事件
-- [ ] 收紧“列出所有 Job”的发现路径；当前客户端通过 `list_flow_ids()` 聚合 `list_jobs_for_flow()`，若 flow 清单与 job 实际集合失配，`--all` 视图会漏 Job
-- [ ] 解除 `sctl job wait --state` 的歧义；当前同一个参数同时匹配 lifecycle state 和 `current_state`
-- [ ] 决定 `CreateJobRequest.context` 的真实角色；当前它会持久化并在 API 中暴露字节长度，但不会传给 guest action/guard，也没有读取接口
-- [ ] 给 `GetJob` / CLI job 展示补齐 lifetime 可观测性；当前用户可以创建 `max_lifetime_ms`，但后续查询看不到配置值、deadline 或剩余时间
-- [ ] 避免 network capability action 直接阻塞 tokio worker；当前 host 走 `reqwest::blocking`，且 action 调用路径没有 `spawn_blocking` 隔离
-- [ ] 收敛重启恢复的失败域；当前只要有一个持久化 Flow 版本缺少 wasm bytes 或无法重新编译，整个 `shirohad` 启动都会失败
-- [ ] 为 `job_locks` 增加生命周期管理；当前锁只在 `delete_job` 时移除，终态但未删除的 Job 会让锁表持续增长
+- [x] 收紧“列出所有 Job”的发现路径；当前客户端通过 `list_flow_ids()` 聚合 `list_jobs_for_flow()`，若 flow 清单与 job 实际集合失配，`--all` 视图会漏 Job
+- [x] 解除 `sctl job wait --state` 的歧义；当前同一个参数同时匹配 lifecycle state 和 `current_state`
+- [x] 决定 `CreateJobRequest.context` 的真实角色；当前它会持久化并在 API 中暴露字节长度，但不会传给 guest action/guard，也没有读取接口
+- [x] 给 `GetJob` / CLI job 展示补齐 lifetime 可观测性；当前用户可以创建 `max_lifetime_ms`，但后续查询看不到配置值、deadline 或剩余时间
+- [x] 避免 network capability action 直接阻塞 tokio worker；当前 host 走 `reqwest::blocking`，且 action 调用路径没有 `spawn_blocking` 隔离
+- [x] 收敛重启恢复的失败域；当前只要有一个持久化 Flow 版本缺少 wasm bytes 或无法重新编译，整个 `shirohad` 启动都会失败
+- [x] 为 `job_locks` 增加生命周期管理；当前锁只在 `delete_job` 时移除，终态但未删除的 Job 会让锁表持续增长
 
 ## Phase 1 文档收口
 
