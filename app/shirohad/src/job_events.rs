@@ -60,6 +60,11 @@ pub(crate) fn filter_events(
     mut events: Vec<EventRecord>,
     query: &JobEventsQuery,
 ) -> Result<Vec<EventRecord>, Status> {
+    events.sort_by(|left, right| {
+        left.timestamp_ms
+            .cmp(&right.timestamp_ms)
+            .then_with(|| left.id.cmp(&right.id))
+    });
     if let Some(since_id) = query.since_id_text.as_deref() {
         let cursor = parse_uuid(since_id)?;
         let Some(index) = events.iter().position(|event| event.id == cursor) else {
@@ -198,5 +203,26 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert!(matches!(filtered[0].kind, EventKind::Transition { .. }));
+    }
+
+    #[test]
+    fn filter_events_sorts_before_limit() {
+        let job_id = Uuid::from_u128(100);
+        let mut events = sample_events(job_id);
+        events.swap(0, 2);
+
+        let query = validate_query(GetJobEventsRequest {
+            job_id: job_id.to_string(),
+            since_id: None,
+            since_timestamp_ms: None,
+            kind: Vec::new(),
+            limit: Some(1),
+        })
+        .expect("valid query");
+
+        let filtered = filter_events(events, &query).expect("filter events");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, Uuid::from_u128(1));
     }
 }

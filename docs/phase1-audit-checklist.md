@@ -8,19 +8,19 @@
 
 ## Phase 1 必修
 
-- [ ] 让多条 `(from, event)` 候选转移真正按 guard 选择可行边，而不是先固定第一条再决定成功/失败
-- [ ] 修正 `create_job` 的初始 `on-enter` 语义：不要在 Job 已创建后再返回 `aborted` 且不返回 `job_id`
-- [ ] 修正 `trigger_event` / 转移后 action 失败的 RPC 语义：不要在状态转移已提交后仍对调用方表现为原子失败
+- [x] 让多条 `(from, event)` 候选转移真正按 guard 选择可行边，而不是先固定第一条再决定成功/失败
+- [x] 修正 `create_job` 的初始 `on-enter` 语义：不要在 Job 已创建后再返回 `aborted` 且不返回 `job_id`
+- [x] 修正 `trigger_event` / 转移后 action 失败的 RPC 语义：不要在状态转移已提交后仍对调用方表现为原子失败
 - [ ] 明确 timeout 的绑定语义；当前 runtime 只会注入 `timeout_event` 再走普通事件匹配，不会把 timeout 绑定回声明它的那条 transition
 - [ ] 补齐 manifest 基础合法性校验：当前不会拒绝重复 state/action 名称、空字符串标识、`timeout.duration_ms = 0`、`FanOutStrategy::Count(0)`、空 `aggregator` / `timeout_event` 等明显无效配置
 - [ ] 为 timeout 配置增加静态约束，确保 `timeout_event` 在同一源状态上匹配到唯一且明确的转移
 - [ ] 为当前 Phase 1 不支持的 shape 增加 deploy 期前置拒绝策略，例如 `fan-out` action、`fork` / `join`、未落地的 `subprocess` 运行时语义
-- [ ] 修正 latest Flow alias 语义；当前 `save_flow` 在 `MemoryStorage` 和 `RedbStorage` 中都是“最后一次写入覆盖”，并不保证 `get_flow` / `list_flows` 返回版本号最大的注册版本
-- [ ] 统一“latest Flow”在查询与执行路径中的来源；当前 `GetFlow` / `ListFlows` 读 storage latest alias，而 `CreateJob` 读内存 `flow_registry.latest_registration()`
-- [ ] 统一 `GetJobEvents` 的服务端排序契约，并在过滤/`limit`/cursor 之前先按稳定顺序排序
-- [ ] 为事件排序补充显式 tie-breaker；当前 `RedbStorage` 只显式按 `timestamp_ms` 排序，等 timestamp 的相对顺序没有写进契约
-- [ ] 修正 follow 模式的 cursor 推进；当前客户端会对服务端返回事件重新排序，再把“重排后的最后一个 id”作为下一轮 `since_id`
-- [ ] 修正 `follow --tail N` 的批次语义；当前实现会对每一批新事件都截尾，不只是首批历史事件
+- [x] 修正 latest Flow alias 语义；当前 `save_flow` 在 `MemoryStorage` 和 `RedbStorage` 中都是“最后一次写入覆盖”，并不保证 `get_flow` / `list_flows` 返回版本号最大的注册版本
+- [x] 统一“latest Flow”在查询与执行路径中的来源；当前 `GetFlow` / `ListFlows` 读 storage latest alias，而 `CreateJob` 读内存 `flow_registry.latest_registration()`
+- [x] 统一 `GetJobEvents` 的服务端排序契约，并在过滤/`limit`/cursor 之前先按稳定顺序排序
+- [x] 为事件排序补充显式 tie-breaker；当前 `RedbStorage` 只显式按 `timestamp_ms` 排序，等 timestamp 的相对顺序没有写进契约
+- [x] 修正 follow 模式的 cursor 推进；当前客户端会对服务端返回事件重新排序，再把“重排后的最后一个 id”作为下一轮 `since_id`
+- [x] 修正 `follow --tail N` 的批次语义；当前实现会对每一批新事件都截尾，不只是首批历史事件
 - [ ] 收紧“列出所有 Job”的发现路径；当前客户端通过 `list_flow_ids()` 聚合 `list_jobs_for_flow()`，若 flow 清单与 job 实际集合失配，`--all` 视图会漏 Job
 - [ ] 解除 `sctl job wait --state` 的歧义；当前同一个参数同时匹配 lifecycle state 和 `current_state`
 - [ ] 决定 `CreateJobRequest.context` 的真实角色；当前它会持久化并在 API 中暴露字节长度，但不会传给 guest action/guard，也没有读取接口
@@ -74,12 +74,12 @@
 
 ## 建议测试
 
-- [ ] 增加“同一 `(from, event)` 下多候选转移按 guard 选边”的失败用例
-- [ ] 增加“初始 `on-enter` 失败时 create-job 的可见语义”测试
-- [ ] 增加“转移已提交但 action 失败时 trigger-event 的可见语义”测试
+- [x] 增加“同一 `(from, event)` 下多候选转移按 guard 选边”的失败用例
+- [x] 增加“初始 `on-enter` 失败时 create-job 的可见语义”测试
+- [x] 增加“转移已提交但 action 失败时 trigger-event 的可见语义”测试
 - [ ] 增加“`fan-out` flow 在 deploy 期被拒绝或被明确标记 unsupported”测试
 - [ ] 增加“`kind = subprocess` 但缺少 subprocess 配置”的 deploy 校验测试
-- [ ] 增加“旧版本后写入时 latest alias 不能回退”的存储测试
-- [ ] 增加“同毫秒多事件时 `GetJobEvents.since_id` 仍稳定”的查询测试
+- [x] 增加“旧版本后写入时 latest alias 不能回退”的存储测试
+- [x] 增加“同毫秒多事件时 `GetJobEvents.since_id` 仍稳定”的查询测试
 - [ ] 增加“`GetJobEvents.limit` 与后端无关”的测试
 - [ ] 增加“删除 Flow 后 wasm bytes / module cache 生命周期符合约定”的测试

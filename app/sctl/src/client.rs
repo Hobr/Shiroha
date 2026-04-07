@@ -246,28 +246,33 @@ impl ShirohaClient {
     ) -> anyhow::Result<()> {
         let mut since_id = options.since_id.clone();
         let mut since_timestamp_ms = options.since_timestamp_ms;
+        let mut first_batch = true;
 
         loop {
-            let new_events = apply_tail(
-                self.api
-                    .get_job_events(
-                        job_id,
-                        &EventQuery {
-                            since_id: since_id.clone(),
-                            since_timestamp_ms,
-                            limit: options.limit,
-                            kind_filters: options.kind_filters.clone(),
-                        },
-                    )
-                    .await?,
-                options.tail,
-            );
+            let fetched = self
+                .api
+                .get_job_events(
+                    job_id,
+                    &EventQuery {
+                        since_id: since_id.clone(),
+                        since_timestamp_ms,
+                        limit: options.limit,
+                        kind_filters: options.kind_filters.clone(),
+                    },
+                )
+                .await?;
+            let new_events = if first_batch {
+                apply_tail(fetched, options.tail)
+            } else {
+                fetched
+            };
 
             if !new_events.is_empty() {
                 since_id = new_events.last().map(|event| event.id.clone());
                 since_timestamp_ms = None;
                 event_presenter::render_events(&new_events, options.pretty, options.json_output)?;
             }
+            first_batch = false;
 
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {

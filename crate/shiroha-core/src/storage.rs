@@ -116,10 +116,13 @@ impl Storage for MemoryStorage {
             .write()
             .await
             .insert((flow.flow_id.clone(), flow.version), flow.clone());
-        self.flows
-            .write()
-            .await
-            .insert(flow.flow_id.clone(), flow.clone());
+        let mut flows = self.flows.write().await;
+        let replace_latest = flows
+            .get(&flow.flow_id)
+            .is_none_or(|existing| flow.version > existing.version);
+        if replace_latest {
+            flows.insert(flow.flow_id.clone(), flow.clone());
+        }
         Ok(())
     }
 
@@ -217,14 +220,20 @@ impl Storage for MemoryStorage {
     }
 
     async fn get_events(&self, job_id: Uuid) -> Result<Vec<EventRecord>> {
-        Ok(self
+        let mut events = self
             .events
             .read()
             .await
             .iter()
             .filter(|e| e.job_id == job_id)
             .cloned()
-            .collect())
+            .collect::<Vec<_>>();
+        events.sort_by(|left, right| {
+            left.timestamp_ms
+                .cmp(&right.timestamp_ms)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(events)
     }
 }
 
@@ -377,5 +386,22 @@ mod tests {
             .map(|flow| flow.version.as_u128())
             .collect::<Vec<_>>();
         assert_eq!(listed_versions, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[tokio::test]
+    async fn save_flow_keeps_latest_alias_on_highest_version() {
+        let storage = MemoryStorage::new();
+        let newer = flow_registration("alpha", Uuid::from_u128(10));
+        let older = flow_registration("alpha", Uuid::from_u128(5));
+
+        storage.save_flow(&newer).await.expect("save newer flow");
+        storage.save_flow(&older).await.expect("save older flow");
+
+        let latest = storage
+            .get_flow("alpha")
+            .await
+            .expect("get latest")
+            .expect("latest flow exists");
+        assert_eq!(latest.version, newer.version);
     }
 }
