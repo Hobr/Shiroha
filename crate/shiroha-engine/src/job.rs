@@ -15,6 +15,14 @@ use shiroha_core::job::{ExecutionStatus, Job, JobState, PendingJobEvent, Schedul
 use shiroha_core::storage::Storage;
 use uuid::Uuid;
 
+/// Job 创建时的可选生命周期/定时器配置。
+#[derive(Debug, Clone, Default)]
+pub struct JobCreationOptions {
+    pub max_lifetime_ms: Option<u64>,
+    pub lifetime_deadline_ms: Option<u64>,
+    pub scheduled_timeouts: Vec<ScheduledTimeout>,
+}
+
 /// Job 生命周期管理器
 ///
 /// 泛型参数 `S` 允许注入不同的存储后端（MemoryStorage / RedbStorage）。
@@ -77,28 +85,33 @@ impl<S: Storage> JobManager<S> {
         max_lifetime_ms: Option<u64>,
         lifetime_deadline_ms: Option<u64>,
     ) -> Result<Job> {
-        self.create_job_with_lifetime_and_schedule(
+        self.create_job_with_options(
             flow_id,
             flow_version,
             initial_state,
             context,
-            max_lifetime_ms,
-            lifetime_deadline_ms,
-            Vec::new(),
+            JobCreationOptions {
+                max_lifetime_ms,
+                lifetime_deadline_ms,
+                scheduled_timeouts: Vec::new(),
+            },
         )
         .await
     }
 
-    pub async fn create_job_with_lifetime_and_schedule(
+    pub async fn create_job_with_options(
         &self,
         flow_id: &str,
         flow_version: Uuid,
         initial_state: &str,
         context: Option<Vec<u8>>,
-        max_lifetime_ms: Option<u64>,
-        lifetime_deadline_ms: Option<u64>,
-        scheduled_timeouts: Vec<ScheduledTimeout>,
+        options: JobCreationOptions,
     ) -> Result<Job> {
+        let JobCreationOptions {
+            max_lifetime_ms,
+            lifetime_deadline_ms,
+            scheduled_timeouts,
+        } = options;
         let job = Job {
             id: Uuid::now_v7(),
             flow_id: flow_id.to_string(),
