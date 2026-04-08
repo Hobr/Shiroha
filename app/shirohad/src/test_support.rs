@@ -5,11 +5,13 @@
 //! 其中 runtime helper 的 flow metadata 注册路径会复用生产侧同一个
 //! `FlowRegistry` 入口，避免测试代码旁路内存 registry 更新逻辑。
 
+use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::{fs, process::Command};
 
+use fs2::FileExt;
 use hyper_util::rt::TokioIo;
 use shiroha_core::flow::FlowManifest;
 use shiroha_proto::shiroha_api::ListFlowsRequest;
@@ -31,6 +33,19 @@ pub(crate) use flow_builders::{
     approval_manifest, approval_manifest_to, timeout_manifest, warning_manifest,
 };
 pub(crate) use runtime_helpers::{deploy_flow, register_flow_version, wait_for_job};
+
+struct BuildLockGuard {
+    _thread_guard: std::sync::MutexGuard<'static, ()>,
+    file: File,
+}
+
+impl Drop for BuildLockGuard {
+    fn drop(&mut self) {
+        self.file
+            .unlock()
+            .expect("unlock cross-process cargo build lock");
+    }
+}
 
 pub(crate) struct TestHarness {
     pub(crate) state: Arc<ShirohaState>,
@@ -194,12 +209,9 @@ pub(crate) fn wasm_for_manifest(manifest: &FlowManifest) -> Vec<u8> {
         return fs::read(&wasm_path).expect("read cached component fixture");
     }
 
-    static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-    // cargo build 会写同一个 target 目录；串行化能避免并发测试互相踩缓存。
-    let _guard = BUILD_LOCK
-        .get_or_init(|| StdMutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // nextest 会把测试拆成多个进程；这里需要跨进程序列化 cargo build，
+    // 否则 fixture/example 子构建会同时争抢包缓存和线程资源。
+    let _guard = acquire_cargo_build_lock();
 
     if wasm_path.exists() {
         return fs::read(&wasm_path).expect("read cached component fixture");
@@ -211,6 +223,8 @@ pub(crate) fn wasm_for_manifest(manifest: &FlowManifest) -> Vec<u8> {
     let status = Command::new("cargo")
         .arg("build")
         .arg("--offline")
+        .arg("--jobs")
+        .arg("1")
         .arg("--manifest-path")
         .arg(&fixture_manifest)
         .arg("--target")
@@ -274,11 +288,7 @@ pub(crate) fn example_wasm(manifest_path: &str, package_name: &str) -> Vec<u8> {
         return fs::read(&wasm_path).expect("read cached example component");
     }
 
-    static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-    let _guard = BUILD_LOCK
-        .get_or_init(|| StdMutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = acquire_cargo_build_lock();
 
     if wasm_path.exists() {
         return fs::read(&wasm_path).expect("read cached example component");
@@ -288,6 +298,8 @@ pub(crate) fn example_wasm(manifest_path: &str, package_name: &str) -> Vec<u8> {
     let status = Command::new("cargo")
         .arg("build")
         .arg("--offline")
+        .arg("--jobs")
+        .arg("1")
         .arg("--manifest-path")
         .arg(&manifest_path)
         .arg("--target")
@@ -315,6 +327,31 @@ fn tracked_flow_fixture_input_paths() -> Vec<PathBuf> {
         workspace_root.join("crate/shiroha-wit/wit/storage-flow.wit"),
         workspace_root.join("crate/shiroha-wit/wit/full-flow.wit"),
     ]
+}
+
+fn acquire_cargo_build_lock() -> BuildLockGuard {
+    static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    let thread_guard = BUILD_LOCK
+        .get_or_init(|| StdMutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let lock_dir = std::env::temp_dir().join("shiroha-build-locks");
+    fs::create_dir_all(&lock_dir).expect("create cargo build lock dir");
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_dir.join("cargo-build.lock"))
+        .expect("open cross-process cargo build lock");
+    file.lock_exclusive()
+        .expect("acquire cross-process cargo build lock");
+
+    BuildLockGuard {
+        _thread_guard: thread_guard,
+        file,
+    }
 }
 
 fn temp_data_dir(prefix: &str) -> PathBuf {
