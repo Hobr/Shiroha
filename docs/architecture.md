@@ -61,7 +61,8 @@ Shiroha 提供一种能力：将状态机的 Action/Callback 等计算密集或 
 当前实现状态：
 
 - Phase 1 只有 `standalone` 路径是完整可用的
-- `remote` action 在 standalone 中仍复用本地 WASM 调用路径，不代表已经存在真实 Node 执行边界
+- `remote` action 在 standalone 中已经会经过 controller -> in-process transport -> 同进程 node worker 的执行边界，但这仍不是独立进程 Node
+- standalone 下的 `fan-out` 也已可用，但只会映射到同进程 fan-out 槽位，不代表真实多节点集群调度
 - `controller` / `node` 模式对应的分离部署仍属于后续阶段
 
 ## 详细设计
