@@ -11,6 +11,7 @@ use shiroha_core::flow::{ActionCapability, FlowRegistration};
 use shiroha_core::job::ActionResult;
 use shiroha_core::transport::{InProcessTransport, Response};
 use shiroha_wasm::host::{ActionContext, WasmHost};
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::server::ShirohaState;
@@ -108,12 +109,12 @@ async fn handle_transport_request(
 pub(crate) async fn spawn_standalone_node_worker(
     state: Arc<ShirohaState>,
     transport: Arc<InProcessTransport>,
-) {
+) -> JoinHandle<()> {
     let mut receiver = transport.register_node(STANDALONE_NODE_ID).await;
     tokio::spawn(async move {
         while let Some(request) = receiver.recv().await {
             let response = handle_transport_request(state.clone(), request.message.payload).await;
             let _ = request.respond.send(response);
         }
-    });
+    })
 }

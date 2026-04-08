@@ -119,13 +119,13 @@ impl Guest for FlowComponent {
     }
 
     fn supports_action(name: String) -> bool {
-        matches!(name.as_str(), "ship" | "enter" | "exit")
+        matches!(name.as_str(), "ship" | "enter" | "exit" | "collect")
     }
 
     fn supports_guard(name: String) -> bool {
         matches!(
             name.as_str(),
-            "allow" | "allow_approve" | "require-context"
+            "allow" | "allow_approve" | "deny" | "require-context"
         )
     }
 
@@ -135,7 +135,7 @@ impl Guest for FlowComponent {
 
     fn invoke_action(name: String, ctx: ActionContext) -> ActionResult {
         match name.as_str() {
-            "ship" | "enter" | "exit" => {
+            "ship" | "enter" | "exit" | "collect" => {
                 let payload_len = ctx.payload.as_ref().map_or(0, Vec::len);
                 ActionResult {
                     status: ExecutionStatus::Success,
@@ -159,6 +159,7 @@ impl Guest for FlowComponent {
         match name.as_str() {
             "allow" => ctx.event == "approve" && ctx.to_state == "done",
             "allow_approve" => ctx.event == "approve",
+            "deny" => false,
             "require-context" => ctx.context.as_ref().is_some_and(|bytes| !bytes.is_empty()),
             _ => false,
         }
