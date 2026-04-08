@@ -43,7 +43,8 @@ just build
 
 ### 2. 启动本地服务端
 
-默认会把数据写到 `./data/shiroha.redb`:
+默认会把数据写到 `./data/shiroha.redb`，并把 JSON tracing 按天滚动写到
+`./data/logs/shirohad.log.YYYY-MM-DD`；同样的日志也会继续输出到终端：
 
 ```bash
 just shirohad --listen 127.0.0.1:50051 --data-dir ./data

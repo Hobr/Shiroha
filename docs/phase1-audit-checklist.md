@@ -17,7 +17,6 @@
 - [ ] 实现真正的 Controller 本地 `timer wheel`；当前定时器仍是一 timer 一 `tokio::sleep` 任务的近似实现
 - [ ] 为 `DispatchMode::Remote` 补上 standalone 内真实的 Controller/Node 执行边界与 in-process transport 链路；当前仍直接复用本地 WASM 调用路径
 - [ ] 为 `fan-out` 补上 standalone 运行时分发、结果收集和 `aggregate()` 后的状态推进；当前 deploy 仍直接拒绝 `fan-out` action
-- [ ] 交付可被视为“结构化日志”的 tracing 输出形态；当前 daemon 默认仍是 `tracing_subscriber::fmt()` 文本输出
 
 ## Phase 1 文档与验收收口
 
