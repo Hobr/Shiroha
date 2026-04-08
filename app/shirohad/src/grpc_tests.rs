@@ -289,68 +289,29 @@ async fn grpc_simple_example_component_runs_end_to_end() {
 
 #[tokio::test]
 #[ignore = "heavy grpc integration smoke; run explicitly when validating shirohad end-to-end"]
-async fn grpc_advanced_example_runs_supported_submit_path() {
+async fn grpc_advanced_example_is_rejected_by_phase1_runtime() {
     let Some(server) = LiveGrpcServer::start("grpc-example-advanced").await else {
         return;
     };
     let mut flow = server.flow_client().await;
-    let mut job = server.job_client().await;
-
-    deploy_wasm(
-        &mut flow,
-        "advanced",
-        example_wasm("example/advanced/Cargo.toml", "advanced"),
-    )
-    .await;
-
-    let created = job
-        .create_job(CreateJobRequest {
+    let error = flow
+        .deploy_flow(DeployFlowRequest {
             flow_id: "advanced".into(),
-            context: Some(b"quote-request".to_vec()),
-            max_lifetime_ms: None,
+            wasm_bytes: example_wasm("example/advanced/Cargo.toml", "advanced"),
         })
         .await
-        .expect("create job")
-        .into_inner();
+        .expect_err("advanced example should be rejected");
 
-    job.trigger_event(TriggerEventRequest {
-        job_id: created.job_id.clone(),
-        event: "submit".into(),
-        payload: Some(b"draft-ready".to_vec()),
-    })
-    .await
-    .expect("trigger submit");
-
-    wait_for_job(&mut job, &created.job_id, "running", "legal-review").await;
-
-    let events = job
-        .get_job_events(GetJobEventsRequest {
-            job_id: created.job_id,
-            since_id: None,
-            since_timestamp_ms: None,
-            limit: None,
-            kind: Vec::new(),
-        })
-        .await
-        .expect("get events")
-        .into_inner();
-    let kinds: Vec<EventKind> = events
-        .events
-        .into_iter()
-        .map(|event| serde_json::from_str(&event.kind_json).expect("event json"))
-        .collect();
-
-    assert!(matches!(kinds[0], EventKind::Created { .. }));
-    assert!(matches!(kinds[1], EventKind::Transition { .. }));
-    assert!(matches!(
-        &kinds[2],
-        EventKind::ActionComplete { action, .. } if action == "normalize-request"
-    ));
+    assert_eq!(error.code(), tonic::Code::Unimplemented);
+    assert!(
+        error.message().contains("subprocess state `legal-review`"),
+        "unexpected deploy error: {error}"
+    );
 }
 
 #[tokio::test]
 #[ignore = "heavy grpc integration smoke; run explicitly when validating shirohad end-to-end"]
-async fn grpc_subprocess_examples_support_manual_parent_child_progression() {
+async fn grpc_subprocess_child_example_runs_and_parent_example_is_rejected() {
     let Some(server) = LiveGrpcServer::start("grpc-example-sub").await else {
         return;
     };
@@ -363,13 +324,6 @@ async fn grpc_subprocess_examples_support_manual_parent_child_progression() {
         example_wasm("example/sub/child/Cargo.toml", "child"),
     )
     .await;
-    deploy_wasm(
-        &mut flow,
-        "purchase-parent-demo",
-        example_wasm("example/sub/parent/Cargo.toml", "parent"),
-    )
-    .await;
-
     let child_job = job
         .create_job(CreateJobRequest {
             flow_id: "legal-review-demo".into(),
@@ -388,30 +342,16 @@ async fn grpc_subprocess_examples_support_manual_parent_child_progression() {
     .expect("trigger child approve");
     wait_for_job(&mut job, &child_job.job_id, "completed", "approved").await;
 
-    let parent_job = job
-        .create_job(CreateJobRequest {
+    let error = flow
+        .deploy_flow(DeployFlowRequest {
             flow_id: "purchase-parent-demo".into(),
-            context: None,
-            max_lifetime_ms: None,
+            wasm_bytes: example_wasm("example/sub/parent/Cargo.toml", "parent"),
         })
         .await
-        .expect("create parent job")
-        .into_inner();
-    job.trigger_event(TriggerEventRequest {
-        job_id: parent_job.job_id.clone(),
-        event: "submit".into(),
-        payload: Some(b"legal-review-request".to_vec()),
-    })
-    .await
-    .expect("trigger submit");
-    wait_for_job(&mut job, &parent_job.job_id, "running", "legal-review").await;
-
-    job.trigger_event(TriggerEventRequest {
-        job_id: parent_job.job_id.clone(),
-        event: "legal-review-complete".into(),
-        payload: None,
-    })
-    .await
-    .expect("simulate child completion");
-    wait_for_job(&mut job, &parent_job.job_id, "completed", "approved").await;
+        .expect_err("parent subprocess example should be rejected");
+    assert_eq!(error.code(), tonic::Code::Unimplemented);
+    assert!(
+        error.message().contains("subprocess state `legal-review`"),
+        "unexpected deploy error: {error}"
+    );
 }
