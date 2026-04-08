@@ -1,9 +1,12 @@
+use std::fs::{File, OpenOptions};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex as StdMutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use fs2::FileExt;
 use serde_json::Value;
 
 fn workspace_root() -> PathBuf {
@@ -13,16 +16,32 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
 }
 
+struct CargoBuildLockGuard {
+    _thread_guard: std::sync::MutexGuard<'static, ()>,
+    file: File,
+}
+
+impl Drop for CargoBuildLockGuard {
+    fn drop(&mut self) {
+        self.file
+            .unlock()
+            .expect("unlock cross-process cargo build lock");
+    }
+}
+
 fn shirohad_binary() -> PathBuf {
     let root = workspace_root();
     let binary = root
         .join("target")
         .join("debug")
         .join(format!("shirohad{}", std::env::consts::EXE_SUFFIX));
+    let _guard = acquire_cargo_build_lock();
     // 这里始终重建一次，避免 ignored round-trip 复用过期的 `target/debug/shirohad`
     // 导致新增 RPC 没有进入真实服务进程。
     let status = Command::new("cargo")
         .arg("build")
+        .arg("--jobs")
+        .arg("1")
         .arg("-p")
         .arg("shirohad")
         .current_dir(&root)
@@ -49,9 +68,12 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 fn build_example(manifest_path: &str, package_name: &str) -> PathBuf {
     let root = workspace_root();
     let manifest = root.join(manifest_path);
+    let _guard = acquire_cargo_build_lock();
     let status = Command::new("cargo")
         .arg("build")
         .arg("--offline")
+        .arg("--jobs")
+        .arg("1")
         .arg("--manifest-path")
         .arg(&manifest)
         .arg("--target")
@@ -139,6 +161,31 @@ fn parse_json(stdout: &[u8]) -> Value {
 
 fn temp_file_path(prefix: &str, extension: &str) -> PathBuf {
     unique_temp_dir(prefix).join(format!("sctl-complete.{extension}"))
+}
+
+fn acquire_cargo_build_lock() -> CargoBuildLockGuard {
+    static BUILD_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    let thread_guard = BUILD_LOCK
+        .get_or_init(|| StdMutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let lock_dir = std::env::temp_dir().join("shiroha-build-locks");
+    std::fs::create_dir_all(&lock_dir).expect("create cargo build lock dir");
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_dir.join("cargo-build.lock"))
+        .expect("open cross-process cargo build lock");
+    file.lock_exclusive()
+        .expect("acquire cross-process cargo build lock");
+
+    CargoBuildLockGuard {
+        _thread_guard: thread_guard,
+        file,
+    }
 }
 
 #[test]
@@ -399,7 +446,7 @@ fn cli_json_round_trip_against_real_server() {
             "wait",
             "--job-id",
             &job_id,
-            "--state",
+            "--current-state",
             "approved",
             "--timeout-ms",
             "5000",

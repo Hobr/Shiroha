@@ -64,6 +64,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 
 # 存储
 redb = "4.0"
+fs2 = "0.4"
 
 # 配置管理
 config = "0.15"
