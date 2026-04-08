@@ -26,8 +26,8 @@ pub struct FlowServiceImpl {
 }
 
 impl FlowServiceImpl {
-    const NETWORK_IMPORT: &str = "shiroha:flow/net@0.1.1";
-    const STORAGE_IMPORT: &str = "shiroha:flow/store@0.1.1";
+    const NETWORK_IMPORT: &str = "shiroha:flow/net@0.1.2";
+    const STORAGE_IMPORT: &str = "shiroha:flow/store@0.1.2";
 
     pub fn new(state: Arc<ShirohaState>) -> Self {
         Self { state }

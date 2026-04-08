@@ -1,4 +1,4 @@
-package shiroha:flow@0.1.1;
+package shiroha:flow@0.1.2;
 
 world flow {
   record flow-manifest {
