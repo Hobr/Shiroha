@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use shiroha_core::error::ShirohaError;
-use shiroha_core::flow::{ActionCapability, DispatchMode, FlowRegistration, TimeoutDef};
+use shiroha_core::flow::{ActionCapability, DispatchMode, FlowRegistration, StateKind, TimeoutDef};
 use shiroha_core::job::{ActionResult, ExecutionStatus, Job, JobState, ScheduledTimeout};
 use shiroha_proto::shiroha_api::job_service_server::JobService;
 use shiroha_proto::shiroha_api::{
@@ -102,7 +102,14 @@ impl JobServiceImpl {
         // 所有入口都先拿到同一把 Job 锁，确保单个 Job 的状态转移严格串行。
         let lock = self.job_lock(job_id).await;
         let _guard = lock.lock().await;
-        self.handle_event_locked(job_id, event, payload).await
+        let result = self.handle_event_locked(job_id, event, payload).await;
+        if result
+            .as_ref()
+            .is_err_and(|error| error.code() == tonic::Code::NotFound)
+        {
+            self.remove_job_lock(job_id).await;
+        }
+        result
     }
 
     async fn job_lock(&self, job_id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
@@ -298,7 +305,24 @@ impl JobServiceImpl {
         self.state.timer_wheel.cancel_all_job_timers(job.id).await;
         self.state
             .job_manager
-            .transition_job(job.id, &event, &from, &to, action.clone())
+            .transition_job_with_schedule(
+                job.id,
+                &event,
+                &from,
+                &to,
+                action.clone(),
+                if is_terminal {
+                    Vec::new()
+                } else {
+                    timeouts
+                        .iter()
+                        .map(|timeout| ScheduledTimeout {
+                            event: timeout.timeout_event.clone(),
+                            remaining_ms: timeout.duration_ms,
+                        })
+                        .collect()
+                },
+            )
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -336,7 +360,7 @@ impl JobServiceImpl {
             self.remove_job_lock(job.id).await;
         } else {
             // timeout 是“状态出边”的属性，所以进入新状态后要重新扫描所有出边注册。
-            self.persist_and_register_timeouts(job.id, timeouts).await?;
+            self.rearm_persisted_timeouts(job.id).await?;
             self.register_lifetime_timer_if_needed(&job).await;
         }
 
@@ -424,16 +448,34 @@ impl JobServiceImpl {
                     status: ExecutionStatus::Failed,
                     output: None,
                 };
-                self.record_action_result(job_id, action_name, &synthetic)
-                    .await?;
+                if let Err(record_error) = self
+                    .record_action_result(job_id, action_name, &synthetic)
+                    .await
+                {
+                    tracing::error!(
+                        job_id = %job_id,
+                        action = action_name,
+                        error = %record_error,
+                        "failed to persist synthetic action result after committed transition"
+                    );
+                }
                 return Ok(Some(format!(
                     "transition committed but action `{action_name}` failed to execute: {}",
                     error.message()
                 )));
             }
         };
-        self.record_action_result(job_id, action_name, &action_result)
-            .await?;
+        if let Err(record_error) = self
+            .record_action_result(job_id, action_name, &action_result)
+            .await
+        {
+            tracing::error!(
+                job_id = %job_id,
+                action = action_name,
+                error = %record_error,
+                "failed to persist action result after committed transition"
+            );
+        }
         if action_result.status == ExecutionStatus::Success {
             return Ok(None);
         }
@@ -442,42 +484,6 @@ impl JobServiceImpl {
             "transition committed but action `{action_name}` finished with status {}",
             execution_status_name(action_result.status)
         )))
-    }
-
-    async fn register_timeout(&self, job_id: Uuid, timeout: TimeoutDef) {
-        self.state
-            .timer_wheel
-            .register(
-                job_id,
-                timeout.timeout_event,
-                std::time::Duration::from_millis(timeout.duration_ms),
-            )
-            .await;
-    }
-
-    async fn persist_and_register_timeouts(
-        &self,
-        job_id: Uuid,
-        timeouts: Vec<TimeoutDef>,
-    ) -> Result<(), Status> {
-        self.state
-            .job_manager
-            .replace_timeout_schedule(
-                job_id,
-                timeouts
-                    .iter()
-                    .map(|timeout| ScheduledTimeout {
-                        event: timeout.timeout_event.clone(),
-                        remaining_ms: timeout.duration_ms,
-                    })
-                    .collect(),
-            )
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-        for timeout in timeouts {
-            self.register_timeout(job_id, timeout).await;
-        }
-        Ok(())
     }
 
     async fn rearm_persisted_timeouts(&self, job_id: Uuid) -> Result<(), Status> {
@@ -603,6 +609,14 @@ fn map_delete_job_error(error: ShirohaError) -> Status {
     }
 }
 
+fn map_job_lifecycle_error(error: ShirohaError) -> Status {
+    match error {
+        ShirohaError::JobNotFound(_) => Status::not_found(error.to_string()),
+        ShirohaError::InvalidJobState { .. } => Status::failed_precondition(error.to_string()),
+        _ => Status::internal(error.to_string()),
+    }
+}
+
 #[tonic::async_trait]
 impl JobService for JobServiceImpl {
     /// 创建 Job：查找 Flow → 创建运行实例 → 注册初始状态的定时器
@@ -623,28 +637,45 @@ impl JobService for JobServiceImpl {
         let deadline = req
             .max_lifetime_ms
             .map(|lifetime_ms| Self::now_ms().saturating_add(lifetime_ms));
-
-        let job = self
-            .state
-            .job_manager
-            .create_job_with_lifetime(
-                &flow.flow_id,
-                flow.version,
-                &flow.manifest.initial_state,
-                req.context,
-                req.max_lifetime_ms,
-                deadline,
-            )
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        let mut action_failures = Vec::new();
         let initial_state = flow
             .manifest
             .states
             .iter()
             .find(|state| state.name == flow.manifest.initial_state)
             .ok_or_else(|| Status::internal("initial state not found in manifest"))?;
+        let initial_timeouts = if initial_state.kind == StateKind::Terminal {
+            Vec::new()
+        } else {
+            flow.manifest
+                .transitions
+                .iter()
+                .filter(|transition| transition.from == flow.manifest.initial_state)
+                .filter_map(|transition| transition.timeout.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let job = self
+            .state
+            .job_manager
+            .create_job_with_lifetime_and_schedule(
+                &flow.flow_id,
+                flow.version,
+                &flow.manifest.initial_state,
+                req.context,
+                req.max_lifetime_ms,
+                deadline,
+                initial_timeouts
+                    .iter()
+                    .map(|timeout| ScheduledTimeout {
+                        event: timeout.timeout_event.clone(),
+                        remaining_ms: timeout.duration_ms,
+                    })
+                    .collect(),
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let mut action_failures = Vec::new();
         if let Some(on_enter) = initial_state.on_enter.as_deref()
             && let Some(message) = self
                 .run_declared_action(
@@ -660,16 +691,16 @@ impl JobService for JobServiceImpl {
             action_failures.push(message);
         }
 
-        let initial_timeouts = flow
-            .manifest
-            .transitions
-            .iter()
-            .filter(|transition| transition.from == flow.manifest.initial_state)
-            .filter_map(|transition| transition.timeout.clone())
-            .collect::<Vec<_>>();
-        self.persist_and_register_timeouts(job.id, initial_timeouts)
-            .await?;
-        self.register_lifetime_timer_if_needed(&job).await;
+        if initial_state.kind == StateKind::Terminal {
+            self.state
+                .job_manager
+                .complete_job(job.id, &flow.manifest.initial_state)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+        } else {
+            self.rearm_persisted_timeouts(job.id).await?;
+            self.register_lifetime_timer_if_needed(&job).await;
+        }
 
         tracing::info!(job_id = %job.id, flow_id = req.flow_id, "job created");
         if !action_failures.is_empty() {
@@ -735,11 +766,15 @@ impl JobService for JobServiceImpl {
         let lock = self.job_lock(job_id).await;
         let _guard = lock.lock().await;
 
-        self.state
-            .job_manager
-            .delete_job(job_id)
-            .await
-            .map_err(map_delete_job_error)?;
+        match self.state.job_manager.delete_job(job_id).await {
+            Ok(()) => {}
+            Err(error) => {
+                if matches!(error, ShirohaError::JobNotFound(_)) {
+                    self.remove_job_lock(job_id).await;
+                }
+                return Err(map_delete_job_error(error));
+            }
+        }
         self.state.timer_wheel.cancel_all_job_timers(job_id).await;
         self.remove_job_lock(job_id).await;
 
@@ -768,11 +803,15 @@ impl JobService for JobServiceImpl {
         let lock = self.job_lock(job_id).await;
         let _guard = lock.lock().await;
 
-        self.state
-            .job_manager
-            .pause_job(job_id)
-            .await
-            .map_err(|e| Status::failed_precondition(e.to_string()))?;
+        match self.state.job_manager.pause_job(job_id).await {
+            Ok(()) => {}
+            Err(error) => {
+                if matches!(error, ShirohaError::JobNotFound(_)) {
+                    self.remove_job_lock(job_id).await;
+                }
+                return Err(map_job_lifecycle_error(error));
+            }
+        }
         self.state.timer_wheel.pause_job_timers(job_id).await;
 
         Ok(Response::new(PauseJobResponse {}))
@@ -786,11 +825,15 @@ impl JobService for JobServiceImpl {
         let lock = self.job_lock(job_id).await;
         let _guard = lock.lock().await;
 
-        self.state
-            .job_manager
-            .resume_job(job_id)
-            .await
-            .map_err(|e| Status::failed_precondition(e.to_string()))?;
+        match self.state.job_manager.resume_job(job_id).await {
+            Ok(()) => {}
+            Err(error) => {
+                if matches!(error, ShirohaError::JobNotFound(_)) {
+                    self.remove_job_lock(job_id).await;
+                }
+                return Err(map_job_lifecycle_error(error));
+            }
+        }
         self.state.timer_wheel.cancel_all_job_timers(job_id).await;
         self.rearm_persisted_timeouts(job_id).await?;
         let job = self.load_job(job_id).await?;
@@ -808,11 +851,15 @@ impl JobService for JobServiceImpl {
         let lock = self.job_lock(job_id).await;
         let _guard = lock.lock().await;
 
-        self.state
-            .job_manager
-            .cancel_job(job_id)
-            .await
-            .map_err(|e| Status::failed_precondition(e.to_string()))?;
+        match self.state.job_manager.cancel_job(job_id).await {
+            Ok(()) => {}
+            Err(error) => {
+                if matches!(error, ShirohaError::JobNotFound(_)) {
+                    self.remove_job_lock(job_id).await;
+                }
+                return Err(map_job_lifecycle_error(error));
+            }
+        }
         self.state.timer_wheel.cancel_all_job_timers(job_id).await;
         self.remove_job_lock(job_id).await;
 
@@ -926,6 +973,23 @@ mod tests {
                     capabilities: Vec::new(),
                 },
             ],
+        }
+    }
+
+    fn initial_terminal_manifest(flow_id: &str) -> FlowManifest {
+        FlowManifest {
+            id: flow_id.to_string(),
+            host_world: FlowWorld::Sandbox,
+            states: vec![StateDef {
+                name: "done".into(),
+                kind: StateKind::Terminal,
+                on_enter: None,
+                on_exit: None,
+                subprocess: None,
+            }],
+            transitions: vec![],
+            initial_state: "done".into(),
+            actions: vec![],
         }
     }
 
@@ -1735,6 +1799,88 @@ mod tests {
                 if action == "ship" && *status == ExecutionStatus::Failed
         ));
         assert!(matches!(kinds[3], EventKind::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn missing_job_request_does_not_leave_job_lock_behind() {
+        let harness = TestHarness::new("job-service-missing-job-lock-cleanup").await;
+        let service = JobServiceImpl::new(harness.state.clone());
+        let missing_job_id = Uuid::now_v7();
+
+        let error = service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: missing_job_id.to_string(),
+                event: "approve".into(),
+                payload: None,
+            }))
+            .await
+            .expect_err("missing job should fail");
+
+        assert_eq!(error.code(), tonic::Code::NotFound);
+        assert!(
+            !harness
+                .state
+                .job_locks
+                .lock()
+                .await
+                .contains_key(&missing_job_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn create_job_immediately_completes_when_initial_state_is_terminal() {
+        let harness = TestHarness::new("job-service-terminal-initial").await;
+        register_flow_version(
+            &harness.state,
+            "terminal",
+            Uuid::now_v7(),
+            initial_terminal_manifest("terminal"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "terminal".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        let job = service
+            .get_job(Request::new(GetJobRequest {
+                job_id: created.job_id.clone(),
+            }))
+            .await
+            .expect("get job")
+            .into_inner();
+        assert_eq!(job.state, "completed");
+        assert_eq!(job.current_state, "done");
+
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id,
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        let kinds: Vec<EventKind> = events
+            .events
+            .into_iter()
+            .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
+            .collect();
+        assert_eq!(kinds.len(), 2);
+        assert!(matches!(kinds[0], EventKind::Created { .. }));
+        assert!(matches!(
+            &kinds[1],
+            EventKind::Completed { final_state } if final_state == "done"
+        ));
     }
 
     #[tokio::test]
