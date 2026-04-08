@@ -44,6 +44,8 @@ pub struct ShirohaServer {
     state: Arc<ShirohaState>,
     /// 定时器事件接收端
     timer_rx: tokio::sync::mpsc::Receiver<shiroha_engine::timer::TimerEvent>,
+    /// 持有 standalone node worker 的生命周期；测试路径会显式取走并在 drop 时 abort。
+    _node_worker: Option<JoinHandle<()>>,
 }
 
 pub(crate) fn spawn_timer_forwarder(
@@ -149,7 +151,7 @@ impl ShirohaServer {
             job_manager,
             timer_wheel: Arc::new(timer_wheel),
         });
-        spawn_standalone_node_worker(state.clone(), transport).await;
+        let node_worker = Some(spawn_standalone_node_worker(state.clone(), transport).await);
 
         let persisted_flows = state
             .storage
@@ -221,7 +223,11 @@ impl ShirohaServer {
         }
         Self::restore_persisted_timers(&state).await?;
 
-        Ok(Self { state, timer_rx })
+        Ok(Self {
+            state,
+            timer_rx,
+            _node_worker: node_worker,
+        })
     }
 
     /// 启动 gRPC 服务器
@@ -280,12 +286,13 @@ impl ShirohaServer {
     }
 
     pub(crate) fn into_test_parts(
-        self,
+        mut self,
     ) -> (
         Arc<ShirohaState>,
         tokio::sync::mpsc::Receiver<shiroha_engine::timer::TimerEvent>,
+        Option<JoinHandle<()>>,
     ) {
-        (self.state, self.timer_rx)
+        (self.state, self.timer_rx, self._node_worker.take())
     }
 }
 
@@ -357,7 +364,7 @@ mod tests {
             &approval_manifest("persisted", Some("allow")),
         )
         .await;
-        drop(harness);
+        harness.shutdown().await;
 
         let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await
@@ -414,7 +421,7 @@ mod tests {
             .into_inner();
 
         drop(job_service);
-        drop(harness);
+        harness.shutdown().await;
 
         let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await
@@ -479,7 +486,7 @@ mod tests {
             .expect("queue event while paused");
 
         drop(job_service);
-        drop(harness);
+        harness.shutdown().await;
 
         let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await
@@ -553,12 +560,12 @@ mod tests {
 
         sleep(Duration::from_millis(60)).await;
         drop(job_service);
-        drop(harness);
+        harness.shutdown().await;
 
         let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await
             .expect("reload server");
-        let (state, timer_rx) = reloaded.into_test_parts();
+        let (state, timer_rx, _node_worker) = reloaded.into_test_parts();
         let _timer_forwarder = spawn_timer_forwarder(state.clone(), timer_rx);
         let job_service = JobServiceImpl::new(state);
 
@@ -609,12 +616,12 @@ mod tests {
 
         sleep(Duration::from_millis(100)).await;
         drop(job_service);
-        drop(harness);
+        harness.shutdown().await;
 
         let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await
             .expect("reload server");
-        let (state, timer_rx) = reloaded.into_test_parts();
+        let (state, timer_rx, _node_worker) = reloaded.into_test_parts();
         let _timer_forwarder = spawn_timer_forwarder(state.clone(), timer_rx);
         let job_service = JobServiceImpl::new(state);
 
@@ -663,7 +670,7 @@ mod tests {
 
         drop(job_service);
         drop(flow_service);
-        drop(harness);
+        harness.shutdown().await;
 
         let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await
@@ -690,7 +697,7 @@ mod tests {
             approval_manifest("broken", Some("allow")),
         )
         .await;
-        drop(harness);
+        harness.shutdown().await;
 
         let reloaded = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await

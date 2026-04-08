@@ -53,6 +53,7 @@ pub(crate) struct TestHarness {
     pub(crate) data_dir: PathBuf,
     /// 只有需要真实 timer -> job 转发链路的测试才会启动这个任务。
     timer_forwarder: Option<tokio::task::JoinHandle<()>>,
+    node_worker: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// 启动真实 gRPC server 的集成测试夹具。
@@ -72,12 +73,13 @@ impl TestHarness {
         let server = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await
             .expect("create test server");
-        let (state, _) = server.into_test_parts();
+        let (state, _, node_worker) = server.into_test_parts();
 
         Self {
             state,
             data_dir,
             timer_forwarder: None,
+            node_worker,
         }
     }
 
@@ -88,13 +90,25 @@ impl TestHarness {
         let server = ShirohaServer::new(data_dir.to_str().expect("utf-8 path"))
             .await
             .expect("create test server");
-        let (state, timer_rx) = server.into_test_parts();
+        let (state, timer_rx, node_worker) = server.into_test_parts();
         let timer_forwarder = Some(spawn_timer_forwarder(state.clone(), timer_rx));
 
         Self {
             state,
             data_dir,
             timer_forwarder,
+            node_worker,
+        }
+    }
+
+    pub(crate) async fn shutdown(mut self) {
+        if let Some(handle) = self.timer_forwarder.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+        if let Some(handle) = self.node_worker.take() {
+            handle.abort();
+            let _ = handle.await;
         }
     }
 }
@@ -102,6 +116,9 @@ impl TestHarness {
 impl Drop for TestHarness {
     fn drop(&mut self) {
         if let Some(handle) = self.timer_forwarder.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.node_worker.take() {
             handle.abort();
         }
     }
