@@ -8,6 +8,7 @@ use std::sync::Arc;
 use shiroha_core::error::ShirohaError;
 use shiroha_core::flow::{ActionCapability, DispatchMode, FlowRegistration, StateKind, TimeoutDef};
 use shiroha_core::job::{ActionResult, ExecutionStatus, Job, JobState, ScheduledTimeout};
+use shiroha_core::transport::{Message, Transport};
 use shiroha_engine::job::JobCreationOptions;
 use shiroha_proto::shiroha_api::job_service_server::JobService;
 use shiroha_proto::shiroha_api::{
@@ -22,6 +23,7 @@ use uuid::Uuid;
 
 use crate::job_events::{filter_events, validate_query};
 use crate::job_runtime::action_sequence;
+use crate::node_runtime::{RemoteActionRequest, RemoteActionResponse, STANDALONE_NODE_ID};
 use crate::server::ShirohaState;
 use crate::service_support::parse_uuid;
 
@@ -564,20 +566,18 @@ impl JobServiceImpl {
             })?;
         let dispatch = &action.dispatch;
         let capabilities: &[ActionCapability] = &action.capabilities;
+        let action_ctx = ActionContext {
+            job_id: job_id.to_string(),
+            state: state.to_string(),
+            context,
+            payload,
+        };
 
         match dispatch {
-            DispatchMode::Local | DispatchMode::Remote => {
-                // standalone 模式下本地执行和远端执行暂时走同一条 WASM 调用路径；
-                // 真正的集群调度会在这里分叉。
+            DispatchMode::Local => {
                 let state_handle = self.state.clone();
                 let flow = flow.clone();
                 let action_name = action_name.to_string();
-                let action_ctx = ActionContext {
-                    job_id: job_id.to_string(),
-                    state: state.to_string(),
-                    context,
-                    payload,
-                };
                 let capabilities = capabilities.to_vec();
                 tokio::task::spawn_blocking(move || {
                     let mut host = Self::wasm_host_for_state(&state_handle, &flow)?;
@@ -586,6 +586,35 @@ impl JobServiceImpl {
                 })
                 .await
                 .map_err(|error| Status::internal(format!("action task join error: {error}")))?
+            }
+            DispatchMode::Remote => {
+                let request = RemoteActionRequest {
+                    flow_id: flow.flow_id.clone(),
+                    flow_version: flow.version,
+                    action_name: action_name.to_string(),
+                    action_ctx,
+                    capabilities: capabilities.to_vec(),
+                };
+                let payload = serde_json::to_vec(&request).map_err(|error| {
+                    Status::internal(format!("encode remote action request: {error}"))
+                })?;
+                let response = self
+                    .state
+                    .transport
+                    .send(STANDALONE_NODE_ID, Message { payload })
+                    .await
+                    .map_err(|error| Status::internal(error.to_string()))?;
+                let decoded: RemoteActionResponse = serde_json::from_slice(&response.payload)
+                    .map_err(|error| {
+                        Status::internal(format!("decode remote action response: {error}"))
+                    })?;
+                match (decoded.result, decoded.error) {
+                    (Some(result), None) => Ok(result),
+                    (None, Some(error)) => Err(Status::internal(error)),
+                    _ => Err(Status::internal(
+                        "remote action response must contain exactly one of result or error",
+                    )),
+                }
             }
             DispatchMode::FanOut(_) => Err(Status::unimplemented(
                 "fan-out action dispatch is not implemented in standalone mode yet",
@@ -904,9 +933,10 @@ impl JobService for JobServiceImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_runtime::STANDALONE_NODE_ID;
     use crate::test_support::{
         TestHarness, approval_manifest, approval_manifest_to, deploy_flow, register_flow_version,
-        timeout_manifest, wait_for_job,
+        remote_approval_manifest, timeout_manifest, wait_for_job,
     };
     use shiroha_core::event::EventKind;
     use shiroha_core::flow::{
@@ -1800,6 +1830,106 @@ mod tests {
             &kinds[2],
             EventKind::ActionComplete { action, status, .. }
                 if action == "ship" && *status == ExecutionStatus::Failed
+        ));
+        assert!(matches!(kinds[3], EventKind::Completed { .. }));
+    }
+
+    #[tokio::test]
+    #[ignore = "heavy job integration smoke; run explicitly when validating shirohad remote dispatch"]
+    async fn remote_dispatch_requires_registered_transport_node() {
+        let harness = TestHarness::new("job-service-remote-transport").await;
+        deploy_flow(
+            harness.state.clone(),
+            "remote-approval",
+            &remote_approval_manifest("remote-approval", Some("allow")),
+        )
+        .await;
+
+        harness
+            .state
+            .transport
+            .unregister_node(STANDALONE_NODE_ID)
+            .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let flow = service
+            .flow_registration("remote-approval")
+            .await
+            .expect("flow registration");
+
+        let error = service
+            .invoke_action(
+                &flow,
+                "ship",
+                Uuid::now_v7(),
+                "idle",
+                None,
+                Some(b"transport-check".to_vec()),
+            )
+            .await
+            .expect_err("remote dispatch should require a registered node");
+
+        assert_eq!(error.code(), tonic::Code::Internal);
+        assert!(error.message().contains("node `standalone` not registered"));
+    }
+
+    #[tokio::test]
+    #[ignore = "heavy job integration smoke; run explicitly when validating shirohad remote dispatch"]
+    async fn remote_dispatch_completes_job_through_transport() {
+        let harness = TestHarness::new("job-service-remote-success").await;
+        deploy_flow(
+            harness.state.clone(),
+            "remote-approval",
+            &remote_approval_manifest("remote-approval", Some("allow")),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "remote-approval".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "approve".into(),
+                payload: Some(b"remote-payload".to_vec()),
+            }))
+            .await
+            .expect("trigger remote event");
+
+        let final_job = wait_for_job(&service, &created.job_id, "completed", "done").await;
+        assert_eq!(final_job.current_state, "done");
+
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id,
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        let kinds: Vec<EventKind> = events
+            .events
+            .into_iter()
+            .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
+            .collect();
+
+        assert!(matches!(kinds[0], EventKind::Created { .. }));
+        assert!(matches!(kinds[1], EventKind::Transition { .. }));
+        assert!(matches!(
+            &kinds[2],
+            EventKind::ActionComplete { action, status, .. }
+                if action == "ship" && *status == ExecutionStatus::Success
         ));
         assert!(matches!(kinds[3], EventKind::Completed { .. }));
     }

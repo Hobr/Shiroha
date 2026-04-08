@@ -291,16 +291,10 @@ impl FlowServiceImpl {
         let mut missing = Vec::new();
 
         let action_names = manifest
-            .actions
+            .states
             .iter()
-            .map(|action| action.name.as_str())
-            .chain(
-                manifest
-                    .states
-                    .iter()
-                    .flat_map(|state| [state.on_enter.as_deref(), state.on_exit.as_deref()])
-                    .flatten(),
-            )
+            .flat_map(|state| [state.on_enter.as_deref(), state.on_exit.as_deref()])
+            .flatten()
             .chain(
                 manifest
                     .transitions

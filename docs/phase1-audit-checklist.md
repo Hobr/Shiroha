@@ -13,7 +13,6 @@
 
 ## 按原 Phase 1 计划仍待实现
 
-- [ ] 为 `DispatchMode::Remote` 补上 standalone 内真实的 Controller/Node 执行边界与 in-process transport 链路；当前仍直接复用本地 WASM 调用路径
 - [ ] 为 `fan-out` 补上 standalone 运行时分发、结果收集和 `aggregate()` 后的状态推进；当前 deploy 仍直接拒绝 `fan-out` action
 
 ## Phase 1 文档与验收收口

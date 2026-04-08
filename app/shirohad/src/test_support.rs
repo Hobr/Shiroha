@@ -30,7 +30,8 @@ mod flow_builders;
 mod runtime_helpers;
 
 pub(crate) use flow_builders::{
-    approval_manifest, approval_manifest_to, timeout_manifest, warning_manifest,
+    approval_manifest, approval_manifest_to, remote_approval_manifest, timeout_manifest,
+    warning_manifest,
 };
 pub(crate) use runtime_helpers::{deploy_flow, register_flow_version, wait_for_job};
 

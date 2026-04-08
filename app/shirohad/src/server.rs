@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use shiroha_core::job::JobState;
 use shiroha_core::storage::Storage;
+use shiroha_core::transport::InProcessTransport;
 use shiroha_engine::job::JobManager;
 use shiroha_engine::timer::TimerWheel;
 use shiroha_store_redb::store::RedbStorage;
@@ -24,6 +25,7 @@ use uuid::Uuid;
 use crate::flow_registry::FlowRegistry;
 use crate::flow_service::FlowServiceImpl;
 use crate::job_service::{JOB_LIFETIME_EXPIRED_EVENT, JobServiceImpl};
+use crate::node_runtime::spawn_standalone_node_worker;
 
 /// 全局共享状态，所有 gRPC handler 共享
 pub struct ShirohaState {
@@ -31,6 +33,7 @@ pub struct ShirohaState {
     pub wasm_runtime: Arc<WasmRuntime>,
     pub module_cache: Arc<ModuleCache>,
     pub flow_registry: Arc<FlowRegistry>,
+    pub transport: Arc<InProcessTransport>,
     /// Job 级串行化锁，保证同一 Job 任一时刻只处理一个事件/生命周期操作
     pub(crate) job_locks: Arc<Mutex<HashMap<uuid::Uuid, Arc<Mutex<()>>>>>,
     pub job_manager: Arc<JobManager<RedbStorage>>,
@@ -134,16 +137,19 @@ impl ShirohaServer {
         let module_cache = Arc::new(ModuleCache::new());
         let job_manager = Arc::new(JobManager::new(storage.clone()));
         let (timer_wheel, timer_rx) = TimerWheel::new();
+        let transport = Arc::new(InProcessTransport::new());
 
         let state = Arc::new(ShirohaState {
             storage,
             wasm_runtime,
             module_cache,
             flow_registry: Arc::new(FlowRegistry::new()),
+            transport: transport.clone(),
             job_locks: Arc::new(Mutex::new(HashMap::new())),
             job_manager,
             timer_wheel: Arc::new(timer_wheel),
         });
+        spawn_standalone_node_worker(state.clone(), transport).await;
 
         let persisted_flows = state
             .storage

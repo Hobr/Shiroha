@@ -11,18 +11,20 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
+#[cfg(test)]
+mod grpc_tests;
+#[cfg(test)]
+mod test_support;
+
 pub mod job_service;
+pub mod node_runtime;
 
 mod flow_registry;
 mod flow_service;
-#[cfg(test)]
-mod grpc_tests;
 mod job_events;
 mod job_runtime;
 mod server;
 mod service_support;
-#[cfg(test)]
-mod test_support;
 shadow_rs::shadow!(build);
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Eq, PartialEq)]
