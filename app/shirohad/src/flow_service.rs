@@ -894,7 +894,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "heavy service integration smoke; run explicitly when validating deploy/query flows"]
-    async fn delete_flow_removes_storage_and_memory_cache() {
+    async fn delete_flow_removes_flow_records_but_retains_wasm_cache() {
         let harness = TestHarness::new("flow-delete").await;
         let service = FlowServiceImpl::new(harness.state.clone());
         let manifest = approval_manifest("demo-flow", Some("allow"));
@@ -906,6 +906,14 @@ mod tests {
             }))
             .await
             .expect("deploy flow");
+        let deployed = harness
+            .state
+            .storage
+            .get_flow("demo-flow")
+            .await
+            .expect("get deployed flow")
+            .expect("deployed flow exists");
+        let wasm_hash = deployed.wasm_hash.clone();
 
         service
             .delete_flow(Request::new(DeleteFlowRequest {
@@ -939,6 +947,16 @@ mod tests {
                 .await
                 .is_none()
         );
+        assert!(
+            harness
+                .state
+                .storage
+                .get_wasm_module(&wasm_hash)
+                .await
+                .expect("get wasm module")
+                .is_some()
+        );
+        assert!(harness.state.module_cache.get(&wasm_hash).is_some());
     }
 
     #[tokio::test]

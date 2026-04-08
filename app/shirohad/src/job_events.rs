@@ -103,6 +103,9 @@ pub(crate) fn event_kind_name(kind: &EventKind) -> &'static str {
 mod tests {
     use super::*;
     use shiroha_core::job::ExecutionStatus;
+    use shiroha_core::storage::{MemoryStorage, Storage};
+    use shiroha_store_redb::store::RedbStorage;
+    use std::path::PathBuf;
 
     fn sample_events(job_id: Uuid) -> Vec<EventRecord> {
         vec![
@@ -224,5 +227,91 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, Uuid::from_u128(1));
+    }
+
+    fn temp_db_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("shiroha-job-events-{name}-{}.redb", Uuid::now_v7()))
+    }
+
+    #[tokio::test]
+    async fn filter_events_limit_is_backend_independent() {
+        let job_id = Uuid::from_u128(500);
+        let events = vec![
+            EventRecord {
+                id: Uuid::from_u128(3),
+                job_id,
+                timestamp_ms: 20,
+                kind: EventKind::Completed {
+                    final_state: "done".into(),
+                },
+            },
+            EventRecord {
+                id: Uuid::from_u128(1),
+                job_id,
+                timestamp_ms: 10,
+                kind: EventKind::Created {
+                    flow_id: "flow".into(),
+                    flow_version: Uuid::from_u128(11),
+                    initial_state: "idle".into(),
+                },
+            },
+            EventRecord {
+                id: Uuid::from_u128(2),
+                job_id,
+                timestamp_ms: 10,
+                kind: EventKind::Transition {
+                    event: "approve".into(),
+                    from: "idle".into(),
+                    to: "done".into(),
+                    action: Some("ship".into()),
+                },
+            },
+        ];
+
+        let query = validate_query(GetJobEventsRequest {
+            job_id: job_id.to_string(),
+            since_id: None,
+            since_timestamp_ms: None,
+            kind: Vec::new(),
+            limit: Some(2),
+        })
+        .expect("valid query");
+
+        let memory = MemoryStorage::new();
+        for event in &events {
+            memory
+                .append_event(event)
+                .await
+                .expect("append memory event");
+        }
+        let memory_filtered = filter_events(
+            memory.get_events(job_id).await.expect("memory events"),
+            &query,
+        )
+        .expect("filter memory events");
+
+        let path = temp_db_path("limit");
+        let redb = RedbStorage::new(&path).expect("open redb");
+        for event in &events {
+            redb.append_event(event).await.expect("append redb event");
+        }
+        let redb_filtered =
+            filter_events(redb.get_events(job_id).await.expect("redb events"), &query)
+                .expect("filter redb events");
+
+        let memory_ids = memory_filtered
+            .iter()
+            .map(|event| event.id)
+            .collect::<Vec<_>>();
+        let redb_ids = redb_filtered
+            .iter()
+            .map(|event| event.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(memory_ids, vec![Uuid::from_u128(1), Uuid::from_u128(2)]);
+        assert_eq!(redb_ids, memory_ids);
+
+        drop(redb);
+        let _ = std::fs::remove_file(path);
     }
 }
