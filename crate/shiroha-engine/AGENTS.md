@@ -13,7 +13,7 @@
 | ---- | ----------- |
 | `src/engine.rs` | `StateMachineEngine`：根据当前状态+事件查找转移，无状态设计可被多 Job 共享 |
 | `src/job.rs` | `JobManager<S: Storage>`：Job CRUD + 生命周期流转 + 事件溯源写入 |
-| `src/timer.rs` | `TimerWheel`：基于 tokio::spawn 的定时器管理，支持按 Job 暂停/恢复 |
+| `src/timer.rs` | `TimerWheel`：基于集中式 `DelayQueue` 驱动的定时器管理，支持按 Job 暂停/恢复 |
 | `src/scheduler.rs` | `Scheduler` trait + `RoundRobinScheduler`（默认轮询调度） |
 | `src/validator.rs` | `FlowValidator`：部署时静态检查（可达性、终态、函数引用） |
 
@@ -23,7 +23,7 @@
 
 - `StateMachineEngine` 是纯逻辑（给定状态+事件→转移结果），不管理 Job 状态
 - `JobManager` 负责所有状态变更 + 事件溯源写入，泛型 `S: Storage` 允许注入不同后端
-- `TimerWheel` 每个定时器是独立的 tokio::spawn 任务，暂停时 abort 并记录剩余时间；`register()` 现在是 async，确保定时器先进入索引再返回
+- `TimerWheel` 使用单个后台驱动器 + `DelayQueue` 管理所有定时器；暂停时会冻结剩余时间，恢复时重新入队
 - 添加新调度策略：实现 `Scheduler` trait 即可
 - 状态级 hook（`on-enter` / `on-exit`）在 `shirohad` 层执行，不在 engine 层实现
 - `FlowValidator` 当前只产出 warning；真正“是否阻止部署”由上层 service 决定

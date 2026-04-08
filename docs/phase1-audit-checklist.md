@@ -14,7 +14,6 @@
 ## 按原 Phase 1 计划仍待实现
 
 - [ ] 补齐 deploy 期的 WASM 函数引用验证：对 manifest 中命名的 `action` / `guard` / `aggregator` 做 guest 内部存在性校验，而不只是校验是否出现在 `actions` 注册表中
-- [ ] 实现真正的 Controller 本地 `timer wheel`；当前定时器仍是一 timer 一 `tokio::sleep` 任务的近似实现
 - [ ] 为 `DispatchMode::Remote` 补上 standalone 内真实的 Controller/Node 执行边界与 in-process transport 链路；当前仍直接复用本地 WASM 调用路径
 - [ ] 为 `fan-out` 补上 standalone 运行时分发、结果收集和 `aggregate()` 后的状态推进；当前 deploy 仍直接拒绝 `fan-out` action
 
@@ -31,13 +30,10 @@
 - [ ] 收紧 `docs/backends.md` 中 “standalone 使用 in-process transport” 的表述；当前 transport 抽象并未进入主执行链路
 - [ ] 收紧 `docs/scheduling.md` 中关于 action timeout、retry/backoff、Node 心跳、负载感知、drain、背压的表述；这些能力当前未接入 runtime
 - [ ] 收紧 `docs/operations.md` 中 Node 注册、发现、健康检查、优雅停机、OpenTelemetry 指标/追踪的现状表述
-- [ ] 修正文档里对定时器实现的性能/结构暗示；当前实现是一计时器一 `tokio::sleep` 任务，不是 hierarchical timer wheel
 - [ ] 明确 `action output` 当前会被 runtime 丢弃，不会持久化，也不会反馈给后续流程
 - [ ] 明确 Flow 删除后 `wasm_modules` 与 `module_cache` 当前没有引用计数/共享生命周期策略
 - [ ] 统一示例中的平台 `flow_id` 与 guest `manifest.id` 叙事；当前部分 example 在测试里被部署到不同外部 flow_id，会强化身份漂移的默认印象
 
 ## Phase 1 工程收尾
 
-- [ ] 增加“`GetJobEvents.limit` 与后端无关”的测试
-- [ ] 增加“删除 Flow 后 wasm bytes / module cache 生命周期符合约定”的测试
 - [ ] 以 `docs/roadmap.md` 作为 Phase 1 验收基线，优先完成上面的实现缺口，再处理文档收口项
