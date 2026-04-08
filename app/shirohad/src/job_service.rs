@@ -8,6 +8,7 @@ use std::sync::Arc;
 use shiroha_core::error::ShirohaError;
 use shiroha_core::flow::{ActionCapability, DispatchMode, FlowRegistration, StateKind, TimeoutDef};
 use shiroha_core::job::{ActionResult, ExecutionStatus, Job, JobState, ScheduledTimeout};
+use shiroha_engine::job::JobCreationOptions;
 use shiroha_proto::shiroha_api::job_service_server::JobService;
 use shiroha_proto::shiroha_api::{
     CancelJobRequest, CancelJobResponse, CreateJobRequest, CreateJobResponse, DeleteJobRequest,
@@ -657,20 +658,22 @@ impl JobService for JobServiceImpl {
         let job = self
             .state
             .job_manager
-            .create_job_with_lifetime_and_schedule(
+            .create_job_with_options(
                 &flow.flow_id,
                 flow.version,
                 &flow.manifest.initial_state,
                 req.context,
-                req.max_lifetime_ms,
-                deadline,
-                initial_timeouts
-                    .iter()
-                    .map(|timeout| ScheduledTimeout {
-                        event: timeout.timeout_event.clone(),
-                        remaining_ms: timeout.duration_ms,
-                    })
-                    .collect(),
+                JobCreationOptions {
+                    max_lifetime_ms: req.max_lifetime_ms,
+                    lifetime_deadline_ms: deadline,
+                    scheduled_timeouts: initial_timeouts
+                        .iter()
+                        .map(|timeout| ScheduledTimeout {
+                            event: timeout.timeout_event.clone(),
+                            remaining_ms: timeout.duration_ms,
+                        })
+                        .collect(),
+                },
             )
             .await
             .map_err(|e| Status::internal(e.to_string()))?;

@@ -199,7 +199,7 @@ impl RedbStorage {
     }
 
     fn decode_string(encoded: &str) -> Result<String> {
-        if encoded.len() % 2 != 0 {
+        if !encoded.len().is_multiple_of(2) {
             return Err(s(format!("invalid encoded string length: {encoded}")));
         }
 
