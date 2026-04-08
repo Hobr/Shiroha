@@ -6,14 +6,12 @@
 
 - 不可达状态检测
 - 死锁检测（环路无出口）
-- WASM 函数引用验证（manifest 中声明的 action/guard/aggregator 函数是否存在）
+- WASM 函数引用验证（通过 guest 导出的 `supports-action` / `supports-guard` / `supports-aggregate` 接口校验 manifest 中命名的引用）
 - 权限匹配验证（模块使用的 import 是否匹配声明的 world）
 
 当前审计状态：
 
-- 已实现：不可达状态检测、死锁/无出口检测、manifest `host-world` 与 component imports 匹配校验
-- 部分实现：`action` / `guard` 名称当前只校验是否出现在 manifest 的 `actions` 注册表中，尚未在 deploy 期逐个验证 guest 内部是否真正支持这些名称
-- 未实现：`fan-out` 的 `aggregator` 名称尚未做 deploy 期存在性校验
+- 已实现：不可达状态检测、死锁/无出口检测、manifest `host-world` 与 component imports 匹配校验，以及 deploy 期对 `action` / `guard` / `aggregator` 名称的 guest 支持校验
 
 ## 分阶段实施
 
@@ -37,13 +35,10 @@
 - sctl CLI：部署/列出/查看 Flow，创建/列出/查看/等待 Job，触发事件、暂停/恢复/取消 Job，查询事件日志
 - tracing 结构化日志
 
-当前与 Phase 1 目标相比仍有这些已知缺口：
+当前状态：
 
-- `remote` dispatch 在 standalone 中仍只是 manifest 语义标签，实际复用与 `local` 相同的同进程 WASM 调用路径，没有独立的 Controller/Node 执行边界
-- `fan-out` manifest / guest ABI / aggregate host 调用已具备形状，但 Phase 1 运行时仍未实现；当前 deploy 会直接拒绝 `fan-out` action
-- tracing 已接入，但当前默认仍是 `tracing_subscriber::fmt()` 的文本输出；若以独立的结构化日志管道为验收标准，则此项仍属部分实现
-
-更细的收敛项见 [Phase 1 审计清单](phase1-audit-checklist.md)。
+- Phase 1 的 standalone 主链路已闭合：`remote` 已通过 in-process transport 进入同进程 node worker，`fan-out` 已支持结果收集、`aggregate()` 调用与 follow-up event 推进，tracing 已同时输出结构化日志到终端和滚动文件
+- 仍未进入 Phase 1 范围之外的能力，继续按 Phase 2+ 路线推进：独立进程 Node、真实多节点集群调度、自动 `subprocess` 编排、OpenTelemetry、mTLS 等
 
 ### Phase 2 — 分布式
 
