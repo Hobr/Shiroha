@@ -17,6 +17,18 @@ impl Guest for StorageSmoke {
         }
     }
 
+    fn supports_action(name: String) -> bool {
+        matches!(name.as_str(), "write")
+    }
+
+    fn supports_guard(_name: String) -> bool {
+        false
+    }
+
+    fn supports_aggregate(_name: String) -> bool {
+        false
+    }
+
     fn invoke_action(name: String, ctx: ActionContext) -> ActionResult {
         match name.as_str() {
             "write" => {

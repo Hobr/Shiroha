@@ -17,6 +17,18 @@ impl Guest for StorageFlow {
         }
     }
 
+    fn supports_action(name: String) -> bool {
+        matches!(name.as_str(), "store")
+    }
+
+    fn supports_guard(_name: String) -> bool {
+        false
+    }
+
+    fn supports_aggregate(_name: String) -> bool {
+        false
+    }
+
     fn invoke_action(name: String, _ctx: ActionContext) -> ActionResult {
         if name != "store" {
             return action_fail!(Some(format!("unexpected action: {name}").into_bytes()));

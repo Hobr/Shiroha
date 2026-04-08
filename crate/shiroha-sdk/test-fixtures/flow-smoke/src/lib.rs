@@ -34,6 +34,18 @@ impl Guest for FlowSmoke {
         }
     }
 
+    fn supports_action(name: String) -> bool {
+        matches!(name.as_str(), "prepare" | "collect")
+    }
+
+    fn supports_guard(name: String) -> bool {
+        matches!(name.as_str(), "allow-submit")
+    }
+
+    fn supports_aggregate(name: String) -> bool {
+        matches!(name.as_str(), "pick-success")
+    }
+
     fn invoke_action(name: String, ctx: ActionContext) -> ActionResult {
         match name.as_str() {
             "prepare" => action_ok!(Some(format!("prepared:{}", ctx.job_id).into_bytes())),

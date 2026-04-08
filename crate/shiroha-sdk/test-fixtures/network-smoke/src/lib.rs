@@ -20,6 +20,18 @@ impl Guest for NetworkSmoke {
         }
     }
 
+    fn supports_action(name: String) -> bool {
+        matches!(name.as_str(), "fetch" | "fanout")
+    }
+
+    fn supports_guard(_name: String) -> bool {
+        false
+    }
+
+    fn supports_aggregate(_name: String) -> bool {
+        false
+    }
+
     fn invoke_action(name: String, _ctx: ActionContext) -> ActionResult {
         match name.as_str() {
             "fetch" => {

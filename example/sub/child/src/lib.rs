@@ -37,6 +37,18 @@ impl Guest for ChildFlow {
         }
     }
 
+    fn supports_action(name: String) -> bool {
+        matches!(name.as_str(), "record-approval" | "record-rejection")
+    }
+
+    fn supports_guard(name: String) -> bool {
+        matches!(name.as_str(), "allow-approval")
+    }
+
+    fn supports_aggregate(_name: String) -> bool {
+        false
+    }
+
     fn invoke_action(name: String, ctx: ActionContext) -> ActionResult {
         let summary = match name.as_str() {
             "record-approval" => format!("child approved job={} state={}", ctx.job_id, ctx.state),

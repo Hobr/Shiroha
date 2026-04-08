@@ -25,6 +25,18 @@ impl Guest for ApprovalFlow {
         }
     }
 
+    fn supports_action(name: String) -> bool {
+        matches!(name.as_str(), "ship")
+    }
+
+    fn supports_guard(name: String) -> bool {
+        matches!(name.as_str(), "allow-approve")
+    }
+
+    fn supports_aggregate(name: String) -> bool {
+        matches!(name.as_str(), "pick-success")
+    }
+
     fn invoke_action(name: String, ctx: ActionContext) -> ActionResult {
         match name.as_str() {
             "ship" => {

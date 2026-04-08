@@ -283,6 +283,82 @@ impl FlowServiceImpl {
 
         Ok(())
     }
+
+    fn validate_guest_function_support(
+        host: &mut shiroha_wasm::host::WasmHost,
+        manifest: &FlowManifest,
+    ) -> Result<(), Status> {
+        let mut missing = Vec::new();
+
+        let action_names = manifest
+            .actions
+            .iter()
+            .map(|action| action.name.as_str())
+            .chain(
+                manifest
+                    .states
+                    .iter()
+                    .flat_map(|state| [state.on_enter.as_deref(), state.on_exit.as_deref()])
+                    .flatten(),
+            )
+            .chain(
+                manifest
+                    .transitions
+                    .iter()
+                    .filter_map(|transition| transition.action.as_deref()),
+            )
+            .collect::<std::collections::BTreeSet<_>>();
+        for action_name in action_names {
+            let supported = host
+                .supports_action(action_name)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
+            if !supported {
+                missing.push(format!("guest does not support action `{action_name}`"));
+            }
+        }
+
+        let guard_names = manifest
+            .transitions
+            .iter()
+            .filter_map(|transition| transition.guard.as_deref())
+            .collect::<std::collections::BTreeSet<_>>();
+        for guard_name in guard_names {
+            let supported = host
+                .supports_guard(guard_name)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
+            if !supported {
+                missing.push(format!("guest does not support guard `{guard_name}`"));
+            }
+        }
+
+        let aggregator_names = manifest
+            .actions
+            .iter()
+            .filter_map(|action| match &action.dispatch {
+                DispatchMode::FanOut(config) => Some(config.aggregator.as_str()),
+                DispatchMode::Local | DispatchMode::Remote => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        for aggregator_name in aggregator_names {
+            let supported = host
+                .supports_aggregate(aggregator_name)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
+            if !supported {
+                missing.push(format!(
+                    "guest does not support aggregator `{aggregator_name}`"
+                ));
+            }
+        }
+
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(Status::invalid_argument(format!(
+                "flow validation failed: {}",
+                missing.join("; ")
+            )))
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -325,6 +401,7 @@ impl FlowService for FlowServiceImpl {
             .get_manifest()
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         Self::validate_component_imports(&actual_imports, manifest.host_world)?;
+        Self::validate_guest_function_support(&mut host, &manifest)?;
         Self::validate_phase1_manifest_contract(&manifest)?;
 
         // 静态验证
@@ -533,12 +610,58 @@ mod tests {
                 from: "idle".into(),
                 to: "done".into(),
                 event: "approve".into(),
-                guard: Some("allow".into()),
-                action: Some("ship".into()),
+                guard: Some("missing-guard".into()),
+                action: Some("missing-action".into()),
                 timeout: None,
             }],
             initial_state: "idle".into(),
-            actions: Vec::new(),
+            actions: vec![ActionDef {
+                name: "missing-action".into(),
+                dispatch: DispatchMode::Local,
+                capabilities: Vec::new(),
+            }],
+        }
+    }
+
+    fn invalid_aggregator_manifest() -> FlowManifest {
+        FlowManifest {
+            id: "fanout-invalid-aggregate".into(),
+            host_world: FlowWorld::Sandbox,
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![TransitionDef {
+                from: "idle".into(),
+                to: "done".into(),
+                event: "collect".into(),
+                guard: None,
+                action: Some("collect".into()),
+                timeout: None,
+            }],
+            initial_state: "idle".into(),
+            actions: vec![ActionDef {
+                name: "collect".into(),
+                dispatch: DispatchMode::FanOut(FanOutConfig {
+                    strategy: FanOutStrategy::Count(2),
+                    aggregator: "missing-aggregate".into(),
+                    timeout_ms: Some(100),
+                    min_success: Some(1),
+                }),
+                capabilities: Vec::new(),
+            }],
         }
     }
 
@@ -753,8 +876,26 @@ mod tests {
             .expect_err("fatal validation issues should fail deploy");
 
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
-        assert!(error.message().contains("action `ship`"));
-        assert!(error.message().contains("guard `allow`"));
+        assert!(error.message().contains("action `missing-action`"));
+        assert!(error.message().contains("guard `missing-guard`"));
+    }
+
+    #[tokio::test]
+    #[ignore = "heavy service integration smoke; run explicitly when validating deploy/query flows"]
+    async fn deploy_flow_rejects_missing_guest_aggregator_support() {
+        let harness = TestHarness::new("flow-fanout-invalid-aggregate").await;
+        let service = FlowServiceImpl::new(harness.state.clone());
+
+        let error = service
+            .deploy_flow(Request::new(DeployFlowRequest {
+                flow_id: "fanout-invalid-aggregate".into(),
+                wasm_bytes: wasm_for_manifest(&invalid_aggregator_manifest()),
+            }))
+            .await
+            .expect_err("missing guest aggregator should fail deploy");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().contains("aggregator `missing-aggregate`"));
     }
 
     #[tokio::test]
