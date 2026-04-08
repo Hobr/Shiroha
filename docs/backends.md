@@ -14,7 +14,8 @@
 备注：
 
 - Phase 1 真正可用的是 standalone 路径
-- `Transport` trait 已定义，但当前主执行链路并未通过该抽象做 `remote` / `fan-out` 分发
+- 当前 standalone 主执行链路已经会通过 `Transport` trait 做 `remote` / `fan-out` 分发
+- 但当前只有 in-process transport；没有节点注册/发现、没有跨进程路由，也没有真实的远端连接管理
 
 ## Storage
 

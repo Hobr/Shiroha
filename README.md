@@ -62,16 +62,16 @@ just build-example-simple
 
 ```bash
 just sctl --server http://127.0.0.1:50051 flow deploy \
-  --flow-id simple \
+  --flow-id approval-demo \
   --file example/simple/target/wasm32-wasip2/release/simple.wasm
 ```
 
 查看部署后的 manifest 和拓扑摘要:
 
 ```bash
-just sctl --server http://127.0.0.1:50051 flow get --flow-id simple
-just sctl --server http://127.0.0.1:50051 flow get --flow-id simple --summary
-just sctl --server http://127.0.0.1:50051 flow vers --flow-id simple
+just sctl --server http://127.0.0.1:50051 flow get --flow-id approval-demo
+just sctl --server http://127.0.0.1:50051 flow get --flow-id approval-demo --summary
+just sctl --server http://127.0.0.1:50051 flow vers --flow-id approval-demo
 ```
 
 ### 4. 创建 Job 并驱动状态机
@@ -80,7 +80,7 @@ just sctl --server http://127.0.0.1:50051 flow vers --flow-id simple
 
 ```bash
 just sctl --server http://127.0.0.1:50051 job new \
-  --flow-id simple \
+  --flow-id approval-demo \
   --context-text "demo-request"
 ```
 
@@ -121,7 +121,7 @@ just sctl --server http://127.0.0.1:50051 --json job get --job-id <job-id>
 
 ```bash
 just sctl --server http://127.0.0.1:50051 job rm --job-id <job-id>
-just sctl --server http://127.0.0.1:50051 flow rm --flow-id simple
+just sctl --server http://127.0.0.1:50051 flow rm --flow-id approval-demo
 ```
 
 如果 Job 仍在运行, 可先取消, 或直接强制删除:
@@ -129,7 +129,7 @@ just sctl --server http://127.0.0.1:50051 flow rm --flow-id simple
 ```bash
 just sctl --server http://127.0.0.1:50051 job cancel --job-id <job-id>
 just sctl --server http://127.0.0.1:50051 job rm --job-id <job-id> --force
-just sctl --server http://127.0.0.1:50051 flow rm --flow-id simple --force
+just sctl --server http://127.0.0.1:50051 flow rm --flow-id approval-demo --force
 ```
 
 ## CLI 使用概览
@@ -157,7 +157,7 @@ just sctl complete zsh --print-path
 - `example/simple`
   最小可运行示例, 适合快速验证部署、创建 Job、触发事件
 - `example/advanced`
-  展示 `timeout`、`fan-out`、`subprocess` 的完整 manifest 建模
+  展示 `timeout`、`fan-out`、`subprocess` 的完整 manifest 建模；当前 `fan-out` 可在 standalone 内跑通，自动 `subprocess` 编排仍未落地
 - `example/warning-deadlock`
   一个会触发 FlowValidator warning 的负例
 - `example/sub`

@@ -55,9 +55,9 @@
 - `timeout`
   当前 standalone 路径已经能真正跑通
 - `guard` / `local` / `remote`
-  当前 standalone 路径已经能真正跑通；`remote` 目前会退化成同进程内的 WASM 调用
+  当前 standalone 路径已经能真正跑通；`remote` 当前会通过 in-process transport 进入同进程 node worker
 - `fan-out`
-  当前主要用于展示 manifest / guest 侧写法，完整多节点分发仍待继续实现
+  当前 standalone 已经能在同进程 fan-out 槽位上执行、聚合并回注 follow-up event，但这仍不是一个真实多节点集群
 - `subprocess`
   当前主要用于展示 manifest 写法，父子 Job 自动编排仍待继续实现
 
@@ -84,15 +84,22 @@ example/advanced/target/wasm32-wasip2/release/advanced.wasm
 ```bash
 sctl flow deploy \
   --file example/advanced/target/wasm32-wasip2/release/advanced.wasm \
-  --flow-id advanced
+  --flow-id advanced-orchestration-demo
 ```
 
 ## 当前可实际跑通的路径
 
-虽然 `fan-out` 和自动 `subprocess` 编排还没落地，但这份 component 里前半段链路已经能在当前 runtime 上真实执行：
+当前这份 component 里：
+
+- `submit -> legal-review` 这一段已经能真实执行
+- `fan-out` 运行时本身已经能工作
+- 但这份示例里的 `aggregate()` 当前返回 `quotes-collected` / `quote-failed`，而 manifest 没有为 `waiting-approval` 定义对应出边，所以它还不是一个“按现状可直接跑通到终态”的 fan-out 样例
+- 自动 `subprocess` 编排仍未落地
+
+因此当前最稳妥、可实际跑通的链路是前半段：
 
 ```bash
-sctl job new --flow-id advanced --context-text "quote-request"
+sctl job new --flow-id advanced-orchestration-demo --context-text "quote-request"
 sctl job trig --job-id <job-id> --event submit --payload-text "draft-ready"
 ```
 
