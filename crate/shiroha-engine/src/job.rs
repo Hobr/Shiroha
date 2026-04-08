@@ -77,6 +77,28 @@ impl<S: Storage> JobManager<S> {
         max_lifetime_ms: Option<u64>,
         lifetime_deadline_ms: Option<u64>,
     ) -> Result<Job> {
+        self.create_job_with_lifetime_and_schedule(
+            flow_id,
+            flow_version,
+            initial_state,
+            context,
+            max_lifetime_ms,
+            lifetime_deadline_ms,
+            Vec::new(),
+        )
+        .await
+    }
+
+    pub async fn create_job_with_lifetime_and_schedule(
+        &self,
+        flow_id: &str,
+        flow_version: Uuid,
+        initial_state: &str,
+        context: Option<Vec<u8>>,
+        max_lifetime_ms: Option<u64>,
+        lifetime_deadline_ms: Option<u64>,
+        scheduled_timeouts: Vec<ScheduledTimeout>,
+    ) -> Result<Job> {
         let job = Job {
             id: Uuid::now_v7(),
             flow_id: flow_id.to_string(),
@@ -85,8 +107,8 @@ impl<S: Storage> JobManager<S> {
             current_state: initial_state.to_string(),
             context,
             pending_events: Vec::new(),
-            scheduled_timeouts: Vec::new(),
-            timeout_anchor_ms: None,
+            timeout_anchor_ms: (!scheduled_timeouts.is_empty()).then(now_ms),
+            scheduled_timeouts,
             max_lifetime_ms,
             lifetime_deadline_ms,
         };
@@ -260,6 +282,19 @@ impl<S: Storage> JobManager<S> {
         to: &str,
         action: Option<String>,
     ) -> Result<()> {
+        self.transition_job_with_schedule(job_id, event, from, to, action, Vec::new())
+            .await
+    }
+
+    pub async fn transition_job_with_schedule(
+        &self,
+        job_id: Uuid,
+        event: &str,
+        from: &str,
+        to: &str,
+        action: Option<String>,
+        scheduled_timeouts: Vec<ScheduledTimeout>,
+    ) -> Result<()> {
         let mut job = self.load_job(job_id).await?;
         if job.state != JobState::Running {
             return Err(ShirohaError::InvalidJobState {
@@ -268,8 +303,8 @@ impl<S: Storage> JobManager<S> {
             });
         }
         job.current_state = to.to_string();
-        job.scheduled_timeouts.clear();
-        job.timeout_anchor_ms = None;
+        job.timeout_anchor_ms = (!scheduled_timeouts.is_empty()).then(now_ms);
+        job.scheduled_timeouts = scheduled_timeouts;
         let event = make_event(
             job_id,
             EventKind::Transition {
