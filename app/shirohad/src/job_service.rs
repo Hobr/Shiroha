@@ -494,10 +494,10 @@ impl JobServiceImpl {
         let mut results = Vec::new();
 
         for slot in slots {
-            if let Some(deadline) = deadline {
-                if tokio::time::Instant::now() >= deadline {
-                    break;
-                }
+            if let Some(deadline) = deadline
+                && tokio::time::Instant::now() >= deadline
+            {
+                break;
             }
 
             let request = RemoteActionRequest {
