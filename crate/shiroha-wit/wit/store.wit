@@ -1,4 +1,4 @@
-package shiroha:flow@0.1.2;
+package shiroha:flow@0.2.0;
 
 interface store {
   get: func(namespace: string, key: string) -> option<list<u8>>;
