@@ -1446,11 +1446,11 @@ mod tests {
         manifest
     }
 
-    fn fanout_parallel_manifest(flow_id: &str) -> FlowManifest {
+    fn fanout_parallel_manifest(flow_id: &str, count: u32) -> FlowManifest {
         let mut manifest = fanout_follow_up_manifest(flow_id);
         manifest.actions[0].name = "slow-collect".into();
         manifest.actions[0].dispatch = DispatchMode::FanOut(FanOutConfig {
-            strategy: FanOutStrategy::Count(2),
+            strategy: FanOutStrategy::Count(count),
             aggregator: "pick-success".into(),
             timeout_ms: None,
             min_success: None,
@@ -2456,37 +2456,63 @@ mod tests {
         let harness = TestHarness::new("job-service-fanout-parallel").await;
         deploy_flow(
             harness.state.clone(),
-            "fanout-parallel",
-            &fanout_parallel_manifest("fanout-parallel"),
+            "fanout-parallel-single",
+            &fanout_parallel_manifest("fanout-parallel-single", 1),
+        )
+        .await;
+        deploy_flow(
+            harness.state.clone(),
+            "fanout-parallel-many",
+            &fanout_parallel_manifest("fanout-parallel-many", 3),
         )
         .await;
 
         let service = JobServiceImpl::new(harness.state.clone());
-        let created = service
+        let single = service
             .create_job(Request::new(CreateJobRequest {
-                flow_id: "fanout-parallel".into(),
+                flow_id: "fanout-parallel-single".into(),
                 context: None,
                 max_lifetime_ms: None,
             }))
             .await
             .expect("create job")
             .into_inner();
+        let many = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "fanout-parallel-many".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create many job")
+            .into_inner();
 
-        let started_at = tokio::time::Instant::now();
+        let single_started_at = tokio::time::Instant::now();
         service
             .trigger_event(Request::new(TriggerEventRequest {
-                job_id: created.job_id.clone(),
+                job_id: single.job_id.clone(),
                 event: "start".into(),
-                payload: Some(b"fanout-parallel".to_vec()),
+                payload: Some(b"fanout-parallel-single".to_vec()),
+            }))
+            .await
+            .expect("trigger single fanout");
+        let _single_final_job = wait_for_job(&service, &single.job_id, "completed", "done").await;
+        let single_elapsed = single_started_at.elapsed();
+
+        let many_started_at = tokio::time::Instant::now();
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: many.job_id.clone(),
+                event: "start".into(),
+                payload: Some(b"fanout-parallel-many".to_vec()),
             }))
             .await
             .expect("trigger parallel fanout");
-
-        let _final_job = wait_for_job(&service, &created.job_id, "completed", "done").await;
-        let elapsed = started_at.elapsed();
+        let _many_final_job = wait_for_job(&service, &many.job_id, "completed", "done").await;
+        let many_elapsed = many_started_at.elapsed();
         assert!(
-            elapsed < std::time::Duration::from_millis(260),
-            "fan-out should complete in parallel, elapsed={elapsed:?}"
+            many_elapsed < single_elapsed * 2,
+            "fan-out should complete faster than a serial 3-slot baseline; single={single_elapsed:?}, fanout={many_elapsed:?}"
         );
     }
 
