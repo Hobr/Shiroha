@@ -45,6 +45,16 @@ pub trait Storage: Send + Sync {
     fn list_flow_versions(&self) -> impl Future<Output = Result<Vec<FlowRegistration>>> + Send;
     fn list_flows(&self) -> impl Future<Output = Result<Vec<FlowRegistration>>> + Send;
     fn delete_flow(&self, flow_id: &str) -> impl Future<Output = Result<()>> + Send;
+    fn save_flow_with_wasm(
+        &self,
+        flow: &FlowRegistration,
+        wasm_bytes: &[u8],
+    ) -> impl Future<Output = Result<()>> + Send {
+        async move {
+            self.save_wasm_module(&flow.wasm_hash, wasm_bytes).await?;
+            self.save_flow(flow).await
+        }
+    }
     fn save_wasm_module(
         &self,
         hash: &str,
