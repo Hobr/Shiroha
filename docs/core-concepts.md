@@ -115,6 +115,6 @@
 
 当前实现状态：
 
-- `subprocess` manifest 声明已经可部署和查询
+- `subprocess` 配置字段和示例建模已经存在，但 Phase 1 deploy 路径会显式拒绝 `state-kind = subprocess`
 - 自动创建子 Job、父子关联管理、完成回注仍未落地
 - 现阶段可通过手工触发 `completion-event` 的方式模拟子流程回注

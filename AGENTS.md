@@ -1,4 +1,4 @@
-<!-- Generated: 2026-04-02 | Updated: 2026-04-07 -->
+<!-- Generated: 2026-04-02 | Updated: 2026-04-08 -->
 
 # Shiroha
 
@@ -52,7 +52,7 @@
 - Job 快照会持久化 `pending_events`、`scheduled_timeouts`、`timeout_anchor_ms`、`max_lifetime_ms`、`lifetime_deadline_ms`，server 重启后会恢复 Flow registry、module cache 和可恢复定时器。
 - `crate/shiroha-wit` 是 canonical WIT 来源；`shiroha-sdk` build script、示例 component 和宿主侧测试都依赖它，改 world/interface 时必须联动检查这些路径。
 - deploy 期的 component import/world 一致性校验在 `app/shirohad/src/flow_service.rs`，不是在 `crate/shiroha-wasm` 内部自动完成。
-- `DispatchMode::Remote` 在 standalone 中仍退化为同进程调用；`DispatchMode::FanOut` 的 manifest / host ABI 已有形状，但运行时分发链路尚未真正实现。
+- `DispatchMode::Remote` 在 standalone 中会通过 in-process transport 进入同进程 node worker；`DispatchMode::FanOut` 已支持同进程 fan-out 槽位分发、结果收集、guest `aggregate()` 调用和 follow-up event 推进。
 
 ## Dependencies
 
