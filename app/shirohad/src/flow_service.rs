@@ -222,10 +222,6 @@ impl FlowServiceImpl {
                         action.name
                     )));
                 }
-                return Err(Status::unimplemented(format!(
-                    "fan-out action `{}` is not implemented in Phase 1 runtime",
-                    action.name
-                )));
             }
         }
 
@@ -894,20 +890,21 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "heavy service integration smoke; run explicitly when validating deploy/query flows"]
-    async fn deploy_flow_rejects_phase1_unsupported_fanout() {
+    async fn deploy_flow_accepts_phase1_fanout_shape() {
         let harness = TestHarness::new("flow-fanout-unsupported").await;
         let service = FlowServiceImpl::new(harness.state.clone());
 
-        let error = service
+        let deployed = service
             .deploy_flow(Request::new(DeployFlowRequest {
                 flow_id: "fanout-demo".into(),
                 wasm_bytes: wasm_for_manifest(&unsupported_fanout_manifest()),
             }))
             .await
-            .expect_err("fanout should fail in phase1");
+            .expect("fanout should deploy in phase1")
+            .into_inner();
 
-        assert_eq!(error.code(), tonic::Code::Unimplemented);
-        assert!(error.message().contains("fan-out action `collect`"));
+        assert_eq!(deployed.flow_id, "fanout-demo");
+        assert!(Uuid::parse_str(&deployed.version).is_ok());
     }
 
     #[tokio::test]

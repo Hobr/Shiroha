@@ -3,11 +3,18 @@
 //! 处理 Job 的创建、状态查询、事件触发、生命周期管理（暂停/恢复/取消）。
 //! Phase 1 里所有事件都按 Job 串行处理，暂停期间事件会跟随 Job 快照一起持久化。
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use shiroha_core::error::ShirohaError;
-use shiroha_core::flow::{ActionCapability, DispatchMode, FlowRegistration, StateKind, TimeoutDef};
-use shiroha_core::job::{ActionResult, ExecutionStatus, Job, JobState, ScheduledTimeout};
+use shiroha_core::flow::{
+    ActionCapability, DispatchMode, FanOutConfig, FanOutStrategy, FlowRegistration, StateKind,
+    TimeoutDef,
+};
+use shiroha_core::job::{
+    ActionResult, AggregateDecision, ExecutionStatus, Job, JobState, NodeResult, PendingJobEvent,
+    ScheduledTimeout,
+};
 use shiroha_core::transport::{Message, Transport};
 use shiroha_engine::job::JobCreationOptions;
 use shiroha_proto::shiroha_api::job_service_server::JobService;
@@ -41,6 +48,11 @@ struct TransitionCandidatePlan {
     timeouts: Vec<TimeoutDef>,
 }
 
+struct DeclaredActionOutcome {
+    warning: Option<String>,
+    follow_up: Option<PendingJobEvent>,
+}
+
 /// JobService 的 standalone 实现。
 ///
 /// 它把 gRPC 请求、定时器回调和 WASM 调用串成一条统一的 Job 处理链路。
@@ -49,6 +61,16 @@ pub struct JobServiceImpl {
 }
 
 impl JobServiceImpl {
+    fn fanout_slots(config: &FanOutConfig) -> Vec<String> {
+        match &config.strategy {
+            FanOutStrategy::All => vec![STANDALONE_NODE_ID.to_string()],
+            FanOutStrategy::Count(count) => (0..*count)
+                .map(|index| format!("{STANDALONE_NODE_ID}-{}", index + 1))
+                .collect(),
+            FanOutStrategy::Tagged(tags) => tags.clone(),
+        }
+    }
+
     pub fn new(state: Arc<ShirohaState>) -> Self {
         Self { state }
     }
@@ -164,39 +186,65 @@ impl JobServiceImpl {
         event: String,
         payload: Option<Vec<u8>>,
     ) -> Result<(), Status> {
-        let job = self.load_job(job_id).await?;
-        if event == JOB_LIFETIME_EXPIRED_EVENT {
+        let mut events = VecDeque::from([PendingJobEvent { event, payload }]);
+        self.process_event_sequence_locked(job_id, &mut events)
+            .await
+    }
+
+    async fn process_event_sequence_locked(
+        &self,
+        job_id: Uuid,
+        events: &mut VecDeque<PendingJobEvent>,
+    ) -> Result<(), Status> {
+        while let Some(PendingJobEvent { event, payload }) = events.pop_front() {
+            let job = self.load_job(job_id).await?;
+            if event == JOB_LIFETIME_EXPIRED_EVENT {
+                match job.state {
+                    JobState::Running | JobState::Paused => {
+                        self.state
+                            .job_manager
+                            .cancel_job(job_id)
+                            .await
+                            .map_err(|e| Status::failed_precondition(e.to_string()))?;
+                        self.state.timer_wheel.cancel_all_job_timers(job_id).await;
+                        self.remove_job_lock(job_id).await;
+                        tracing::info!(job_id = %job_id, "job lifetime expired; cancelled job");
+                        return Ok(());
+                    }
+                    JobState::Cancelled | JobState::Completed => return Ok(()),
+                }
+            }
+
             match job.state {
-                JobState::Running | JobState::Paused => {
+                JobState::Running => {
+                    let mut follow_ups = self.process_running_event(job, event, payload).await?;
+                    while let Some(follow_up) = follow_ups.pop() {
+                        events.push_front(follow_up);
+                    }
+                }
+                JobState::Paused => {
                     self.state
                         .job_manager
-                        .cancel_job(job_id)
+                        .queue_pending_event(job_id, event.clone(), payload)
                         .await
-                        .map_err(|e| Status::failed_precondition(e.to_string()))?;
-                    self.state.timer_wheel.cancel_all_job_timers(job_id).await;
-                    self.remove_job_lock(job_id).await;
-                    tracing::info!(job_id = %job_id, "job lifetime expired; cancelled job");
+                        .map_err(|e| Status::internal(e.to_string()))?;
+                    while let Some(queued) = events.pop_back() {
+                        self.state
+                            .job_manager
+                            .push_front_pending_event(job_id, queued)
+                            .await
+                            .map_err(|e| Status::internal(e.to_string()))?;
+                    }
+                    tracing::info!(job_id = %job_id, event, "job paused; queued event");
                     return Ok(());
                 }
-                JobState::Cancelled | JobState::Completed => return Ok(()),
+                JobState::Cancelled | JobState::Completed => {
+                    return Err(Status::failed_precondition(format!("job is {}", job.state)));
+                }
             }
         }
-        match job.state {
-            JobState::Running => self.process_running_event(job, event, payload).await,
-            JobState::Paused => {
-                // 暂停态不丢事件，而是持久化到 Job 快照里，恢复后继续按顺序处理。
-                self.state
-                    .job_manager
-                    .queue_pending_event(job_id, event.clone(), payload)
-                    .await
-                    .map_err(|e| Status::internal(e.to_string()))?;
-                tracing::info!(job_id = %job_id, event, "job paused; queued event");
-                Ok(())
-            }
-            JobState::Cancelled | JobState::Completed => {
-                Err(Status::failed_precondition(format!("job is {}", job.state)))
-            }
-        }
+
+        Ok(())
     }
 
     async fn process_running_event(
@@ -204,7 +252,7 @@ impl JobServiceImpl {
         job: Job,
         event: String,
         payload: Option<Vec<u8>>,
-    ) -> Result<(), Status> {
+    ) -> Result<Vec<PendingJobEvent>, Status> {
         let flow = self.flow_registration_for_job(&job).await?;
         // 只在 engine 访问阶段完成“查拓扑、拿候选边”这类纯读操作，
         // guard 选择和后续 WASM 调用都在锁外完成，避免阻塞其他 Job 读取同一个 Flow。
@@ -330,6 +378,7 @@ impl JobServiceImpl {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let mut action_failures = Vec::new();
+        let mut follow_ups = Vec::new();
         for scheduled in action_sequence(
             from.as_str(),
             to.as_str(),
@@ -337,7 +386,7 @@ impl JobServiceImpl {
             action.as_deref(),
             on_enter.as_deref(),
         ) {
-            if let Some(message) = self
+            let outcome = self
                 .run_declared_action(
                     &flow,
                     scheduled.action_name(),
@@ -346,9 +395,12 @@ impl JobServiceImpl {
                     job.context.clone(),
                     payload.clone(),
                 )
-                .await?
-            {
+                .await?;
+            if let Some(message) = outcome.warning {
                 action_failures.push(message);
+            }
+            if let Some(follow_up) = outcome.follow_up {
+                follow_ups.push(follow_up);
             }
         }
 
@@ -377,10 +429,11 @@ impl JobServiceImpl {
             );
         }
 
-        Ok(())
+        Ok(if is_terminal { Vec::new() } else { follow_ups })
     }
 
     async fn drain_pending_events_locked(&self, job_id: Uuid) -> Result<(), Status> {
+        let mut events = VecDeque::new();
         while let Some(queued) = self
             .state
             .job_manager
@@ -388,33 +441,11 @@ impl JobServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?
         {
-            // 每消费一个排队事件都重新读取 Job，确保后续事件看到的是最新状态。
-            let job = self.load_job(job_id).await?;
-            match job.state {
-                JobState::Running => {
-                    self.process_running_event(job, queued.event, queued.payload)
-                        .await?;
-                }
-                JobState::Paused => {
-                    self.state
-                        .job_manager
-                        .push_front_pending_event(job_id, queued)
-                        .await
-                        .map_err(|e| Status::internal(e.to_string()))?;
-                    return Ok(());
-                }
-                JobState::Cancelled | JobState::Completed => {
-                    self.state
-                        .job_manager
-                        .clear_pending_events(job_id)
-                        .await
-                        .map_err(|e| Status::internal(e.to_string()))?;
-                    return Ok(());
-                }
-            }
+            events.push_back(queued);
         }
 
-        Ok(())
+        self.process_event_sequence_locked(job_id, &mut events)
+            .await
     }
 
     async fn record_action_result(
@@ -430,6 +461,164 @@ impl JobServiceImpl {
             .map_err(|e| Status::internal(e.to_string()))
     }
 
+    async fn invoke_aggregate(
+        &self,
+        flow: &FlowRegistration,
+        name: &str,
+        results: Vec<NodeResult>,
+    ) -> Result<AggregateDecision, Status> {
+        let state = self.state.clone();
+        let flow = flow.clone();
+        let name = name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut host = Self::wasm_host_for_state(&state, &flow)?;
+            host.aggregate(&name, &results)
+                .map_err(|e| Status::internal(e.to_string()))
+        })
+        .await
+        .map_err(|error| Status::internal(format!("aggregate task join error: {error}")))?
+    }
+
+    async fn run_fanout_action(
+        &self,
+        flow: &FlowRegistration,
+        action_name: &str,
+        action_ctx: ActionContext,
+        config: &FanOutConfig,
+    ) -> Result<DeclaredActionOutcome, Status> {
+        let slots = Self::fanout_slots(config);
+        let deadline = config.timeout_ms.map(|timeout_ms| {
+            tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms)
+        });
+        let mut success_count = 0u32;
+        let mut results = Vec::new();
+
+        for slot in slots {
+            if let Some(deadline) = deadline {
+                if tokio::time::Instant::now() >= deadline {
+                    break;
+                }
+            }
+
+            let request = RemoteActionRequest {
+                flow_id: flow.flow_id.clone(),
+                flow_version: flow.version,
+                action_name: action_name.to_string(),
+                action_ctx: action_ctx.clone(),
+                capabilities: flow
+                    .manifest
+                    .actions
+                    .iter()
+                    .find(|candidate| candidate.name == action_name)
+                    .map(|action| action.capabilities.clone())
+                    .unwrap_or_default(),
+            };
+            let payload = serde_json::to_vec(&request).map_err(|error| {
+                Status::internal(format!("encode fan-out action request: {error}"))
+            })?;
+
+            let response = if let Some(deadline) = deadline {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                match tokio::time::timeout(
+                    remaining,
+                    self.state
+                        .transport
+                        .send(STANDALONE_NODE_ID, Message { payload }),
+                )
+                .await
+                {
+                    Ok(result) => result.map_err(|error| Status::internal(error.to_string()))?,
+                    Err(_) => {
+                        results.push(NodeResult {
+                            node_id: slot.clone(),
+                            status: ExecutionStatus::Timeout,
+                            output: None,
+                        });
+                        self.state
+                            .job_manager
+                            .record_action_result(
+                                action_ctx.job_id.parse().map_err(|_| {
+                                    Status::internal("fan-out job id should stay parseable")
+                                })?,
+                                action_name,
+                                Some(slot.clone()),
+                                ExecutionStatus::Timeout,
+                            )
+                            .await
+                            .map_err(|e| Status::internal(e.to_string()))?;
+                        break;
+                    }
+                }
+            } else {
+                self.state
+                    .transport
+                    .send(STANDALONE_NODE_ID, Message { payload })
+                    .await
+                    .map_err(|error| Status::internal(error.to_string()))?
+            };
+
+            let decoded: RemoteActionResponse =
+                serde_json::from_slice(&response.payload).map_err(|error| {
+                    Status::internal(format!("decode fan-out action response: {error}"))
+                })?;
+            let node_result = match (decoded.result, decoded.error) {
+                (Some(result), None) => NodeResult {
+                    node_id: slot.clone(),
+                    status: result.status,
+                    output: result.output,
+                },
+                (None, Some(error)) => NodeResult {
+                    node_id: slot.clone(),
+                    status: ExecutionStatus::Failed,
+                    output: Some(error.into_bytes()),
+                },
+                _ => {
+                    return Err(Status::internal(
+                        "fan-out action response must contain exactly one of result or error",
+                    ));
+                }
+            };
+
+            self.state
+                .job_manager
+                .record_action_result(
+                    action_ctx
+                        .job_id
+                        .parse()
+                        .map_err(|_| Status::internal("fan-out job id should stay parseable"))?,
+                    action_name,
+                    Some(node_result.node_id.clone()),
+                    node_result.status,
+                )
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+
+            if node_result.status == ExecutionStatus::Success {
+                success_count += 1;
+            }
+            results.push(node_result);
+
+            if config
+                .min_success
+                .is_some_and(|min_success| success_count >= min_success)
+            {
+                break;
+            }
+        }
+
+        let decision = self
+            .invoke_aggregate(flow, &config.aggregator, results)
+            .await?;
+
+        Ok(DeclaredActionOutcome {
+            warning: None,
+            follow_up: Some(PendingJobEvent {
+                event: decision.event,
+                payload: decision.context_patch,
+            }),
+        })
+    }
+
     async fn run_declared_action(
         &self,
         flow: &FlowRegistration,
@@ -438,11 +627,41 @@ impl JobServiceImpl {
         state: &str,
         context: Option<Vec<u8>>,
         payload: Option<Vec<u8>>,
-    ) -> Result<Option<String>, Status> {
+    ) -> Result<DeclaredActionOutcome, Status> {
+        let action = flow
+            .manifest
+            .actions
+            .iter()
+            .find(|candidate| candidate.name == action_name)
+            .ok_or_else(|| {
+                Status::failed_precondition(format!(
+                    "action `{action_name}` not declared in manifest"
+                ))
+            })?;
+        let action_ctx = ActionContext {
+            job_id: job_id.to_string(),
+            state: state.to_string(),
+            context,
+            payload,
+        };
+
+        if let DispatchMode::FanOut(config) = &action.dispatch {
+            return self
+                .run_fanout_action(flow, action_name, action_ctx, config)
+                .await;
+        }
+
         // 当前语义里 action / state hook 都属于“状态推进后的副作用”：
         // 即使执行状态失败，转移和事件日志也已经提交，便于后续审计/补偿。
         let action_result = match self
-            .invoke_action(flow, action_name, job_id, state, context, payload)
+            .invoke_action(
+                flow,
+                action_name,
+                job_id,
+                state,
+                action_ctx.context,
+                action_ctx.payload,
+            )
             .await
         {
             Ok(result) => result,
@@ -462,10 +681,13 @@ impl JobServiceImpl {
                         "failed to persist synthetic action result after committed transition"
                     );
                 }
-                return Ok(Some(format!(
-                    "transition committed but action `{action_name}` failed to execute: {}",
-                    error.message()
-                )));
+                return Ok(DeclaredActionOutcome {
+                    warning: Some(format!(
+                        "transition committed but action `{action_name}` failed to execute: {}",
+                        error.message()
+                    )),
+                    follow_up: None,
+                });
             }
         };
         if let Err(record_error) = self
@@ -480,13 +702,19 @@ impl JobServiceImpl {
             );
         }
         if action_result.status == ExecutionStatus::Success {
-            return Ok(None);
+            return Ok(DeclaredActionOutcome {
+                warning: None,
+                follow_up: None,
+            });
         }
 
-        Ok(Some(format!(
-            "transition committed but action `{action_name}` finished with status {}",
-            execution_status_name(action_result.status)
-        )))
+        Ok(DeclaredActionOutcome {
+            warning: Some(format!(
+                "transition committed but action `{action_name}` finished with status {}",
+                execution_status_name(action_result.status)
+            )),
+            follow_up: None,
+        })
     }
 
     async fn rearm_persisted_timeouts(&self, job_id: Uuid) -> Result<(), Status> {
@@ -708,8 +936,8 @@ impl JobService for JobServiceImpl {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let mut action_failures = Vec::new();
-        if let Some(on_enter) = initial_state.on_enter.as_deref()
-            && let Some(message) = self
+        if let Some(on_enter) = initial_state.on_enter.as_deref() {
+            let outcome = self
                 .run_declared_action(
                     &flow,
                     on_enter,
@@ -718,9 +946,10 @@ impl JobService for JobServiceImpl {
                     job.context.clone(),
                     None,
                 )
-                .await?
-        {
-            action_failures.push(message);
+                .await?;
+            if let Some(message) = outcome.warning {
+                action_failures.push(message);
+            }
         }
 
         if initial_state.kind == StateKind::Terminal {
@@ -1112,6 +1341,80 @@ mod tests {
             actions: vec![ActionDef {
                 name: "require-context".into(),
                 dispatch: DispatchMode::Local,
+                capabilities: Vec::new(),
+            }],
+        }
+    }
+
+    fn fanout_follow_up_manifest(flow_id: &str) -> FlowManifest {
+        FlowManifest {
+            id: flow_id.to_string(),
+            host_world: FlowWorld::Sandbox,
+            states: vec![
+                StateDef {
+                    name: "idle".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "collecting".into(),
+                    kind: StateKind::Normal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "done".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+                StateDef {
+                    name: "retry".into(),
+                    kind: StateKind::Terminal,
+                    on_enter: None,
+                    on_exit: None,
+                    subprocess: None,
+                },
+            ],
+            transitions: vec![
+                TransitionDef {
+                    from: "idle".into(),
+                    to: "collecting".into(),
+                    event: "start".into(),
+                    guard: None,
+                    action: Some("collect".into()),
+                    timeout: None,
+                },
+                TransitionDef {
+                    from: "collecting".into(),
+                    to: "done".into(),
+                    event: "done".into(),
+                    guard: None,
+                    action: None,
+                    timeout: None,
+                },
+                TransitionDef {
+                    from: "collecting".into(),
+                    to: "retry".into(),
+                    event: "retry".into(),
+                    guard: None,
+                    action: None,
+                    timeout: None,
+                },
+            ],
+            initial_state: "idle".into(),
+            actions: vec![ActionDef {
+                name: "collect".into(),
+                dispatch: DispatchMode::FanOut(FanOutConfig {
+                    strategy: FanOutStrategy::Count(2),
+                    aggregator: "pick-success".into(),
+                    timeout_ms: None,
+                    min_success: None,
+                }),
                 capabilities: Vec::new(),
             }],
         }
@@ -1932,6 +2235,85 @@ mod tests {
                 if action == "ship" && *status == ExecutionStatus::Success
         ));
         assert!(matches!(kinds[3], EventKind::Completed { .. }));
+    }
+
+    #[tokio::test]
+    #[ignore = "heavy job integration smoke; run explicitly when validating shirohad fan-out dispatch"]
+    async fn fanout_dispatch_aggregates_and_drives_follow_up_transition() {
+        let harness = TestHarness::new("job-service-fanout-follow-up").await;
+        deploy_flow(
+            harness.state.clone(),
+            "fanout-flow",
+            &fanout_follow_up_manifest("fanout-flow"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "fanout-flow".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "start".into(),
+                payload: Some(b"fanout-payload".to_vec()),
+            }))
+            .await
+            .expect("trigger fanout");
+
+        let final_job = wait_for_job(&service, &created.job_id, "completed", "done").await;
+        assert_eq!(final_job.current_state, "done");
+
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id,
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        let kinds: Vec<EventKind> = events
+            .events
+            .into_iter()
+            .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
+            .collect();
+
+        assert!(matches!(kinds[0], EventKind::Created { .. }));
+        assert!(matches!(
+            &kinds[1],
+            EventKind::Transition { event, from, to, .. }
+                if event == "start" && from == "idle" && to == "collecting"
+        ));
+        assert!(matches!(
+            &kinds[2],
+            EventKind::ActionComplete { action, node_id, status }
+                if action == "collect"
+                    && node_id.as_deref() == Some("standalone-1")
+                    && *status == ExecutionStatus::Success
+        ));
+        assert!(matches!(
+            &kinds[3],
+            EventKind::ActionComplete { action, node_id, status }
+                if action == "collect"
+                    && node_id.as_deref() == Some("standalone-2")
+                    && *status == ExecutionStatus::Success
+        ));
+        assert!(matches!(
+            &kinds[4],
+            EventKind::Transition { event, from, to, .. }
+                if event == "done" && from == "collecting" && to == "done"
+        ));
+        assert!(matches!(kinds[5], EventKind::Completed { .. }));
     }
 
     #[tokio::test]

@@ -46,6 +46,7 @@ Shiroha 统一守护进程。Phase 1 仅支持 standalone 模式（Controller + 
 - UUID 字符串解析统一使用 `parse_uuid()` 辅助函数
 - 定时器注册：进入新状态后扫描该状态的所有出边，有 timeout 就注册
 - 运行中 Job 必须按 `job.flow_version` 读取 Flow/WASM，不能回退到最新版本
-- `DispatchMode::Remote` 在当前 standalone 里会退化为同进程调用；`FanOut` 仍未在运行时真正执行
+- `DispatchMode::Remote` 在当前 standalone 里会通过 in-process transport 进入独立的 node worker 边界
+- `DispatchMode::FanOut` 在当前 standalone 里会分发到同进程的 fan-out 槽位，收集结果后调用 guest `aggregate()`，并把返回事件作为后续内部事件继续推进状态机
 
 <!-- MANUAL: -->
