@@ -41,7 +41,7 @@ RUST_LOG=warn cargo run -p shirohad -- --listen 127.0.0.1:50051
 ```bash
 sctl flow deploy \
   --file example/warning-deadlock/target/wasm32-wasip2/release/warning_deadlock.wasm \
-  --flow-id warning-deadlock
+  --flow-id warning-deadlock-demo
 ```
 
 预期结果：

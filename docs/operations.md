@@ -2,6 +2,10 @@
 
 ## 节点管理
 
+当前 Phase 1 仍没有对外可管理的 Node 平面。
+
+standalone 运行时内部会创建同进程 node worker 和 fan-out 槽位，但它们不是用户可注册/查询/排障的独立节点实例。
+
 以下内容仍属于分布式阶段目标：
 
 - Node 注册 / 发现
@@ -34,6 +38,8 @@ Controller ──── gRPC ────► Node A
 ```
 
 适合企业内部编排，有明确调度需求、需要全局视图和监控。
+
+当前 Phase 1 的 standalone 运行时只具备“Controller + 同进程 worker”这一种开发/单机形态，还没有真正的独立 Controller / Node 集群部署模式。
 
 ### 模式二：无 Controller（去中心化 P2P）— 远期目标
 

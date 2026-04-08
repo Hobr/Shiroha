@@ -17,7 +17,7 @@
 - `reject` 事件：
   直接进入终态 `rejected`
 
-`aggregate` 也给了一个最小 fan-out 聚合示例：
+`aggregate` 也给了一个最小 fan-out 聚合示例，但这份 simple Flow 自己并没有声明 `fan-out` action，因此这里只是展示 guest 侧聚合函数的写法：
 
 - 当聚合函数名为 `pick-success` 且至少一个节点成功时，返回事件 `done`
 - 否则返回事件 `retry`
@@ -43,13 +43,13 @@ example/simple/target/wasm32-wasip2/release/simple.wasm
 ```bash
 sctl flow deploy \
   --file example/simple/target/wasm32-wasip2/release/simple.wasm \
-  --flow-id simple
+  --flow-id approval-demo
 ```
 
 部署后可以先确认服务端看到的 manifest：
 
 ```bash
-sctl flow get --flow-id simple
+sctl flow get --flow-id approval-demo
 ```
 
 ## 触发测试
@@ -57,7 +57,7 @@ sctl flow get --flow-id simple
 创建一个带上下文的 Job，然后用带 payload 的事件推进：
 
 ```bash
-sctl job new --flow-id simple --context-text "demo-request"
+sctl job new --flow-id approval-demo --context-text "demo-request"
 sctl job trig --job-id <job-id> --event approve --payload-text "approved-by-cli"
 ```
 

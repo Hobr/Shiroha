@@ -7,12 +7,17 @@
 | 模式 | 执行位置 | 说明 |
 | ------ | ---------- | ------ |
 | `local` | Controller 本地 | 轻量操作，无需网络开销 |
-| `remote` | 未来为单个 Node；当前 standalone 退化为本地调用 | 普通任务分发 |
-| `fan-out` | 未来为多个 Node；当前仅保留 manifest 形状 | 并行执行 + 聚合结果 |
+| `remote` | standalone 内的同进程 node worker | 当前已通过 in-process transport 建立 Controller→Node worker 边界 |
+| `fan-out` | standalone 内的多个同进程 fan-out 槽位 | 当前会收集 `NodeResult`，再调用 guest `aggregate()` 决定后续事件 |
 
 ## 调度策略
 
-当前 Phase 1 里没有真正的跨节点调度。
+当前 Phase 1 里仍没有真正的跨机器节点调度。
+
+补充说明：
+
+- `remote` 当前固定分发到 standalone 内置 node worker
+- `fan-out` 的 `all` / `count(N)` / `tagged(...)` 当前只会映射到同进程槽位或标签名，不依赖真实的节点发现与负载信息
 
 以下内容仍属于后续阶段目标：
 
@@ -26,6 +31,7 @@
 
 - Controller 重启后恢复持久化的 Job 快照、暂停事件队列、timeout 计划、Flow 版本和 WASM 模块缓存
 - 恢复边界：当前不会恢复运行中的 in-flight Action，恢复以持久化快照为边界
+- fan-out 当前支持整体 `timeout-ms` 和 `min-success` 的提前聚合截断
 
 以下仍属于后续阶段目标：
 
@@ -43,7 +49,7 @@
 
 ### 实现方式
 
-- Controller 维护一个本地定时器管理器；当前实现是一 timer 一 `tokio::sleep` 任务
+- Controller 维护一个本地定时器管理器；当前实现由集中式 `DelayQueue` 驱动，而不是“一 timer 一 task”
 - 状态转移进入某状态时，如果该状态的出边（transition）配置了 timeout，Controller 注册定时器
 - 定时器到期后，Controller 向该 Job 的串行处理路径注入 timeout-event
 - 对于 transition timeout，Job 暂停时定时器暂停，恢复时重新计算剩余时间

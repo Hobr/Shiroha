@@ -67,6 +67,7 @@
 - `paused` 状态下，事件会持久化到 Job 快照中的队列，`resume` 后按顺序回放
 - 当前还没有一个“所有状态通用、持久化的 FIFO event inbox” 抽象
 - 事件处理过程：获取 Job 锁 → 评估 Guard → 提交状态转移 → 执行 `on-exit` / transition action / `on-enter`
+- 如果事件在 `paused` 状态下到达，它会作为 Job 快照里的待处理队列被持久化，但不会生成独立的审计事件记录
 
 这是正确性保证的基础，避免并发状态转移导致状态不一致。
 
@@ -81,12 +82,17 @@
 
 ## Execution
 
-一次 Action 的执行。当前 Phase 1 真正可用的是本地执行路径。
+一次 Action 的执行。当前 Phase 1 已经可用的执行路径包括本地执行、standalone 内的 remote、以及 standalone 内的 fan-out。
 
 当前实现状态：
 
-- standalone 下，`remote` 仍退化为与 `local` 相同的同进程调用路径
-- `fan-out` 相关 manifest 形状已存在，但运行时尚不能真正执行
+- `local` action 仍由 Controller 本地直接调用 guest
+- standalone 下，`remote` action 会通过 in-process transport 进入同进程的 node worker，再由该 worker 调用 guest
+- standalone 下，`fan-out` action 会分发到同进程的 fan-out 槽位，收集 `NodeResult` 后调用 guest `aggregate()`，并把返回事件作为后续内部事件继续推进状态机
+- 这仍不是分布式集群执行：当前没有独立进程 Node、没有节点注册/发现、也没有真实的跨机器调度
+- `fan-out` 返回的聚合事件必须能从“action 已提交后的目标状态”继续匹配转移；如果 guest 返回的事件在该状态上没有出边，后续推进会失败
+- 当前事件日志只记录已提交的生命周期事件、状态转移和 `ActionComplete`；不会额外记录“外部触发事件已接收”“guard 被拒绝”“事件因 paused 被排队”“取消原因”等细粒度审计条目
+- `ActionComplete` 当前只保留 action 名、可选 `node_id` 和执行状态；guest `output` 不会进入事件日志，也不会自动反馈到后续流程上下文
 
 ## 子流程（Subprocess）
 
