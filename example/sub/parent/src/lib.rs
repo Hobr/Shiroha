@@ -43,6 +43,18 @@ impl Guest for ParentFlow {
         }
     }
 
+    fn supports_action(name: String) -> bool {
+        matches!(name.as_str(), "prepare-parent-context" | "finalize-parent")
+    }
+
+    fn supports_guard(name: String) -> bool {
+        matches!(name.as_str(), "has-payload")
+    }
+
+    fn supports_aggregate(_name: String) -> bool {
+        false
+    }
+
     fn invoke_action(name: String, ctx: ActionContext) -> ActionResult {
         match name.as_str() {
             "prepare-parent-context" => action_ok!(Some(

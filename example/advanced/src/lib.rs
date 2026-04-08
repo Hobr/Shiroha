@@ -68,6 +68,21 @@ impl Guest for AdvancedFlow {
         }
     }
 
+    fn supports_action(name: String) -> bool {
+        matches!(
+            name.as_str(),
+            "normalize-request" | "collect-quotes" | "ship"
+        )
+    }
+
+    fn supports_guard(name: String) -> bool {
+        matches!(name.as_str(), "has-minimum-payload" | "allow-approve")
+    }
+
+    fn supports_aggregate(name: String) -> bool {
+        matches!(name.as_str(), "pick-success")
+    }
+
     fn invoke_action(name: String, ctx: ActionContext) -> ActionResult {
         match name.as_str() {
             "normalize-request" => action_ok!(Some(

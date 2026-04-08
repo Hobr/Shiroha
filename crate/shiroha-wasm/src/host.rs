@@ -25,6 +25,9 @@ use crate::error::WasmError;
 const DEFAULT_FUEL: u64 = 1_000_000;
 // 兼容 WIT 生成代码中常见的 kebab-case / snake_case 两种导出命名。
 const GET_MANIFEST_EXPORTS: &[&str] = &["get-manifest", "get_manifest"];
+const SUPPORT_ACTION_EXPORTS: &[&str] = &["supports-action", "supports_action"];
+const SUPPORT_GUARD_EXPORTS: &[&str] = &["supports-guard", "supports_guard"];
+const SUPPORT_AGGREGATE_EXPORTS: &[&str] = &["supports-aggregate", "supports_aggregate"];
 const INVOKE_ACTION_EXPORTS: &[&str] = &["invoke-action", "invoke_action"];
 const INVOKE_GUARD_EXPORTS: &[&str] = &["invoke-guard", "invoke_guard"];
 const AGGREGATE_EXPORTS: &[&str] = &["aggregate"];
@@ -552,6 +555,9 @@ impl WasmHost {
     pub fn validate_required_exports(&self) -> Result<(), WasmError> {
         let mut guest = self.guest()?;
         let _ = guest.get_typed_func::<(), (ComponentFlowManifest,)>(GET_MANIFEST_EXPORTS)?;
+        let _ = guest.get_typed_func::<(String,), (bool,)>(SUPPORT_ACTION_EXPORTS)?;
+        let _ = guest.get_typed_func::<(String,), (bool,)>(SUPPORT_GUARD_EXPORTS)?;
+        let _ = guest.get_typed_func::<(String,), (bool,)>(SUPPORT_AGGREGATE_EXPORTS)?;
         let _ = guest.get_typed_func::<(String, ActionContext), (ComponentActionResult,)>(
             INVOKE_ACTION_EXPORTS,
         )?;
@@ -572,6 +578,36 @@ impl WasmHost {
             .call(&mut guest.store, ())
             .map_err(|e| WasmError::Execution(e.to_string()))?;
         Ok(manifest.into())
+    }
+
+    pub fn supports_action(&mut self, name: &str) -> Result<bool, WasmError> {
+        let mut guest = self.guest()?;
+        Self::set_allowed_capabilities(&mut guest, &[]);
+        let supports = guest.get_typed_func::<(String,), (bool,)>(SUPPORT_ACTION_EXPORTS)?;
+        let (supported,) = supports
+            .call(&mut guest.store, (name.to_string(),))
+            .map_err(|e| WasmError::Execution(e.to_string()))?;
+        Ok(supported)
+    }
+
+    pub fn supports_guard(&mut self, name: &str) -> Result<bool, WasmError> {
+        let mut guest = self.guest()?;
+        Self::set_allowed_capabilities(&mut guest, &[]);
+        let supports = guest.get_typed_func::<(String,), (bool,)>(SUPPORT_GUARD_EXPORTS)?;
+        let (supported,) = supports
+            .call(&mut guest.store, (name.to_string(),))
+            .map_err(|e| WasmError::Execution(e.to_string()))?;
+        Ok(supported)
+    }
+
+    pub fn supports_aggregate(&mut self, name: &str) -> Result<bool, WasmError> {
+        let mut guest = self.guest()?;
+        Self::set_allowed_capabilities(&mut guest, &[]);
+        let supports = guest.get_typed_func::<(String,), (bool,)>(SUPPORT_AGGREGATE_EXPORTS)?;
+        let (supported,) = supports
+            .call(&mut guest.store, (name.to_string(),))
+            .map_err(|e| WasmError::Execution(e.to_string()))?;
+        Ok(supported)
     }
 
     pub fn invoke_action(

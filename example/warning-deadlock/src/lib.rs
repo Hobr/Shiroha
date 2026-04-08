@@ -53,6 +53,18 @@ impl Guest for WarningDeadlockFlow {
         }
     }
 
+    fn supports_action(_name: String) -> bool {
+        false
+    }
+
+    fn supports_guard(_name: String) -> bool {
+        false
+    }
+
+    fn supports_aggregate(_name: String) -> bool {
+        false
+    }
+
     fn invoke_action(name: String, _ctx: ActionContext) -> ActionResult {
         ActionResult {
             status: ExecutionStatus::Failed,

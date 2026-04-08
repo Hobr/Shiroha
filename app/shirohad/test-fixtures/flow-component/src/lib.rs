@@ -118,6 +118,21 @@ impl Guest for FlowComponent {
         manifest.into()
     }
 
+    fn supports_action(name: String) -> bool {
+        matches!(name.as_str(), "ship" | "enter" | "exit")
+    }
+
+    fn supports_guard(name: String) -> bool {
+        matches!(
+            name.as_str(),
+            "allow" | "allow_approve" | "require-context"
+        )
+    }
+
+    fn supports_aggregate(name: String) -> bool {
+        matches!(name.as_str(), "pick-success" | "pick_success")
+    }
+
     fn invoke_action(name: String, ctx: ActionContext) -> ActionResult {
         match name.as_str() {
             "ship" | "enter" | "exit" => {

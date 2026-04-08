@@ -121,6 +121,9 @@ world flow {
   }
 
   export get-manifest: func() -> flow-manifest;
+  export supports-action: func(name: string) -> bool;
+  export supports-guard: func(name: string) -> bool;
+  export supports-aggregate: func(name: string) -> bool;
   export invoke-action: func(name: string, ctx: action-context) -> action-result;
   export invoke-guard: func(name: string, ctx: guard-context) -> bool;
   export aggregate: func(name: string, results: list<node-result>) -> aggregate-decision;
