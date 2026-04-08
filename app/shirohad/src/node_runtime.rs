@@ -12,6 +12,7 @@ use shiroha_core::job::ActionResult;
 use shiroha_core::transport::{InProcessTransport, Response};
 use shiroha_wasm::host::{ActionContext, WasmHost};
 use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::server::ShirohaState;
@@ -112,9 +113,27 @@ pub(crate) async fn spawn_standalone_node_worker(
 ) -> JoinHandle<()> {
     let mut receiver = transport.register_node(STANDALONE_NODE_ID).await;
     tokio::spawn(async move {
-        while let Some(request) = receiver.recv().await {
-            let response = handle_transport_request(state.clone(), request.message.payload).await;
-            let _ = request.respond.send(response);
+        let mut in_flight = JoinSet::new();
+
+        loop {
+            tokio::select! {
+                Some(request) = receiver.recv() => {
+                    let state = state.clone();
+                    in_flight.spawn(async move {
+                        let response = handle_transport_request(state, request.message.payload).await;
+                        let _ = request.respond.send(response);
+                    });
+                }
+                Some(joined) = in_flight.join_next(), if !in_flight.is_empty() => {
+                    let _ = joined;
+                }
+                else => break,
+            }
+        }
+
+        in_flight.abort_all();
+        while let Some(joined) = in_flight.join_next().await {
+            let _ = joined;
         }
     })
 }

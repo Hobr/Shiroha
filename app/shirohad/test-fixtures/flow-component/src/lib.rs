@@ -4,6 +4,8 @@
 //! `get_manifest / invoke_action / invoke_guard / aggregate` 实现，
 //! 供宿主侧测试 host-guest 交互链路。
 
+use std::time::Duration;
+
 use serde::Deserialize;
 
 shiroha_sdk::generate_flow!();
@@ -119,7 +121,10 @@ impl Guest for FlowComponent {
     }
 
     fn supports_action(name: String) -> bool {
-        matches!(name.as_str(), "ship" | "enter" | "exit" | "collect")
+        matches!(
+            name.as_str(),
+            "ship" | "enter" | "exit" | "collect" | "slow-collect"
+        )
     }
 
     fn supports_guard(name: String) -> bool {
@@ -146,6 +151,13 @@ impl Guest for FlowComponent {
                         )
                         .into_bytes(),
                     ),
+                }
+            }
+            "slow-collect" => {
+                std::thread::sleep(Duration::from_millis(150));
+                ActionResult {
+                    status: ExecutionStatus::Success,
+                    output: Some(b"slow-collect".to_vec()),
                 }
             }
             other => ActionResult {

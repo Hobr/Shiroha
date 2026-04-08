@@ -25,6 +25,7 @@ use shiroha_proto::shiroha_api::{
     ResumeJobRequest, ResumeJobResponse, TriggerEventRequest, TriggerEventResponse,
 };
 use shiroha_wasm::host::{ActionContext, GuardContext, WasmHost};
+use tokio::task::JoinSet;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
@@ -51,6 +52,10 @@ struct TransitionCandidatePlan {
 struct DeclaredActionOutcome {
     warning: Option<String>,
     follow_up: Option<PendingJobEvent>,
+}
+
+struct FanoutSlotOutcome {
+    node_result: NodeResult,
 }
 
 /// JobService 的 standalone 实现。
@@ -490,102 +495,90 @@ impl JobServiceImpl {
         let deadline = config.timeout_ms.map(|timeout_ms| {
             tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms)
         });
-        let mut success_count = 0u32;
-        let mut results = Vec::new();
+        let job_id: Uuid = action_ctx
+            .job_id
+            .parse()
+            .map_err(|_| Status::internal("fan-out job id should stay parseable"))?;
+        let capabilities = flow
+            .manifest
+            .actions
+            .iter()
+            .find(|candidate| candidate.name == action_name)
+            .map(|action| action.capabilities.clone())
+            .unwrap_or_default();
 
+        let mut join_set = JoinSet::new();
         for slot in slots {
-            if let Some(deadline) = deadline
-                && tokio::time::Instant::now() >= deadline
-            {
-                break;
-            }
-
             let request = RemoteActionRequest {
                 flow_id: flow.flow_id.clone(),
                 flow_version: flow.version,
                 action_name: action_name.to_string(),
                 action_ctx: action_ctx.clone(),
-                capabilities: flow
-                    .manifest
-                    .actions
-                    .iter()
-                    .find(|candidate| candidate.name == action_name)
-                    .map(|action| action.capabilities.clone())
-                    .unwrap_or_default(),
+                capabilities: capabilities.clone(),
             };
-            let payload = serde_json::to_vec(&request).map_err(|error| {
-                Status::internal(format!("encode fan-out action request: {error}"))
-            })?;
-
-            let response = if let Some(deadline) = deadline {
-                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-                match tokio::time::timeout(
-                    remaining,
-                    self.state
-                        .transport
-                        .send(STANDALONE_NODE_ID, Message { payload }),
-                )
-                .await
-                {
-                    Ok(result) => result.map_err(|error| Status::internal(error.to_string()))?,
-                    Err(_) => {
-                        results.push(NodeResult {
-                            node_id: slot.clone(),
-                            status: ExecutionStatus::Timeout,
-                            output: None,
-                        });
-                        self.state
-                            .job_manager
-                            .record_action_result(
-                                action_ctx.job_id.parse().map_err(|_| {
-                                    Status::internal("fan-out job id should stay parseable")
-                                })?,
-                                action_name,
-                                Some(slot.clone()),
-                                ExecutionStatus::Timeout,
-                            )
-                            .await
-                            .map_err(|e| Status::internal(e.to_string()))?;
-                        break;
-                    }
-                }
-            } else {
-                self.state
-                    .transport
+            let transport = self.state.transport.clone();
+            join_set.spawn(async move {
+                let payload = serde_json::to_vec(&request)
+                    .map_err(|error| format!("encode fan-out action request: {error}"))?;
+                let response = transport
                     .send(STANDALONE_NODE_ID, Message { payload })
                     .await
-                    .map_err(|error| Status::internal(error.to_string()))?
+                    .map_err(|error| error.to_string())?;
+
+                let decoded: RemoteActionResponse = serde_json::from_slice(&response.payload)
+                    .map_err(|error| format!("decode fan-out action response: {error}"))?;
+                let node_result = match (decoded.result, decoded.error) {
+                    (Some(result), None) => NodeResult {
+                        node_id: slot,
+                        status: result.status,
+                        output: result.output,
+                    },
+                    (None, Some(error)) => NodeResult {
+                        node_id: slot,
+                        status: ExecutionStatus::Failed,
+                        output: Some(error.into_bytes()),
+                    },
+                    _ => {
+                        return Err(
+                            "fan-out action response must contain exactly one of result or error"
+                                .to_string(),
+                        );
+                    }
+                };
+
+                Ok(FanoutSlotOutcome { node_result })
+            });
+        }
+
+        let mut success_count = 0u32;
+        let mut aggregate_results = Vec::new();
+        let mut cutoff_reached = false;
+        loop {
+            let maybe_joined = if let Some(deadline) = deadline {
+                tokio::select! {
+                    joined = join_set.join_next(), if !join_set.is_empty() => joined,
+                    _ = tokio::time::sleep_until(deadline), if !join_set.is_empty() => {
+                        cutoff_reached = true;
+                        continue;
+                    }
+                    else => None,
+                }
+            } else {
+                join_set.join_next().await
             };
 
-            let decoded: RemoteActionResponse =
-                serde_json::from_slice(&response.payload).map_err(|error| {
-                    Status::internal(format!("decode fan-out action response: {error}"))
-                })?;
-            let node_result = match (decoded.result, decoded.error) {
-                (Some(result), None) => NodeResult {
-                    node_id: slot.clone(),
-                    status: result.status,
-                    output: result.output,
-                },
-                (None, Some(error)) => NodeResult {
-                    node_id: slot.clone(),
-                    status: ExecutionStatus::Failed,
-                    output: Some(error.into_bytes()),
-                },
-                _ => {
-                    return Err(Status::internal(
-                        "fan-out action response must contain exactly one of result or error",
-                    ));
-                }
+            let Some(joined) = maybe_joined else {
+                break;
             };
+            let outcome = joined
+                .map_err(|error| Status::internal(format!("fan-out task join error: {error}")))?
+                .map_err(Status::internal)?;
+            let node_result = outcome.node_result;
 
             self.state
                 .job_manager
                 .record_action_result(
-                    action_ctx
-                        .job_id
-                        .parse()
-                        .map_err(|_| Status::internal("fan-out job id should stay parseable"))?,
+                    job_id,
                     action_name,
                     Some(node_result.node_id.clone()),
                     node_result.status,
@@ -596,18 +589,27 @@ impl JobServiceImpl {
             if node_result.status == ExecutionStatus::Success {
                 success_count += 1;
             }
-            results.push(node_result);
+            if !cutoff_reached {
+                if let Some(deadline) = deadline
+                    && tokio::time::Instant::now() >= deadline
+                {
+                    cutoff_reached = true;
+                }
+                if !cutoff_reached {
+                    aggregate_results.push(node_result.clone());
+                }
+            }
 
             if config
                 .min_success
                 .is_some_and(|min_success| success_count >= min_success)
             {
-                break;
+                cutoff_reached = true;
             }
         }
 
         let decision = self
-            .invoke_aggregate(flow, &config.aggregator, results)
+            .invoke_aggregate(flow, &config.aggregator, aggregate_results)
             .await?;
 
         Ok(DeclaredActionOutcome {
@@ -1418,6 +1420,43 @@ mod tests {
                 capabilities: Vec::new(),
             }],
         }
+    }
+
+    fn fanout_tagged_manifest(flow_id: &str) -> FlowManifest {
+        let mut manifest = fanout_follow_up_manifest(flow_id);
+        manifest.actions[0].dispatch = DispatchMode::FanOut(FanOutConfig {
+            strategy: FanOutStrategy::Tagged(vec!["edge-a".into(), "edge-b".into()]),
+            aggregator: "pick-success".into(),
+            timeout_ms: None,
+            min_success: None,
+        });
+        manifest
+    }
+
+    fn fanout_timeout_manifest(flow_id: &str) -> FlowManifest {
+        let mut manifest = fanout_follow_up_manifest(flow_id);
+        manifest.actions[0].name = "slow-collect".into();
+        manifest.actions[0].dispatch = DispatchMode::FanOut(FanOutConfig {
+            strategy: FanOutStrategy::Count(2),
+            aggregator: "pick-success".into(),
+            timeout_ms: Some(50),
+            min_success: None,
+        });
+        manifest.transitions[0].action = Some("slow-collect".into());
+        manifest
+    }
+
+    fn fanout_parallel_manifest(flow_id: &str) -> FlowManifest {
+        let mut manifest = fanout_follow_up_manifest(flow_id);
+        manifest.actions[0].name = "slow-collect".into();
+        manifest.actions[0].dispatch = DispatchMode::FanOut(FanOutConfig {
+            strategy: FanOutStrategy::Count(2),
+            aggregator: "pick-success".into(),
+            timeout_ms: None,
+            min_success: None,
+        });
+        manifest.transitions[0].action = Some("slow-collect".into());
+        manifest
     }
 
     #[tokio::test]
@@ -2287,6 +2326,17 @@ mod tests {
             .into_iter()
             .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
             .collect();
+        let action_complete_nodes = kinds
+            .iter()
+            .filter_map(|kind| match kind {
+                EventKind::ActionComplete {
+                    action,
+                    node_id,
+                    status,
+                } if action == "collect" && *status == ExecutionStatus::Success => node_id.clone(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
         assert!(matches!(kinds[0], EventKind::Created { .. }));
         assert!(matches!(
@@ -2294,26 +2344,150 @@ mod tests {
             EventKind::Transition { event, from, to, .. }
                 if event == "start" && from == "idle" && to == "collecting"
         ));
+        assert_eq!(action_complete_nodes.len(), 2);
+        assert!(action_complete_nodes.contains(&"standalone-1".to_string()));
+        assert!(action_complete_nodes.contains(&"standalone-2".to_string()));
         assert!(matches!(
-            &kinds[2],
-            EventKind::ActionComplete { action, node_id, status }
-                if action == "collect"
-                    && node_id.as_deref() == Some("standalone-1")
-                    && *status == ExecutionStatus::Success
-        ));
-        assert!(matches!(
-            &kinds[3],
-            EventKind::ActionComplete { action, node_id, status }
-                if action == "collect"
-                    && node_id.as_deref() == Some("standalone-2")
-                    && *status == ExecutionStatus::Success
-        ));
-        assert!(matches!(
-            &kinds[4],
+            kinds.iter().find(|kind| matches!(kind, EventKind::Transition { event, .. } if event == "done")).expect("done transition"),
             EventKind::Transition { event, from, to, .. }
                 if event == "done" && from == "collecting" && to == "done"
         ));
-        assert!(matches!(kinds[5], EventKind::Completed { .. }));
+        assert!(matches!(kinds.last(), Some(EventKind::Completed { .. })));
+    }
+
+    #[tokio::test]
+    #[ignore = "heavy job integration smoke; run explicitly when validating shirohad fan-out dispatch"]
+    async fn fanout_tagged_strategy_records_tagged_node_ids() {
+        let harness = TestHarness::new("job-service-fanout-tagged").await;
+        deploy_flow(
+            harness.state.clone(),
+            "fanout-tagged",
+            &fanout_tagged_manifest("fanout-tagged"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "fanout-tagged".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "start".into(),
+                payload: Some(b"fanout-tagged".to_vec()),
+            }))
+            .await
+            .expect("trigger tagged fanout");
+
+        let _final_job = wait_for_job(&service, &created.job_id, "completed", "done").await;
+        let events = service
+            .get_job_events(Request::new(GetJobEventsRequest {
+                job_id: created.job_id,
+                since_id: None,
+                since_timestamp_ms: None,
+                limit: None,
+                kind: Vec::new(),
+            }))
+            .await
+            .expect("job events")
+            .into_inner();
+        let kinds: Vec<EventKind> = events
+            .events
+            .into_iter()
+            .map(|record| serde_json::from_str(&record.kind_json).expect("event kind json"))
+            .collect();
+        let nodes = kinds
+            .iter()
+            .filter_map(|kind| match kind {
+                EventKind::ActionComplete { node_id, .. } => node_id.clone(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(nodes.contains(&"edge-a".to_string()));
+        assert!(nodes.contains(&"edge-b".to_string()));
+    }
+
+    #[tokio::test]
+    #[ignore = "heavy job integration smoke; run explicitly when validating shirohad fan-out dispatch"]
+    async fn fanout_timeout_aggregates_partial_results() {
+        let harness = TestHarness::new("job-service-fanout-timeout").await;
+        deploy_flow(
+            harness.state.clone(),
+            "fanout-timeout",
+            &fanout_timeout_manifest("fanout-timeout"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "fanout-timeout".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "start".into(),
+                payload: Some(b"fanout-timeout".to_vec()),
+            }))
+            .await
+            .expect("trigger fanout timeout");
+
+        let final_job = wait_for_job(&service, &created.job_id, "completed", "retry").await;
+        assert_eq!(final_job.current_state, "retry");
+    }
+
+    #[tokio::test]
+    #[ignore = "heavy job integration smoke; run explicitly when validating shirohad fan-out dispatch"]
+    async fn fanout_runs_slots_in_parallel() {
+        let harness = TestHarness::new("job-service-fanout-parallel").await;
+        deploy_flow(
+            harness.state.clone(),
+            "fanout-parallel",
+            &fanout_parallel_manifest("fanout-parallel"),
+        )
+        .await;
+
+        let service = JobServiceImpl::new(harness.state.clone());
+        let created = service
+            .create_job(Request::new(CreateJobRequest {
+                flow_id: "fanout-parallel".into(),
+                context: None,
+                max_lifetime_ms: None,
+            }))
+            .await
+            .expect("create job")
+            .into_inner();
+
+        let started_at = tokio::time::Instant::now();
+        service
+            .trigger_event(Request::new(TriggerEventRequest {
+                job_id: created.job_id.clone(),
+                event: "start".into(),
+                payload: Some(b"fanout-parallel".to_vec()),
+            }))
+            .await
+            .expect("trigger parallel fanout");
+
+        let _final_job = wait_for_job(&service, &created.job_id, "completed", "done").await;
+        let elapsed = started_at.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(260),
+            "fan-out should complete in parallel, elapsed={elapsed:?}"
+        );
     }
 
     #[tokio::test]
