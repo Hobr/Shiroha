@@ -13,6 +13,7 @@
 当前 Phase 1 已实现：
 
 - `tracing` 日志接入
+- JSON tracing 同时输出到终端，并按天滚动落盘到 `data-dir/logs/shirohad.log.YYYY-MM-DD`
 - Job 生命周期、状态转移和 action 完成事件
 
 以下仍属于后续阶段目标：

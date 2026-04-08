@@ -3,9 +3,13 @@
 //! Phase 1 仅支持 standalone 模式（Controller + Node 同进程）。
 //! 启动后通过 gRPC 对外提供 FlowService 和 JobService。
 
+use std::path::PathBuf;
+
 use anyhow::bail;
 use clap::Parser;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 pub mod job_service;
 
@@ -60,18 +64,43 @@ struct Cli {
     data_dir: String,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+const LOG_FILE_BASENAME: &str = "shirohad.log";
+
+fn logs_dir(data_dir: &str) -> PathBuf {
+    PathBuf::from(data_dir).join("logs")
+}
+
+fn init_tracing(data_dir: &str) -> anyhow::Result<WorkerGuard> {
+    let logs_dir = logs_dir(data_dir);
+    std::fs::create_dir_all(&logs_dir)?;
+
+    let file_appender = tracing_appender::rolling::daily(&logs_dir, LOG_FILE_BASENAME);
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+
     tracing_subscriber::fmt()
+        .json()
+        .flatten_event(true)
+        .with_current_span(false)
+        .with_span_list(false)
         .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stderr.and(file_writer))
         .init();
 
+    Ok(guard)
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let _log_guard = init_tracing(&cli.data_dir)?;
+    let log_dir = logs_dir(&cli.data_dir);
 
     tracing::info!(
         version = build::PKG_VERSION,
         mode = %cli.mode,
         listen = cli.listen,
+        data_dir = cli.data_dir,
+        log_dir = %log_dir.display(),
         "starting shirohad"
     );
 
@@ -97,5 +126,10 @@ mod tests {
         assert_eq!(RunMode::Standalone.to_string(), "standalone");
         assert_eq!(RunMode::Controller.to_string(), "controller");
         assert_eq!(RunMode::Node.to_string(), "node");
+    }
+
+    #[test]
+    fn logs_dir_is_nested_under_data_dir() {
+        assert_eq!(logs_dir("./data"), PathBuf::from("./data").join("logs"));
     }
 }
