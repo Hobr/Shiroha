@@ -36,7 +36,7 @@
 - 当前 host 通过 reqwest 提供 `net.send`；配置映射优先保持结构化 WIT，而不是退化为 JSON 字符串黑盒
 - 当前 host 通过 capability store trait 提供 `store`；`WasmHost::new()` 默认落到内存 store，`shirohad` 会显式注入真实存储后端
 - deploy 期的 component import 校验在 `shirohad` 层，不在 `shiroha-wasm` 层；修改 world 组合时要同步考虑两边
-- `aggregate()` host 调用已打通，但 standalone 运行时还没有真正执行 fan-out 调度链路
+- `aggregate()` host 调用已打通；当前 standalone 运行时会在 fan-out 结果收集后调用它，并把返回事件交回 `shirohad` 继续推进状态机
 
 ### Testing Requirements
 

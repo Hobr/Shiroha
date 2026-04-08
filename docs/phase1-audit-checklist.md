@@ -13,8 +13,6 @@
 
 ## 按原 Phase 1 计划仍待实现
 
-- [ ] 为 `fan-out` 补上 standalone 运行时分发、结果收集和 `aggregate()` 后的状态推进；当前 deploy 仍直接拒绝 `fan-out` action
-
 ## Phase 1 文档与验收收口
 
 - [ ] 把 `remote` 在 standalone 中仍复用本地 WASM 调用路径的事实写清楚，不再暗示已有真实的 Controller/Node 执行边界
