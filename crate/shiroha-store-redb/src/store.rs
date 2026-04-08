@@ -33,6 +33,7 @@ const WASM_MODULES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("w
 const JOBS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("jobs");
 const EVENTS_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("events");
 const KV_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("kv");
+const KV_KEY_VERSION_PREFIX: &str = "v1";
 
 /// 将任意 Display 错误转为 ShirohaError::Storage
 fn s(e: impl std::fmt::Display) -> ShirohaError {
@@ -60,6 +61,7 @@ impl RedbStorage {
 
         let storage = Self { db: Arc::new(db) };
         storage.migrate_flow_version_keys()?;
+        storage.migrate_kv_keys()?;
         Ok(storage)
     }
 
@@ -115,6 +117,55 @@ impl RedbStorage {
         Ok(())
     }
 
+    /// 将旧格式 kv 键（`namespace\0key`）迁移到带版本前缀的安全编码格式。
+    ///
+    /// 新格式为 `v1\0hex(namespace)\0hex(key)`，避免 namespace / key 中包含 `\0`
+    /// 时发生键冲突。
+    fn migrate_kv_keys(&self) -> Result<()> {
+        let to_migrate: Vec<(String, String, Vec<u8>)> = {
+            let txn = self.db.begin_read().map_err(s)?;
+            let table = txn.open_table(KV_TABLE).map_err(s)?;
+            let mut entries = Vec::new();
+            for item in table.iter().map_err(s)? {
+                let (k, v) = item.map_err(s)?;
+                let stored_key = k.value().to_string();
+                if stored_key.starts_with(&format!("{KV_KEY_VERSION_PREFIX}\u{0}")) {
+                    continue;
+                }
+
+                let (namespace, key) = match Self::parse_kv_key(&stored_key) {
+                    Ok(parts) => parts,
+                    Err(error) => {
+                        warn!(key = %stored_key, error = %error, "skipping unreadable kv entry during migration");
+                        continue;
+                    }
+                };
+                let new_key = Self::kv_key(&namespace, &key);
+                if stored_key != new_key {
+                    entries.push((stored_key, new_key, v.value().to_vec()));
+                }
+            }
+            entries
+        };
+
+        if to_migrate.is_empty() {
+            return Ok(());
+        }
+
+        let txn = self.db.begin_write().map_err(s)?;
+        {
+            let mut table = txn.open_table(KV_TABLE).map_err(s)?;
+            for (old_key, new_key, value) in to_migrate {
+                table.remove(old_key.as_str()).map_err(s)?;
+                table
+                    .insert(new_key.as_str(), value.as_slice())
+                    .map_err(s)?;
+            }
+        }
+        txn.commit().map_err(s)?;
+        Ok(())
+    }
+
     /// 事件表的复合键：job_id (16B) + event_id (16B) = 32B
     ///
     /// 这使得同一 Job 的事件在 B-tree 中连续排列，便于前缀扫描。
@@ -126,25 +177,60 @@ impl RedbStorage {
     }
 
     fn flow_version_key(flow_id: &str, version: Uuid) -> String {
-        format!("{}\u{0}{version}", Self::encode_flow_id(flow_id))
+        format!("{}\u{0}{version}", Self::encode_string(flow_id))
     }
 
     fn flow_version_prefix_bounds(flow_id: &str) -> (String, String) {
-        let encoded_flow_id = Self::encode_flow_id(flow_id);
+        let encoded_flow_id = Self::encode_string(flow_id);
         (
             format!("{encoded_flow_id}\u{0}"),
             format!("{encoded_flow_id}\u{1}"),
         )
     }
 
-    fn encode_flow_id(flow_id: &str) -> String {
+    fn encode_string(value: &str) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut encoded = String::with_capacity(flow_id.len() * 2);
-        for byte in flow_id.as_bytes() {
+        let mut encoded = String::with_capacity(value.len() * 2);
+        for byte in value.as_bytes() {
             encoded.push(HEX[(byte >> 4) as usize] as char);
             encoded.push(HEX[(byte & 0x0f) as usize] as char);
         }
         encoded
+    }
+
+    fn decode_string(encoded: &str) -> Result<String> {
+        if encoded.len() % 2 != 0 {
+            return Err(s(format!("invalid encoded string length: {encoded}")));
+        }
+
+        let mut bytes = Vec::with_capacity(encoded.len() / 2);
+        let raw = encoded.as_bytes();
+        for pair in raw.chunks_exact(2) {
+            let high = Self::decode_hex_nibble(pair[0]).ok_or_else(|| {
+                s(format!(
+                    "invalid hex digit `{}` in encoded string",
+                    pair[0] as char
+                ))
+            })?;
+            let low = Self::decode_hex_nibble(pair[1]).ok_or_else(|| {
+                s(format!(
+                    "invalid hex digit `{}` in encoded string",
+                    pair[1] as char
+                ))
+            })?;
+            bytes.push((high << 4) | low);
+        }
+
+        String::from_utf8(bytes).map_err(s)
+    }
+
+    fn decode_hex_nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
     }
 
     fn event_key_range(job_id: Uuid) -> ([u8; 32], [u8; 32]) {
@@ -156,11 +242,69 @@ impl RedbStorage {
     }
 
     fn kv_key(namespace: &str, key: &str) -> String {
+        format!(
+            "{KV_KEY_VERSION_PREFIX}\u{0}{}\u{0}{}",
+            Self::encode_string(namespace),
+            Self::encode_string(key)
+        )
+    }
+
+    fn legacy_kv_key(namespace: &str, key: &str) -> String {
         format!("{namespace}\u{0}{key}")
+    }
+
+    fn parse_kv_key(stored_key: &str) -> Result<(String, String)> {
+        if let Some(rest) = stored_key.strip_prefix(&format!("{KV_KEY_VERSION_PREFIX}\u{0}")) {
+            let (namespace, key) = rest
+                .split_once('\u{0}')
+                .ok_or_else(|| s(format!("invalid versioned kv key: {stored_key}")))?;
+            return Ok((Self::decode_string(namespace)?, Self::decode_string(key)?));
+        }
+
+        let (namespace, key) = stored_key
+            .split_once('\u{0}')
+            .ok_or_else(|| s(format!("invalid legacy kv key: {stored_key}")))?;
+        Ok((namespace.to_string(), key.to_string()))
     }
 }
 
 impl Storage for RedbStorage {
+    async fn save_flow_with_wasm(&self, flow: &FlowRegistration, wasm_bytes: &[u8]) -> Result<()> {
+        let data = serde_json::to_vec(flow).map_err(s)?;
+        let version_key = Self::flow_version_key(&flow.flow_id, flow.version);
+        let txn = self.db.begin_write().map_err(s)?;
+        {
+            let mut table = txn.open_table(FLOWS_TABLE).map_err(s)?;
+            let replace_latest = match table.get(flow.flow_id.as_str()).map_err(s)? {
+                Some(existing) => {
+                    let existing: FlowRegistration =
+                        serde_json::from_slice(existing.value()).map_err(s)?;
+                    flow.version > existing.version
+                }
+                None => true,
+            };
+            if replace_latest {
+                table
+                    .insert(flow.flow_id.as_str(), data.as_slice())
+                    .map_err(s)?;
+            }
+        }
+        {
+            let mut table = txn.open_table(FLOW_VERSIONS_TABLE).map_err(s)?;
+            table
+                .insert(version_key.as_str(), data.as_slice())
+                .map_err(s)?;
+        }
+        {
+            let mut table = txn.open_table(WASM_MODULES_TABLE).map_err(s)?;
+            table
+                .insert(flow.wasm_hash.as_str(), wasm_bytes)
+                .map_err(s)?;
+        }
+        txn.commit().map_err(s)?;
+        Ok(())
+    }
+
     async fn save_flow(&self, flow: &FlowRegistration) -> Result<()> {
         let data = serde_json::to_vec(flow).map_err(s)?;
         let version_key = Self::flow_version_key(&flow.flow_id, flow.version);
@@ -442,8 +586,15 @@ impl CapabilityStore for RedbStorage {
     fn get_value(&self, namespace: &str, key: &str) -> Result<Option<Vec<u8>>> {
         let txn = self.db.begin_read().map_err(s)?;
         let table = txn.open_table(KV_TABLE).map_err(s)?;
-        match table
+        if let Some(value) = table
             .get(Self::kv_key(namespace, key).as_str())
+            .map_err(s)?
+        {
+            return Ok(Some(value.value().to_vec()));
+        }
+
+        match table
+            .get(Self::legacy_kv_key(namespace, key).as_str())
             .map_err(s)?
         {
             Some(value) => Ok(Some(value.value().to_vec())),
@@ -467,10 +618,18 @@ impl CapabilityStore for RedbStorage {
         let txn = self.db.begin_write().map_err(s)?;
         let removed = {
             let mut table = txn.open_table(KV_TABLE).map_err(s)?;
-            table
+            let removed_new = table
                 .remove(Self::kv_key(namespace, key).as_str())
                 .map_err(s)?
-                .is_some()
+                .is_some();
+            if removed_new {
+                true
+            } else {
+                table
+                    .remove(Self::legacy_kv_key(namespace, key).as_str())
+                    .map_err(s)?
+                    .is_some()
+            }
         };
         txn.commit().map_err(s)?;
         Ok(removed)
@@ -484,20 +643,24 @@ impl CapabilityStore for RedbStorage {
     ) -> Result<Vec<String>> {
         let txn = self.db.begin_read().map_err(s)?;
         let table = txn.open_table(KV_TABLE).map_err(s)?;
-        let namespace_prefix = format!("{namespace}\u{0}");
-        let key_prefix = prefix.unwrap_or_default();
         let mut keys = Vec::new();
         for entry in table.iter().map_err(s)? {
             let (raw_key, _) = entry.map_err(s)?;
             let raw_key = raw_key.value();
-            if !raw_key.starts_with(&namespace_prefix) {
+            let (entry_namespace, entry_key) = match Self::parse_kv_key(raw_key) {
+                Ok(parts) => parts,
+                Err(error) => {
+                    warn!(key = %raw_key, error = %error, "skipping unreadable kv entry during list");
+                    continue;
+                }
+            };
+            if entry_namespace != namespace {
                 continue;
             }
-            let key = &raw_key[namespace_prefix.len()..];
-            if !key.starts_with(key_prefix) {
+            if !prefix.is_none_or(|value| entry_key.starts_with(value)) {
                 continue;
             }
-            keys.push(key.to_string());
+            keys.push(entry_key);
             if limit.is_some_and(|limit| keys.len() >= limit as usize) {
                 break;
             }
@@ -994,6 +1157,43 @@ mod tests {
             storage.get_value("fixture", "alpha").expect("get alpha"),
             None
         );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn capability_store_supports_nul_bytes_in_namespace_and_key() {
+        let path = temp_db_path("kv-store-nul");
+        let storage = RedbStorage::new(&path).expect("open db");
+
+        storage
+            .put_value("fixture", "alpha\0beta", b"left")
+            .expect("put left");
+        storage
+            .put_value("fixture\0alpha", "beta", b"right")
+            .expect("put right");
+
+        assert_eq!(
+            storage
+                .get_value("fixture", "alpha\0beta")
+                .expect("get left"),
+            Some(b"left".to_vec())
+        );
+        assert_eq!(
+            storage
+                .get_value("fixture\0alpha", "beta")
+                .expect("get right"),
+            Some(b"right".to_vec())
+        );
+
+        let fixture_keys = storage
+            .list_keys("fixture", Some("alpha\0"), None)
+            .expect("list fixture keys");
+        assert_eq!(fixture_keys, vec!["alpha\0beta".to_string()]);
+        let fixture_alpha_keys = storage
+            .list_keys("fixture\0alpha", Some("b"), None)
+            .expect("list fixture alpha keys");
+        assert_eq!(fixture_alpha_keys, vec!["beta".to_string()]);
 
         let _ = std::fs::remove_file(path);
     }

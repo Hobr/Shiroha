@@ -368,12 +368,7 @@ impl FlowService for FlowServiceImpl {
         // 持久化 + 缓存
         self.state
             .storage
-            .save_wasm_module(&registration.wasm_hash, &wasm_bytes)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-        self.state
-            .storage
-            .save_flow(&registration)
+            .save_flow_with_wasm(&registration, &wasm_bytes)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
