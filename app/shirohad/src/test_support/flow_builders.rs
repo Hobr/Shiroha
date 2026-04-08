@@ -52,6 +52,18 @@ pub(crate) fn approval_manifest(flow_id: &str, guard: Option<&str>) -> FlowManif
     }
 }
 
+pub(crate) fn remote_approval_manifest(flow_id: &str, guard: Option<&str>) -> FlowManifest {
+    let mut manifest = approval_manifest(flow_id, guard);
+    if let Some(action) = manifest
+        .actions
+        .iter_mut()
+        .find(|action| action.name == "ship")
+    {
+        action.dispatch = DispatchMode::Remote;
+    }
+    manifest
+}
+
 pub(crate) fn approval_manifest_to(flow_id: &str, terminal_state: &str) -> FlowManifest {
     FlowManifest {
         id: flow_id.to_string(),
