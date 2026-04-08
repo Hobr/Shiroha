@@ -372,35 +372,41 @@ fn build_client(
             builder = builder.proxy(build_proxy(proxy)?);
         }
         if let Some(tls) = config.tls {
-            if let Some(enabled) = tls.built_in_root_certs {
-                builder = builder.tls_built_in_root_certs(enabled);
-            }
-            if let Some(enabled) = tls.danger_accept_invalid_certs {
-                builder = builder.danger_accept_invalid_certs(enabled);
-            }
-            if let Some(enabled) = tls.danger_accept_invalid_hostnames {
-                builder = builder.danger_accept_invalid_hostnames(enabled);
-            }
-            if let Some(enabled) = tls.https_only {
-                builder = builder.https_only(enabled);
-            }
-            if let Some(version) = tls.min_version {
-                builder = builder.min_tls_version(map_tls_version(version));
-            }
-            if let Some(version) = tls.max_version {
-                builder = builder.max_tls_version(map_tls_version(version));
-            }
-            for pem_bundle in tls.root_certificates_pem {
-                let certs =
+            let root_certificates = tls
+                .root_certificates_pem
+                .into_iter()
+                .map(|pem_bundle| {
                     Certificate::from_pem_bundle(&pem_bundle).map_err(|error| NetworkError {
                         kind: NetworkErrorKind::InvalidConfig,
                         message: format!("failed to parse root certificates: {error}"),
                         status: None,
                         url: None,
-                    })?;
-                for cert in certs {
-                    builder = builder.add_root_certificate(cert);
-                }
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+
+            if tls.built_in_root_certs == Some(false) {
+                builder = builder.tls_certs_only(root_certificates);
+            } else if !root_certificates.is_empty() {
+                builder = builder.tls_certs_merge(root_certificates);
+            }
+            if let Some(enabled) = tls.danger_accept_invalid_certs {
+                builder = builder.tls_danger_accept_invalid_certs(enabled);
+            }
+            if let Some(enabled) = tls.danger_accept_invalid_hostnames {
+                builder = builder.tls_danger_accept_invalid_hostnames(enabled);
+            }
+            if let Some(enabled) = tls.https_only {
+                builder = builder.https_only(enabled);
+            }
+            if let Some(version) = tls.min_version {
+                builder = builder.tls_version_min(map_tls_version(version));
+            }
+            if let Some(version) = tls.max_version {
+                builder = builder.tls_version_max(map_tls_version(version));
             }
         }
         if let Some(addr) = config.local_address {
