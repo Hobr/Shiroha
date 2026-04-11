@@ -1,6 +1,6 @@
 # 客户端交互
 
-初期通过 CLI 与 Controller 管理接口交互：
+初期通过 `scli` 与 Controller 管理接口交互：
 
 - 部署 / 卸载 WASM 模块
 - 创建 / 查询 / 控制状态机实例
