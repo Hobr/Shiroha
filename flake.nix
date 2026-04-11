@@ -3,8 +3,8 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    flakelight.url = "github:nix-community/flakelight";
     rust-overlay.url = "github:oxalica/rust-overlay";
+    flakelight.url = "github:nix-community/flakelight";
   };
 
   outputs =
