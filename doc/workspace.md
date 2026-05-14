@@ -12,14 +12,14 @@
 
 | Crate | 职责 | 允许的依赖方向 |
 |---|---|---|
-| `shiroha-core` | FSM/Action/分发策略/聚合策略的纯 domain 类型与 trait;零 I/O | 仅标准库 + 序列化 |
+| `shiroha-core` | FSM/Action(含 WaitingMode)/ComponentId/Job/分发策略/聚合策略的纯 domain 类型与 trait;零 I/O。**Flow 不在 core**,见 storage.md | 仅标准库 + 序列化 |
 | `shiroha-wit` | `.wit` 接口文件与 wit-bindgen 生成绑定 | core |
 | `shiroha-wasm` | Wasmtime 集成、组件加载、Host 能力实现、Action 调用桥 | core, wit |
 | `shiroha-dispatch` | Dispatcher + Aggregator;在 Executor 之上做位置选择与聚合 | core, wasm, transport |
 | `shiroha-transport` | 节点间 RPC 抽象 trait | core |
 | `shiroha-transport-grpc` | tonic 实现的 transport | transport, proto |
 | `shiroha-proto` | tonic 生成的代码(节点面 + 控制面);独立 build.rs | — |
-| `shiroha-storage` | Store trait + redb 默认实现 | core |
+| `shiroha-storage` | Store trait + redb 默认实现;**Flow 版本管理与 Component 去重存储是主控层独有职责,放在本 crate** | core |
 | `shiroha-engine` | 主控:Job 调度、状态驱动、事件日志 | core, wasm, dispatch, storage |
 | `shiroha-worker` | 节点:接收 Action,调用本地 Executor,回报结果 | core, wasm, transport |
 | `shiroha-control` | 控制面 gRPC 服务定义与实现 | core, engine, proto |

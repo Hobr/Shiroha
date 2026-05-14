@@ -19,7 +19,14 @@
 
 - core 中的 Action 仅作为**引用**存在,不含实现
 - 实现位于 WASM 组件中,由 `shiroha-wasm` 按引用查找并调用
-- 一个 ActionRef 至少包含:名称、版本、分发策略、签名提示
+- 一个 ActionRef 至少包含:名称、所属 ComponentId、分发策略、签名提示、WaitingMode
+
+**WaitingMode** 由 FSM 作者在 ActionRef 上声明,决定派发期间 Job 所处的态:
+
+- `Blocking` — Job 留在转移源状态,Engine 在原地 await Aggregator;事件流紧凑,适合短 Action
+- `Waiting` — 派发瞬间 Job 进入 `Waiting` 中间态,结果回流后触发转移;状态显式可观测,适合长 Action
+
+Blocking / Waiting 由 ActionRef 逐条声明,Engine 不强制全局策略——同一 FSM 内不同 Action 可混用。
 
 ### DispatchPolicy
 
@@ -41,12 +48,12 @@ core 给出策略类型分类,具体路由发生在 `shiroha-dispatch`:
 - **Quorum(k)** — 至少 k 个相同(或可比)结果才返回
 - **Custom** — 委托给 WASM 中用户定义的聚合函数 (见 `wit-interfaces.md`)
 
-### Flow 与 Job
+### ComponentId 与 Job
 
-- **Flow** — 一份 FSM 定义版本,与某个 WASM 组件字节绑定
-- **Job** — 一次具体运行实例,引用某个 Flow 版本,持有当前状态与累积事件
+- **ComponentId** — 一份具体 WASM 组件字节的不透明标识(主控按内容 hash 派生)。所有跨主从边界的引用都用 ComponentId,`worker` / `dispatch` / `transport` / `wasm` 不感知"版本"或"Flow"概念
+- **Job** — 一次具体运行实例,持有 ComponentId、当前状态、累积事件
 
-Flow/Job 是否合并为单层结构,见 `open-questions.md`。
+**Flow**(FSM 定义版本的人类语义命名)只在主控层(`shiroha-storage` / `shiroha-engine` / `shiroha-control`)存在,详见 `storage.md`。core 自身不引入 Flow 类型,以避免下游 crate 被版本概念污染。
 
 ## 不在本 crate 内的内容
 

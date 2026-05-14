@@ -12,9 +12,56 @@ Store 至少覆盖三类记录:
 
 | 记录 | 内容 | 写入时机 |
 |---|---|---|
-| Flow | FSM 定义版本 + 关联 WASM 组件字节 + 能力声明 | 上传时一次写入,后续只读 |
-| Job | 一次 FSM 运行实例的当前状态 + 元数据 | 每次状态转移更新 |
+| Component | 一份 WASM 字节,以内容 hash (`ComponentId`) 为主键;可被多个 Flow 版本引用 | 上传时去重写入,后续只读 |
+| Flow | FSM 定义版本(name + version + 能力声明)+ 引用一个 ComponentId | 上传时一次写入,后续只读 |
+| Job | 一次 FSM 运行实例的当前状态 + 元数据 + 引用的 ComponentId | 每次状态转移更新 |
 | Event | 状态转移、Action 派发、结果聚合的不可变事件流 | append-only |
+
+## Flow 与 ComponentId
+
+Flow 是 FSM 定义版本的**人类语义包装**:一个 Flow 包含 name、version、能力声明,并引用一个 ComponentId。多个 Flow(同名不同版本,或不同名)可引用同一 ComponentId(例如"只改版本号不改实现"的情形)。
+
+ComponentId 由 Component 字节的内容 hash 派生,主控用它做去重存储。所有跨主从边界的引用都使用 ComponentId,因此 `shiroha-core` 不引入 Flow 类型——Flow 只对主控自己与控制面用户有意义。
+
+删除 Flow 不会自动删除 Component 字节;Component 仅在没有任何 Flow 或 Job 引用时才能被清理(引用计数 / 周期性 GC,具体方式见 storage 实现备注)。
+
+## 版本演进与 Job 迁移
+
+ComponentId 与 Flow 的拆分让两类升级路径都不需要改动 `shiroha-core` 或 worker。
+
+### Flow 版本演进(默认路径)
+
+1. 用户上传同名 Flow 的新字节 → 主控派生新 `ComponentId`(内容不同,hash 必然不同)
+2. 同事务内:若 ComponentId 未命中去重则写入新 Component 字节;追加一条新 Flow 记录 `(name, version+1, new_component_id, 能力声明)`
+3. 旧 Flow 记录与旧 Component 字节均保留,被旧 Job 的引用计数保护
+4. 新建 Job 默认指向"最新版本",也可在 `create-job` 时显式指定 version
+5. 进行中的 Job **不受影响**,继续在旧 ComponentId 上运行至终态
+
+这条路径的全部"版本智能"集中在 storage + engine + control,worker 与 transport 完全无感。
+
+### Job 跨版本迁移(可选高级操作)
+
+把一个进行中的 Job 从旧 ComponentId 切到新 ComponentId(常见诉求:"修了一个 bug,希望已在跑的 Job 也用上"):
+
+1. 控制面提交 `migrate-job(job_id, target_version, mapping_strategy)` 命令
+2. Engine 读 Job 当前状态,调用映射逻辑;映射来源任选其一:
+   - 用户在新 Component 中实现一个特殊 export(主机带着旧状态调用,得到新状态)
+   - 主控内置"同名同结构"默认映射(状态名相同则原样保留)
+3. 映射成功后,在**同事务**内:改写 Job 的 ComponentId 指针 + 追加 `Migrated` Event
+4. Engine 用新 Component 的 `describe` / `decide` 驱动后续转移
+5. 映射失败时,Job 保持原 ComponentId,Event 中记录失败原因,迁移不发生
+
+关键点:
+
+- 迁移是**显式**的,不会因为新版本到来就自动发生
+- 状态映射逻辑由**用户**负责,框架只提供执行机会与原子性保证
+- `shiroha-core` 不需要"版本"概念——它只看到"Job 的 ComponentId 被原子性替换"
+
+### Component 字节的生命周期
+
+- 引用计数 = (引用该 ComponentId 的 Flow 数量)+(引用该 ComponentId 的 Job 数量,含非终态与终态)
+- 计数归零时,Component 字节可被 GC
+- 强制清理终态 Job 的命令应先取消其对 Component 的引用,GC 由后台周期任务处理
 
 ## 原子性约束
 
@@ -31,9 +78,9 @@ Store 至少覆盖三类记录:
 
 ## 版本与历史
 
-- 同一 Flow 的多个版本独立保留;Job 引用具体版本号而非"最新指针"
-- 删除 Flow 默认级联删除其所有版本与所属终态 Job;非终态 Job 的处置由 Engine 决定(拒绝删除 / 强制清理),不在 storage 层决策
-- Event 流保留期默认无限;清理策略(TTL / 容量)待定,见 `open-questions.md`
+- 同一 Flow 的多个版本独立保留;Job 引用具体 ComponentId 而非"最新指针"
+- 删除 Flow 的处置:**默认拒绝删除**(只要还存在引用此 Flow 的非终态 Job);加 `--force` 时先取消所有相关非终态 Job 再删 Flow;终态 Job 是否级联清理由 delete-flow 命令的标志位决定。具体语义在 Engine,不在 storage 层决策
+- Event 保留:**与 Job 生命绑定**——Job 终态后 N 天(配置项,默认 30 天)清理其全部事件;运行中 Job 的事件始终保留。归档接口暂不提供;如需长期分析,消费方应在 Job 终态前主动 `tail-events` 落到外部系统
 
 ## redb 实现备注
 
