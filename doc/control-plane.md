@@ -6,14 +6,16 @@
 
 控制面与节点面 transport **共用 gRPC 基础设施,但不复用同一组 proto**——两者关注的对象、版本节奏、鉴权策略完全不同,合并会导致一边的演进不必要地绑定另一边。
 
+注意:控制面是 **Flow 概念唯一对用户可见的接口面**。Flow 是主控层的人类语义包装(name + version + 能力声明),引用底层的 `ComponentId`(主控对 WASM 字节做内容 hash 去重的主键)。控制面命令以 Flow 为粒度,但 worker / transport / dispatch 都不感知它,详见 `storage.md`。
+
 ## 命令分类
 
 控制面对外暴露的命令大致归为四类:
 
 | 类别 | 命令例 | 语义 |
 |---|---|---|
-| Flow 管理 | upload-flow / list-flows / inspect-flow / delete-flow | 管理 FSM 定义 |
-| Job 管理 | create-job / list-jobs / inspect-job / cancel-job / pause-job / resume-job | 管理运行实例 |
+| Flow 管理 | upload-flow / list-flows / inspect-flow / delete-flow | 管理 FSM 定义。delete-flow 默认拒绝引用尚有非终态 Job 的 Flow;`--force` 取消相关 Job 后删除 |
+| Job 管理 | create-job / list-jobs / inspect-job / cancel-job / pause-job / resume-job / migrate-job | 管理运行实例(含跨版本迁移,见 `storage.md`) |
 | 观测 | tail-events / get-job-state / job-event-history | 实时与历史查询 |
 | 节点管理 | list-nodes / drain-node / inspect-node | 维护节点拓扑 |
 

@@ -2,134 +2,19 @@
 
 本文档汇总尚未敲定的设计点。每条决策一旦确认,应从本文档移除并迁移到相应模块文档。
 
----
+**已敲定并迁移**(2026-05-15):
 
-## Q1:Flow 与 Job 是否保留双层抽象?
+- Q1 → Flow 抽象主控层独有(`storage.md`、`core-model.md`、`control-plane.md`)
+- Q2 → Action 同步性由 `ActionRef.WaitingMode` 逐条声明(`core-model.md`、`engine.md`)
+- Q3 → 节点注册 MVP 静态、后续混合(`transport.md`)
+- Q4 → WASM 组件按需 pull(`worker.md`、`data-flow.md`)
+- Q5 → Aggregator 提前返回后取消 + 后台兜底(`dispatch.md`、`transport.md`)
+- Q6 → Blocking 在途 Action 主控重启时向节点查询结果缓存(`worker.md`、`engine.md`、`data-flow.md`)
+- Q7 → 能力清单确定:log / clock / net.http(GET+POST)/ kv(per-Job)/ fs.readonly(白名单)/ rand(仅 CSPRNG)(`wit-interfaces.md`)
+- Q8 → Flow 删除默认拒绝、`--force` 取消相关 Job 后再删(`storage.md`、`engine.md`、`control-plane.md`)
+- Q9 → Event 与 Job 生命绑定,Job 终态 N 天后清理(`storage.md`)
 
-**背景**:Flow 是 FSM 定义版本,Job 是一次运行实例。这一层抽象在多版本共存、回放、A/B 测试场景中很有价值,但增加了概念表面与命令数量。
-
-**选项**:
-- 沿用双层:Flow 为模板,Job 为实例;多版本共存,Job 引用具体版本
-- 合并单层:每次"启动"直接基于 WASM 字节创建实例,无显式定义版本
-
-**影响范围**:`core-model.md`、`storage.md`、`control-plane.md` 的命令清单
-
-**默认倾向**:沿用双层,因为运行实例与定义解耦后,运维收益明显大于复杂度成本
-
----
-
-## Q2:Action 派发期间,Job 是阻塞还是显式 Waiting 状态?
-
-**背景**:对长执行 Action,把 Job 留在"前一状态"等待不够明确;但显式 Waiting 中间态会让事件流出现"伪状态"。
-
-**选项**:
-- 阻塞:Job 一直停留在转移源状态,直到 Aggregator 返回结果再迁移
-- 显式 Waiting:Job 在派发瞬间进入 `Waiting(target_state)` 中间态,结果回流后再转入目标状态
-- 混合:用户在 ActionRef 上声明每个 Action 是否需要显式 Waiting
-
-**影响范围**:`engine.md` 的转移步骤、`core-model.md` 的状态枚举、`storage.md` 中 Job 状态字段
-
----
-
-## Q3:节点注册模式
-
-**背景**:静态配置简单可控;动态注册更灵活但增加状态。
-
-**选项**:
-- 静态:配置文件锁定;新增节点需主控重启或热重载配置
-- 动态:节点启动时向主控注册,主控按心跳维护节点列表
-- 混合:配置预声明节点身份 + 节点启动时上报能力与确认
-
-**影响范围**:`transport.md` 的 NodeRegistry、`worker.md` 的启动流程
-
-**默认倾向**:MVP 用静态;后续转向混合
-
----
-
-## Q4:WASM 组件如何到达节点?
-
-**选项**:
-- 预加载:主控在 Flow 上传时把字节推给所有当前注册的节点
-- 按需 pull:节点收到 Action 请求时若本地无缓存,向主控发起一次拉取
-- 混合:预加载 + 按需 pull 兜底
-
-**取舍**:
-- 预加载省网络但要做版本同步,节点上线时需要补推全量
-- 按需 pull 简单但首次冷启动慢
-- 混合最稳健但实现量略大
-
-**影响范围**:`worker.md` 的组件缓存、`data-flow.md` 的上传 Flow 与节点恢复路径
-
----
-
-## Q5:Aggregator 提前返回后,未完成的 executor 如何处置?
-
-**背景**:First / Quorum 等策略在收够结果后已能返回,此时仍有调用在途。
-
-**选项**:
-- 取消:沿 transport 下发取消信号(best-effort)
-- 后台等待:不取消,但结果只记日志不影响主路径
-- 忽略:简单粗暴,资源浪费
-
-**影响范围**:`dispatch.md` 的失败传播、`transport.md` 的取消语义
-
-**默认倾向**:取消 + 后台兜底——发出取消信号但允许结果晚到时仅写日志,不抛错
-
----
-
-## Q6:主控重启后,在途 Action 如何处理?
-
-**背景**:Engine 已持久化"已派发"事件但未持久化"已返回结果"的 Action,在主控重启后无法判断结果是否已生效。
-
-**选项**:
-- 重做:重新派发,接受可能的副作用重复(要求 Action 幂等)
-- 等待回流:节点保留最近结果一段时间,主控重连后查询
-- 标记失败:进入失败状态,由用户 FSM 中的补偿逻辑处理
-
-**影响范围**:`engine.md`、`data-flow.md` 的主控重启路径
-
-**关联**:这条与 Q2 强相关;若选择"显式 Waiting",回流路径自然存在
-
----
-
-## Q7:能力 (capabilities) 起步集合
-
-**背景**:WIT imports 暴露给 WASM 的主机能力越大,沙箱越弱。
-
-**当前候选**:log / clock / net (http) / kv
-
-**待确认**:
-- 是否需要 http-post / 其它 HTTP 方法,还是只 GET
-- KV 的作用域:per-Job / per-Flow / 全局共享
-- 是否需要受限的文件读写(只读 / scratch dir)
-- 是否暴露随机数(crypto-safe vs deterministic)
-
-**影响范围**:`wit-interfaces.md` 的 imports 章节
-
----
-
-## Q8:Flow 删除时非终态 Job 的处置
-
-**选项**:
-- 拒绝删除,直到所有 Job 终态
-- 强制取消所有相关 Job,然后删除
-- 仅删除 Flow 定义,Job 保留可继续运行至终态(此时 Storage 必须保留旧 Flow 字节)
-
-**影响范围**:`engine.md`、`storage.md`、`control-plane.md` 的 delete-flow 语义
-
----
-
-## Q9:Event 流的保留策略
-
-**背景**:Event append-only,无限增长会占用磁盘。
-
-**选项**:
-- 永久保留(用户自行清理)
-- TTL:超过 N 天的事件自动归档/删除
-- 容量上限:超过 M 条触发清理
-- 与 Job 生命绑定:Job 终态后 N 天清理其事件
-
-**影响范围**:`storage.md`
+**目前无未决项。** 后续新决策请按底部"决策流程"添加。
 
 ---
 

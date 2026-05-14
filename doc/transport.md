@@ -10,7 +10,7 @@
 
 Transport 至少需要回答以下问题:
 
-- 把一份 ActionRef + 输入字节投递到指定节点,等待结果字节
+- 把一份 (ComponentId, ActionRef, 输入字节) 投递到指定节点,等待结果字节
 - 在投递中途取消尚未完成的请求(服务 Aggregator 的提前返回语义)
 - 检测节点健康(心跳/连通性),并在状态变化时通知上层
 - 在节点列表变化时通知 NodeRegistry
@@ -30,7 +30,12 @@ NodeRegistry 是 Dispatcher 与 Transport 之间的查询面。它提供:
 - 按节点选择器筛选(标签、地域、能力等)
 - 健康状态查询
 
-注册模型(静态配置 vs 动态注册 vs 混合)见 `open-questions.md`。
+注册模型分两阶段演进:
+
+- **MVP 阶段:静态配置** — 主控启动时从配置文件加载节点 endpoint 与能力标签;新增节点需热重载配置(或主控重启)
+- **后续阶段:混合模型** — 配置预声明节点身份与角色,节点启动时上报实际能力并确认存活;主控按心跳维护"已声明 ∩ 已连接 ∩ 健康"的有效节点集
+
+NodeRegistry 的对外查询接口在两阶段间保持兼容,这样上层 Dispatcher 不感知演进。完全动态注册(节点自由加入)暂不考虑。
 
 ## gRPC 实现 (shiroha-transport-grpc)
 
@@ -45,7 +50,7 @@ NodeRegistry 是 Dispatcher 与 Transport 之间的查询面。它提供:
 
 - 不引入额外的状态机概念
 - 错误分两类:网络错误(可由上层选择重试)与对端业务错误(透传给 Dispatcher 由 Aggregator 处理)
-- 必须支持取消语义(允许实现为 best-effort,但调用方需要被告知"已发出取消")
+- 必须支持取消语义(允许实现为 best-effort);调用方需被告知"已发出取消";晚到的结果由 Dispatcher 处理(写日志即可,见 `dispatch.md`),transport 仅透传
 - 必须支持健康检查或等价机制,使 NodeRegistry 能在不调用业务接口的前提下判定可用性
 
 ## 拓扑约束

@@ -2,9 +2,9 @@
 
 ## 角色
 
-`shiroha-dispatch` 是 Engine 与"具体执行点"之间的中间层。它接收一个 ActionRef + 输入,根据 core 中声明的 DispatchPolicy 选择执行者集合,执行并收集结果,然后用 Aggregator 合并,把单一结果交还给 Engine。
+`shiroha-dispatch` 是 Engine 与"具体执行点"之间的中间层。它接收一个 ActionRef + ComponentId + 输入,根据 core 中声明的 DispatchPolicy 选择执行者集合,执行并收集结果,然后用 Aggregator 合并,把单一结果交还给 Engine。
 
-Engine 不知道 Action 是本地还是远程执行,也不知道有几个 Worker 参与——这两件事都被 dispatch 层吸收。
+Engine 不知道 Action 是本地还是远程执行,也不知道有几个 Worker 参与——这两件事都被 dispatch 层吸收。Dispatcher 也不关心 ComponentId 背后是哪个 Flow 版本,它只把 ComponentId 透传给 Executor。
 
 ## 抽象层次
 
@@ -36,11 +36,9 @@ Dispatcher        ← 按 DispatchPolicy 选 executor 集合,驱动 Aggregator
 
 Aggregator 是同步语义的"收集器":接收若干结果,可能在收够最低数量时提前返回(如 First / Quorum)。Dispatcher 必须把"提前返回"和"剩余执行如何处置"一并定义。
 
-剩余执行的处置策略,见 `open-questions.md`:
+**剩余执行的处置策略:取消 + 后台兜底**。Dispatcher 在 Aggregator 提前返回后,立即沿 transport 向剩余 executor 下发取消信号(best-effort);若取消未及时生效、结果仍然到达,Dispatcher 仅写日志,不影响主路径,不抛错。
 
-- 取消(沿 transport 下发取消信号)
-- 后台等待(不取消但不阻塞主路径)
-- 忽略(简单但浪费资源)
+这条策略由 Dispatcher 强制执行;Aggregator 自身只负责"何时算够",不参与剩余处置。
 
 ## 自定义聚合
 
