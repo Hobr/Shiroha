@@ -13,9 +13,9 @@
 控制面对外暴露的命令大致归为四类:
 
 | 类别 | 命令例 | 语义 |
-|---|---|---|
+| --- | --- | --- |
 | Flow 管理 | upload-flow / list-flows / inspect-flow / delete-flow | 管理 FSM 定义。delete-flow 默认拒绝引用尚有非终态 Job 的 Flow;`--force` 取消相关 Job 后删除 |
-| Job 管理 | create-job / list-jobs / inspect-job / cancel-job / pause-job / resume-job / migrate-job | 管理运行实例(含跨版本迁移,见 `storage.md`) |
+| Job 管理 | create-job / list-jobs / inspect-job / cancel-job / pause-job / resume-job | 管理运行实例 |
 | 观测 | tail-events / get-job-state / job-event-history | 实时与历史查询 |
 | 节点管理 | list-nodes / drain-node / inspect-node | 维护节点拓扑 |
 
@@ -25,7 +25,7 @@
 
 - `sctl` 是首个客户端,通过 clap CLI 解析参数后调用控制面 gRPC
 - 守护进程本地访问通过 **Unix domain socket**(默认场景)
-- 远程访问通过 TCP + TLS;鉴权策略待定
+- 远程访问通过 TCP + mTLS(鉴权细节见下方"鉴权与安全"节)
 - 未来 TUI / Web UI 复用同一组 proto;Web UI 在前端经由网关层(可独立部署)将 HTTP 翻译为控制面 gRPC
 
 ## 流式响应

@@ -7,7 +7,7 @@
 ## 角色分工
 
 | 角色 | 形态 | 是否有状态 | 职责 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 主控 Master | `shirohad` master 模式 | 是 | 持有 FSM 实例状态、调度转移、聚合结果、暴露控制面 |
 | 节点 Worker | `shirohad` worker 模式 | 否 | 接收主控派发的 Action,在 WASM 中执行后回报结果 |
 | 控制端 CLI | `sctl` | 否 | 通过控制面对主控发送命令与查询 |
@@ -34,27 +34,21 @@ Shiroha 内部存在两个独立的 RPC 平面,**不复用同一组 proto**:
 
 ## 模块拓扑
 
-```
-                    sctl
-                     │
-                     │ 控制面 gRPC
-                     ▼
-   ┌─────────────────────────────────────────────────┐
-   │                shirohad (master)                │
-   │                                                 │
-   │   ┌─────────┐    ┌──────────┐    ┌──────────┐   │
-   │   │ Control │ ─▶ │  Engine  │ ─▶ │ Dispatch │   │
-   │   └─────────┘    └─────┬────┘    └────┬─────┘   │
-   │                        │              │        │
-   │                  ┌─────▼────┐   ┌─────▼─────┐   │
-   │                  │ Storage  │   │   WASM    │   │
-   │                  └──────────┘   └───────────┘   │
-   └────────────────────────────────────┬────────────┘
-                                        │ 节点面 RPC
-                                        ▼
-                                   ┌──────────┐
-                                   │  Worker  │ × N
-                                   └──────────┘
+```mermaid
+flowchart TB
+    sctl([sctl])
+
+    subgraph master["shirohad (master)"]
+        direction LR
+        Control[Control] --> Engine[Engine] --> Dispatch[Dispatch]
+        Engine --> Storage[(Storage)]
+        Dispatch --> WASM[WASM]
+    end
+
+    Worker([Worker × N])
+
+    sctl ==>|控制面 gRPC| Control
+    Dispatch ==>|节点面 RPC| Worker
 ```
 
 ## 不变量

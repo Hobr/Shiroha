@@ -11,7 +11,7 @@
 `crates/` 下放置库 crate。每个 crate 至多承担一个职责。
 
 | Crate | 职责 | 允许的依赖方向 |
-|---|---|---|
+| --- | --- | --- |
 | `shiroha-core` | FSM/Action(含 WaitingMode)/ComponentId/Job/分发策略/聚合策略的纯 domain 类型与 trait;零 I/O。**Flow 不在 core**,见 storage.md | 仅标准库 + 序列化 |
 | `shiroha-wit` | `.wit` 接口文件与 wit-bindgen 生成绑定 | core |
 | `shiroha-wasm` | Wasmtime 集成、组件加载、Host 能力实现、Action 调用桥 | core, wit |
@@ -28,31 +28,81 @@
 `apps/` 下放置二进制:
 
 | App | 角色 |
-|---|---|
+| --- | --- |
 | `shirohad` | 装配 engine + worker + control + transport,按配置选择运行模式 |
 | `sctl` | 装配控制面客户端 + clap CLI |
 
 ## 依赖方向规则
 
-```
-                ┌───────────────┐
-                │  shiroha-core │   ← 所有 crate 的根
-                └───────┬───────┘
-        ┌───────────────┼───────────────┐
-        ▼               ▼               ▼
-   shiroha-wit    shiroha-storage   shiroha-transport
-        │                                │
-        ▼                                ▼
-   shiroha-wasm                  shiroha-transport-grpc
-        │
-        ▼
-  shiroha-dispatch ◀────────────── shiroha-worker
-        │
-        ▼
-   shiroha-engine ◀── shiroha-control ◀── shiroha-proto
-        │
-        ▼
-    apps/shirohad                  apps/sctl
+依赖箭头 `X --> Y` 表示 X 依赖 Y。按层组织(同层 crate 互不依赖);为减少视觉噪音,图中只画**直接**依赖,传递依赖通过路径体现。
+
+```mermaid
+flowchart TB
+    subgraph L0["第 0 层 (无 shiroha 依赖)"]
+        core[shiroha-core]
+        proto[shiroha-proto]
+        config[shiroha-config]
+    end
+
+    subgraph L1["第 1 层 (仅依赖 core)"]
+        wit[shiroha-wit]
+        storage[shiroha-storage]
+        transport[shiroha-transport]
+    end
+
+    subgraph L2["第 2 层"]
+        wasm[shiroha-wasm]
+        tgrpc[shiroha-transport-grpc]
+    end
+
+    subgraph L3["第 3 层"]
+        dispatch[shiroha-dispatch]
+        worker[shiroha-worker]
+    end
+
+    subgraph L4["第 4 层"]
+        engine[shiroha-engine]
+    end
+
+    subgraph L5["第 5 层"]
+        control[shiroha-control]
+    end
+
+    subgraph L6["第 6 层 (二进制装配)"]
+        shirohad[apps/shirohad]
+        sctl[apps/sctl]
+    end
+
+    wit --> core
+    storage --> core
+    transport --> core
+
+    wasm --> wit
+    tgrpc --> transport
+    tgrpc --> proto
+
+    dispatch --> wasm
+    dispatch --> transport
+    worker --> wasm
+    worker --> transport
+
+    engine --> wasm
+    engine --> dispatch
+    engine --> storage
+
+    control --> engine
+    control --> storage
+    control --> proto
+
+    shirohad --> engine
+    shirohad --> control
+    shirohad --> worker
+    shirohad --> tgrpc
+    shirohad --> config
+
+    sctl --> control
+    sctl --> proto
+    sctl --> config
 ```
 
 硬性约束:
