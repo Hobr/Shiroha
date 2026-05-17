@@ -30,14 +30,14 @@ Blocking / Waiting 由 ActionRef 逐条声明,Engine 不强制全局策略——
 
 ### DispatchPolicy
 
-core 给出策略类型分类,具体路由发生在 `shiroha-dispatch`:
+core 只暴露两个变体,具体路由发生在 `shiroha-dispatch`:
 
-- **Local** — 在主控进程内执行 (本地 Executor)
-- **Single** — 派发到唯一被选中的节点
-- **Fanout(n)** — 派发到 n 个节点,需要聚合策略
-- **Broadcast** — 派发到当前已注册的全部节点,需要聚合策略
+- **Local** — 在主控进程内执行(本地 Executor)
+- **Remote(selector, aggregation)** — 派发到 `selector` 选出的若干节点,结果按 `aggregation` 合并
 
-节点选择器 (NodeSelector) 与策略组合使用:策略说"派给几个",选择器说"具体派给谁(按标签、按地域、按健康度等)"。
+`NodeSelector` 决定"派给哪些节点",内置形态包括:`one(filter)`(选 1 个)、`n(count, filter)`(选 N 个)、`all(filter)`(选全部健康的);filter 按标签 / 地域 / 健康度筛选。
+
+当 selector 返回单个节点时,`aggregation` 被忽略——代码上仍要传(枚举一致),实际不调用聚合。
 
 ### Aggregation
 
@@ -69,6 +69,6 @@ core 给出策略类型分类,具体路由发生在 `shiroha-dispatch`:
 - `shiroha-wit`:WIT 中导出的"FSM 描述符"类型必须能映射到 core 的 FSM 类型
 - `shiroha-dispatch`:基于 core 的 DispatchPolicy / Aggregation 进行路由与聚合
 - `shiroha-engine`:基于 core 的 FSM 模型驱动状态转移
-- `shiroha-storage`:Flow / Job 的持久化结构必须能往返 core 模型
+- `shiroha-storage`:Job / Event 的持久化结构必须能往返 core 模型;Flow / Component 由 storage 自行建模(不在 core)
 
 跨 crate 字段或枚举变更属于破坏性改动,需要在 PR 中说明影响范围。

@@ -8,10 +8,20 @@
 
 ## 抽象边界
 
-Transport 至少需要回答以下问题:
+Transport 需要支持以下 RPC:
 
-- 把一份 (ComponentId, ActionRef, 输入字节) 投递到指定节点,等待结果字节
-- 在投递中途取消尚未完成的请求(服务 Aggregator 的提前返回语义)
+**主控 → 节点**:
+
+- **submit-action** — 把 `(ComponentId, ActionRef, 输入字节)` 投递到指定节点,等待结果字节
+- **cancel-action** — 取消尚未完成的请求(服务 Aggregator 的提前返回语义)
+
+**节点 → 主控**:
+
+- **fetch-component** — 按 `ComponentId` 拉取 WASM 字节(服务节点按需 pull,见 `worker.md`)
+- **heartbeat** — 周期上报心跳
+
+此外:
+
 - 检测节点健康(心跳/连通性),并在状态变化时通知上层
 - 在节点列表变化时通知 NodeRegistry
 
@@ -19,7 +29,7 @@ Transport **不**负责:
 
 - 决策派给哪些节点(是 Dispatcher 的职责)
 - 解析 Action 含义(是 wasm 的职责)
-- 缓存 WASM 组件字节(取决于部署模式,见 `open-questions.md`)
+- 缓存 WASM 组件字节(由 worker 自行维护,详见 `worker.md`)
 - 聚合结果(是 Aggregator 的职责)
 
 ## 节点注册表 (NodeRegistry)
@@ -63,6 +73,6 @@ NodeRegistry 的对外查询接口在两阶段间保持兼容,这样上层 Dispa
 
 ## 与其他 crate 的契约
 
-- 入参 / 出参:与 Dispatcher 之间用 ActionRef + 字节
+- 入参 / 出参:与 Dispatcher 之间 `(ComponentId, ActionRef, 输入字节) → 输出字节`;反向支持 worker 的 `ComponentId → 字节` 拉取
 - 依赖:`shiroha-core` 的 NodeId、NodeSelector 等基础类型
 - 被依赖:`shiroha-dispatch`、`shiroha-worker`(节点侧使用 transport 接收请求)
