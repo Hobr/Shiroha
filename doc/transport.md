@@ -32,6 +32,10 @@ Transport **不**负责:
 - 缓存 WASM 组件字节(由 worker 自行维护,详见 `worker.md`)
 - 聚合结果(是 Aggregator 的职责)
 
+### 在途 Action 与节点离线的竞态
+
+节点的心跳通道与 Action 结果通道是独立的。当心跳超时导致节点被标记为不可用时,已在该节点上派发但尚未返回结果的 Action 仍应被正常接收——Transport 不应因节点标记为不可用而丢弃已到达的结果。若 Aggregator 已因超时提前返回,晚到的结果进入 dead letter(见 `dispatch.md`);若 Aggregator 仍在等待,结果正常参与聚合。
+
 ## 节点注册表 (NodeRegistry)
 
 NodeRegistry 是 Dispatcher 与 Transport 之间的查询面。它提供:
@@ -49,7 +53,7 @@ NodeRegistry 的对外查询接口在两阶段间保持兼容,这样上层 Dispa
 
 ## gRPC 实现 (shiroha-transport-grpc)
 
-- 服务定义放在 `shiroha-proto`,以保持 build.rs 与 tonic 代码生成集中
+- 服务定义放在 `shiroha-proto-node`,以保持 build.rs 与 tonic 代码生成集中
 - 客户端连接池由 transport-grpc 自管;Dispatcher 看到的只是 "submit / cancel" 这两个动作
 - 流式响应支持(在 Action 长执行时返回进度)在初期可不实现,但服务定义要预留 streaming RPC 入口,避免日后破坏性变更
 - 鉴权:MVP 阶段在受信网络内运行,远程链路 mTLS 与令牌策略列入后续工作
@@ -60,7 +64,7 @@ NodeRegistry 的对外查询接口在两阶段间保持兼容,这样上层 Dispa
 
 - 不引入额外的状态机概念
 - 错误分两类:网络错误(可由上层选择重试)与对端业务错误(透传给 Dispatcher 由 Aggregator 处理)
-- 必须支持取消语义(允许实现为 best-effort);调用方需被告知"已发出取消";晚到的结果由 Dispatcher 处理(写日志即可,见 `dispatch.md`),transport 仅透传
+- 必须支持取消语义(允许实现为 best-effort);调用方需被告知"已发出取消";晚到的结果由 Dispatcher 处理(见 `dispatch.md`),transport 仅透传
 - 必须支持健康检查或等价机制,使 NodeRegistry 能在不调用业务接口的前提下判定可用性
 
 ## 拓扑约束
@@ -75,4 +79,4 @@ NodeRegistry 的对外查询接口在两阶段间保持兼容,这样上层 Dispa
 
 - 入参 / 出参:与 Dispatcher 之间 `(ComponentId, ActionRef, 输入字节) → 输出字节`;反向支持 worker 的 `ComponentId → 字节` 拉取
 - 依赖:`shiroha-core` 的 NodeId、NodeSelector 等基础类型
-- 被依赖:`shiroha-dispatch`、`shiroha-worker`(节点侧使用 transport 接收请求)
+- 被依赖:`shiroha-dispatch`、`shiroha-worker`(节点侧使用 transport 接收请求);不被 `shiroha-engine` 直接依赖(经由 dispatch)
