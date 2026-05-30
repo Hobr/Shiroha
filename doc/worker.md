@@ -30,6 +30,16 @@
 - 单个节点上的多个 Action 调用并发执行;调用之间不共享内存(除非走 host KV 能力)
 - Action 执行时间上限由主控通过请求元数据传入;超时由节点本地强制
 
+## 并发控制与背压
+
+节点必须配置**并发执行上限**(信号量,默认值由 `shiroha-config` 提供)。当并发 Action 数达到上限时:
+
+- 新到达的 `submit-action` 请求返回 `RESOURCE_EXHAUSTED` 错误
+- 主控 Dispatcher 收到此错误后选择其他节点或排队等待
+- 并发上限应根据节点的 CPU / 内存资源合理设置
+
+WASM 沙箱的资源限制(fuel / 内存 / 栈深度 / 网络超时)见 `architecture.md` 的"WASM 沙箱安全"一节,具体值在 `shiroha-config` 中管理。
+
 ## 与主控的边界
 
 节点端**只调用** WASM 中"Action 实现"相关的 export(见 `wit-interfaces.md`),不调用 `describe` / `decide`。这两个 export 仅在主控加载组件时使用。这样即使 WIT 演进出主控专用 export,节点端 binary 也不需要更新。
