@@ -10,6 +10,7 @@ repos:
       - id: check-merge-conflict
       - id: check-yaml
       - id: mixed-line-ending
+      - id: check-added-large-files
 
   - repo: local
     hooks:
@@ -52,3 +53,12 @@ repos:
         language: rust
         files: \.rs$
         pass_filenames: false
+
+      - id: typst style
+        name: typstyle
+        description: Format files with typstyle
+        entry: typstyle
+        language: system
+        types: [file]
+        files: \.typ$
+        args: [-i]

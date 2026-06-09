@@ -40,6 +40,7 @@ check:
 fmt:
     cargo fmt
     pre-commit run --all-files
+    typstyle -c 60  -i paper/**/**.typ
 
 test:
     cargo nextest run --all-features --run-ignored all
@@ -49,6 +50,10 @@ coverage:
 
 doc:
     cargo doc --open --workspace
+
+paper:
+    typstyle -c 60  -i paper/**/**.typ
+    typst compile --root=. main.typ
 
 update:
     nix flake update
