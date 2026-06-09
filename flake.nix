@@ -54,6 +54,7 @@
             typst
             typstyle
             tinymist
+            just-lsp
           ];
 
           env = {

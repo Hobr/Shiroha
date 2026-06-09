@@ -37,10 +37,9 @@ install-dev:
 check:
     cargo check --workspace
 
-fmt:
+fmt: paper-fmt
     cargo fmt
     pre-commit run --all-files
-    typstyle -c 60  -i paper/**/**.typ
 
 test:
     cargo nextest run --all-features --run-ignored all
@@ -51,8 +50,12 @@ coverage:
 doc:
     cargo doc --open --workspace
 
-paper:
-    typstyle -c 60  -i paper/**/**.typ
+[working-directory: "paper"]
+paper-fmt:
+    typstyle -i .
+
+[working-directory: "paper"]
+paper: paper-fmt
     typst compile --root=. main.typ
 
 update:
