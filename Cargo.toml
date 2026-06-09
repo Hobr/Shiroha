@@ -17,8 +17,8 @@ tokio-util = { version = "0.7", features = ["time"] }
 async-trait = "0.1"
 
 # WASM 运行时
-wasmtime = { version = "43.0", features = ["trace-log"] }
-wasmtime-wasi = { version = "43.0", features = ["p3"] }
+wasmtime = { version = "45.0", features = ["trace-log"] }
+wasmtime-wasi = { version = "45.0", features = ["p3"] }
 
 # 序列化
 serde = { version = "1.0", features = ["derive"] }
@@ -47,7 +47,7 @@ tower = "0.5"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "brotli", "cookies", "deflate", "gzip", "http2", "json", "query", "rustls", "socks", "zstd"] }
 
 # 存储
-redb = "4.0"
+redb = "4"
 fs2 = "0.4"
 
 # 配置管理
@@ -62,7 +62,7 @@ uuid = { version = "1.23", features = ["v7", "serde", "rng-rand"] }
 sha2 = "0.11"
 
 # 构建
-shadow-rs = { version = "1.7", features = ["cargo_metadata"] }
+shadow-rs = { version = "2.0", features = ["cargo_metadata"] }
 
 [profile.release]
 debug = false
