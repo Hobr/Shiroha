@@ -13,13 +13,15 @@ This directory contains guidelines for backend development. Fill in each file wi
 ## Guidelines Index
 
 | Guide | Description | Status |
-|-------|-------------|--------|
+| ------- | ------------- | -------- |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Project Conventions](./conventions.md) | Mermaid for diagrams; CLI scaffolding for new crates | Filled |
+
+> **Cross-cutting**: [Commit Discipline](../guides/commit-discipline.md) (workflow-level) — commit often in small units; run `just fmt` before every commit. Applies to all layers.
 
 ---
 
