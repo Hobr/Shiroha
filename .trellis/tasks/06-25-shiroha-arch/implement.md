@@ -7,7 +7,7 @@
 每个版本独立可测试，到点给你微调方案/测试机会。`依赖` 为前置版本。
 
 | 版本 | 交付物 | 依赖 | 可测试验证 | 产出 crate |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | **v0.1** 引擎内核 | `SmIr` 定义（含 `CapabilityDecl` + `ActionRef::Plugin{plugin_id, method}` 一次定对）；层级+并行 statechart 引擎；RTC 转换步；转换路径缓存；async 动作 future + 完成事件队列；**纯逻辑无 runtime**，用 mock 动作测试 | — | 单测：嵌套/并行/历史/guard fixture，事件驱动推进，mock 动作完成事件回流正确 | `shiroha-ir`, `shiroha-core` |
 | **v0.2** WASM 单机运行 | WASM CM adapter（bindgen! `define()`/WASI+`shiroha:*` caps host trait + `From<MachineDef>` + 动作按名动态 `TypedFunc` + fuel/epoch 沙箱）+ **最小 host-func 通道**（直接接线几个固定 host func 让示例能跑，无完整授权）+ 最小 runner binary | v0.1 | 集成测：加载示例 wasm 组件 → `define()` 得 `SmIr` → 事件驱动 → 动作本地执行 → 沙箱超时拦截 | `shiroha-adapter`, `shiroha-adapter-wasm`, `shiroha-plugin-sdk`(最小), dev runner bin |
 | **v0.3** 控制器+多实例+持久化 | `Controller` API（task CRUD/pause/resume/query/submit_event + 创建时声明 `PersistencePolicy`）+ 多实例托管（每实例 `Store<T>` + 独立事件队列 + `LocalSet`/`Arc<Mutex>` 处理 `!Sync`）+ 基础 `tracing` 日志（无 OTel exporter）+ **持久化与崩溃恢复**：`EventStore` trait + 默认本地文件实现 + Realtime/Deferred/None 三模式 + event-sourcing 落盘 + snapshot 加速重放 + 引擎持久化 hook + 崩溃恢复重放 | v0.1, v0.2 | 集成测：多 task 并发 + 生命周期 + 暂停/恢复 + 事件提交；**Realtime task 跑中杀进程→重启→从 log 重放恢复零丢失；Deferred task→从 snapshot+部分 log 恢复；None task→丢** | `shiroha-controller`, `shiroha-persist`(新) |
