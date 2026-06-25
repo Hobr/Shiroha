@@ -20,9 +20,10 @@ These guides help you **ask the right questions before coding**.
 ## Available Guides
 
 | Guide | Purpose | When to Use |
-|-------|---------|-------------|
+| ------- | --------- | ------------- |
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
+| [Commit Discipline](./commit-discipline.md) | Commit often in small units; run `just fmt` before every commit | Before any commit |
 
 ---
 
