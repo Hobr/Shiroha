@@ -20,8 +20,8 @@
                │ ActionDispatch (bidi stream)      │ trace context (W3C)
        ┌───────┴───────┐  ┌────────────────┴───────┐ ┌──────────────┐
        │  worker (xN)  │  │  worker (xN)           │ │ OTLP collector│
-       │  stateless    │  │  stateless action exec │ └──────────────┘
-       │  action exec  │  │  (wasm/shell/http)     │
+       │  stateless    │  │  WasmFunc / Plugin 执行 │ └──────────────┘
+       │  action exec  │  │  (内置 http/shell/fs)   │
        └───────────────┘  └────────────────────────┘
 ```
 
@@ -64,13 +64,11 @@ pub struct SmIr {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ActionRef {
-    WasmFunc    { export: String },
-    Shell       { cmd: String },
-    Http        { spec: HttpSpec },
-    Plugin      { capability: String, method: String },
+    WasmFunc    { export: String },                 // 动作在机器自身组件内(随 define() 打包的那份 wasm)
+    Plugin      { capability: String, method: String }, // 动作由插件提供(http/shell/fs=框架内置; 用户自定义)
     Distributed {
-        inner: Box<ActionRef>,
-        fanout: Option<u32>,           // 不声明=单点分发(1 worker); N=N 片
+        inner: Box<ActionRef>,        // WasmFunc 或 Plugin,二选一
+        fanout: Option<u32>,          // 不声明=单点分发(1 worker); N=N 片
         target: Option<TargetSpec>,    // 默认 Any(调度器自主负载均衡)
         aggregate: AggregateRef,       // 内置 Rust 原生 或 wasm 自定义
     },
@@ -81,9 +79,9 @@ pub enum TargetSpec { Any, Pool(String), Label(String, String), Explicit(Vec<Str
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AggregateRef {
-    Builtin { strategy: BuiltinAggregate },   // Rust 原生,零开销
-    Wasm    { export: String },                // 自定义 wasm 聚合器(有状态,CM resource 句柄)
-    Plugin  { capability: String, method: String },
+    Builtin   { strategy: BuiltinAggregate },   // Rust 原生,零开销
+    WasmFunc  { export: String },                // 聚合器在机器自身组件内(有状态,CM resource 句柄)
+    Plugin    { capability: String, method: String }, // 聚合器由插件提供
 }
 pub enum BuiltinAggregate { All, Any, Quorum(u32), FirstSuccess }
 ```
@@ -91,7 +89,8 @@ pub enum BuiltinAggregate { All, Any, Quorum(u32), FirstSuccess }
 - `StateNode` 编码嵌套 + 正交区域（children: `Vec<Region>`，region 内含子状态）。
 - `SmIr` 不是 CM 类型：serde 派生不自动满足 `ComponentType`/`Lift`/`Lower`。WIT world 按 `SmIr` 形状设计，`bindgen!` 生成 `MachineDef`，再以机械的 `From<MachineDef> for SmIr` 收敛（仅 ABI 类型映射，无语义翻译）。这让 `shiroha-adapter-text` 不依赖 wasmtime。
 - 文本格式注意：TOML 不擅长深嵌套同质 map，`SmIr` 用 `[states.<id>]` 表形式保持 TOML 友好；TOML 最适合小型机定义。
-- **聚合策略可扩展**：内置 4 种用 Rust 原生实现（`{builtin, ...}`，零开销）；自定义走 wasm 插件（`{wasm, export}` 或 `{plugin, ...}`），有状态聚合器经 CM `resource` 句柄（`create() -> handle` / `on-result(handle, one) -> decision` / `destroy(handle)`），受沙箱约束，复用框架插件通道。
+- **动作执行内容二选一**：`WasmFunc`（机器自身组件的导出）或 `Plugin`（插件调用）。`Shell`/`Http`/`Fs` 不再是 IR 平级变体，而是**框架内置插件**，经 `Plugin{capability:"shell", method:"exec"}` / `{capability:"http", method:"get"}` 引用；用户自定义插件同形。`Distributed` 正交包装 `WasmFunc`/`Plugin` 之一。
+- **聚合策略可扩展**：`Builtin` 4 种 Rust 原生（零开销）；`WasmFunc`/`Plugin` 自定义有状态聚合器（CM `resource` 句柄：`create`/`on-result`/`destroy`），受沙箱约束，复用插件通道。
 - **分发目标控制**：`fanout` 控数量，`target` 控节点约束（`Any`/`Pool`/`Label`/`Explicit`），与 `required_capabilities` 两层过滤。
 
 ## 3. WASM Component Model Adapter 契约（AC3）
@@ -137,7 +136,7 @@ world shiroha-machine {
   - 两层过滤：worker 必须满足 `required_capabilities`（能力）**且**满足 `target`（用户偏好）才被选。
 - **聚合策略（R4.4）**：
   - **内置 4 种 Rust 原生实现**（`AggregateRef::Builtin`，零开销）：`All` / `Any` / `Quorum(n)` / `FirstSuccess`。编排侧按 `task_id`+`action_ref` 关联结果，按策略聚合。
-  - **自定义 wasm 聚合器**（`AggregateRef::Wasm`/`Plugin`）：有状态，经 CM `resource` 句柄。WIT 接口：
+  - **自定义 wasm 聚合器**（`AggregateRef::WasmFunc`/`Plugin`）：有状态，经 CM `resource` 句柄。WIT 接口：
     ```wit
     interface aggregator {
       resource aggregator { create: func() -> aggregator; }
@@ -162,7 +161,7 @@ world shiroha-machine {
   `ActionDispatch`/`ActionResult` 是 transport-domain 纯 Rust struct（不是 prost 类型）；`shiroha-transport-grpc` 在边界做 prost 映射。
 - **gRPC proto**（`proto/shiroha/scheduler/v1/dispatch.proto`）：`service Dispatch { rpc Dispatch(stream ActionDispatch) returns (stream ActionResult); }`，每 worker 一条 bidi 长连接；`required_capabilities` 让 worker 在执行前可拒绝；`ShardHint` 承载 fan-out 分片；`target` 透传给调度器选节点（不进 proto wire，是编排侧选节点逻辑）。聚合策略由编排侧执行（proto 与策略无关）。
 - **trace 传播**：编排侧 dispatch 时注入 W3C `traceparent` 到 tonic metadata；worker 侧 extract，建立子 span，使分布式动作 trace 跨 orchestrator+worker 拼接（在 `transport-grpc` 实现，不进抽象 trait）。
-- **worker**（`shiroha-worker`）：收到 `ActionDispatch`，按 `action_ref` 执行（wasm via wasmtime / shell / http / plugin），返回 `ActionResult{done|error}`；无跨调用状态。
+- **worker**（`shiroha-worker`）：收到 `ActionDispatch`，按 `action_ref` 执行（`WasmFunc`=机器组件导出 / `Plugin`=内置或用户插件调用），返回 `ActionResult{done|error}`；无跨调用状态。
 
 ## 6. Crate / 工作区布局（AC1, AC8）
 
