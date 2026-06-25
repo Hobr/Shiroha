@@ -1,4 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+
 {"file": ".trellis/tasks/06-25-shiroha-arch/research/index.md", "reason": "技术选型结论表+6条关键约束,实现前必读"}
 {"file": ".trellis/tasks/06-25-shiroha-arch/research/01-wasm-runtime.md", "reason": "wasmtime CM adapter 实现依据: bindgen!/动态调用/沙箱"}
 {"file": ".trellis/tasks/06-25-shiroha-arch/research/03-serialization-ir.md", "reason": "统一 SmIr 契约: 文本与 CM 两路收敛"}

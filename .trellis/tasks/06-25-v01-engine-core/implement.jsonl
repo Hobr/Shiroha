@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/06-25-v01-engine-core/design.md", "reason": "child 技术设计:SmIr 完整字段、引擎接口、CompiledIr、RTC、转换路径缓存、ActionRuntime trait——实现直接依据"}
+{"file": ".trellis/tasks/06-25-shiroha-arch/design.md", "reason": "父技术设计 §2 IR / §4 动作执行 / §6 crate 布局——child 继承的契约源"}
+{"file": ".trellis/tasks/06-25-shiroha-arch/glossary.md", "reason": "统一术语:SmIr/statechart/RTC/action ref/capability/plugin,实现期命名必须一致"}
+{"file": ".trellis/tasks/06-25-shiroha-arch/research/03-serialization-ir.md", "reason": "SmIr serde 收敛/文本+CM 两路,IR 字段须与该评估对齐"}
+{"file": ".trellis/tasks/06-25-shiroha-arch/research/06-workspace-layout.md", "reason": "12-crate 工作区 DAG 与依赖不变量,本版建 ir+core 骨架须严守"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Rust 错误处理风格(本版 Result/CompileError/HistoryUnsupported 出处)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试/lint/clippy/fmt 质量门"}
