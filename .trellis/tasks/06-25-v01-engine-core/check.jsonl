@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/06-25-v01-engine-core/prd.md", "reason": "AC1–AC8 验收标准,检查对照"}
+{"file": ".trellis/tasks/06-25-v01-engine-core/design.md", "reason": "实现是否符合技术设计:IR shape 一次定对、引擎接口签名、RTC 算法、ActionRuntime trait 边界"}
+{"file": ".trellis/tasks/06-25-shiroha-arch/glossary.md", "reason": "命名与术语一致性"}
+{"file": ".trellis/tasks/06-25-shiroha-arch/research/06-workspace-layout.md", "reason": "crate DAG 不变量:ir 零上游、core 仅依赖 ir"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门校验:build/test/clippy/fmt 全绿"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "实现是否冗余抽象/可复用复核"}
