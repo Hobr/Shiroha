@@ -1,6 +1,6 @@
 # Shiroha 执行计划（implement.md）
 
-> 父任务 `.trellis/tasks/06-25-shiroha-arch` 的执行计划。**父任务不直接实现**（仅最终集成评审 + spec 沉淀）。采用**版本里程碑**分步实现：每个版本 = 一个 child task，**到点才创建并细规划**（不一次性建全部 child），让下一版本可基于上一版本测试结果微调。MVP 聚焦 WASM 路径，文本 adapter 延后到 v0.7。产品决策见 `prd.md`，技术设计见 `design.md`，选型证据见 `research/`。
+> 父任务 `.trellis/tasks/06-25-shiroha-arch` 的执行计划。**父任务不直接实现**（仅最终集成评审 + spec 沉淀）。术语以 `glossary.md` 为权威。采用**版本里程碑**分步实现：每个版本 = 一个 child task，**到点才创建并细规划**（不一次性建全部 child），让下一版本可基于上一版本测试结果微调。MVP 聚焦 WASM 路径，文本 adapter 延后到 v0.7。产品决策见 `prd.md`，技术设计见 `design.md`，选型证据见 `research/`。
 
 ## 版本路线图（AC8）
 
@@ -57,11 +57,11 @@ v0.3 持久化与多实例同期落地；v0.5 分布式动作预留 `dispatch_id
 
 ## 执行检查清单（父任务视角）
 
-1. **逐版本创建+规划**：每个版本到点执行 `task.py create "<title>" --slug v0X-<name> --parent .trellis/tasks/06-25-shiroha-arch`，再走该 child 的 Phase 1（prd/design/implement），在 child prd 写明前置版本 ordering。
+1. **逐版本创建+规划**：每个版本到点执行 `task.py create "<title>" --slug v0X-<name> --parent .trellis/tasks/06-25-shiroha-arch`，再走该 child 的 Phase 1（prd/design/implement），在 child prd 写明前置版本 ordering；**child 规划时新增术语追加到 `glossary.md`**。
 2. **逐版本实现**：`task.py start` 该 child → 实现 → `trellis-check` → 归档。
 3. **版本间微调点**：每版本测试完成后，与用户复盘，可调整下一版本范围/方案（回 Phase 1 改下一版本 child 的 prd）。
 4. **集成评审（父任务，v0.8 后）**：跨版本验收 AC1–AC8；技术选型落地核对 `[workspace.dependencies]` pin 与 research 结论一致。
-5. **spec 更新（Phase 3.3）**：把架构契约（IR、adapter trait、Transport trait、能力 ABI、crate DAG、OTel lockstep、YAML crate 选择）沉淀到 `.trellis/spec/backend/`（或新建 `rust/` spec）。
+5. **spec 更新（Phase 3.3）**：把架构契约（IR、adapter trait、Transport trait、能力 ABI、crate DAG、OTel lockstep、YAML crate 选择）沉淀到 `.trellis/spec/backend/`（或新建 `rust/` spec）；**`glossary.md` 提升为 `.trellis/spec/backend/glossary.md` 作为仓库级永久术语 spec**。
 
 ## 验证命令（通用，各版本具体化）
 
