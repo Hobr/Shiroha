@@ -48,18 +48,22 @@ pub struct SmIr {
     pub transitions: Vec<Transition>,
     pub actions: Vec<ActionRef>,     // unified {kind, ref}
     pub history: Vec<HistoryDecl>,   // shallow history
+    pub capabilities: Vec<CapabilityDecl>, // WASI worlds + shiroha:* interface declarations
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ActionRef {
-    WasmFunc  { export: String },            // {wasm-func, <component-export-name>}
-    Shell     { cmd: String },               // {shell, <cmd>}
-    Http      { spec: HttpSpec },            // {http, <spec>}
-    Plugin    { capability: String, method: String }, // {plugin, <cap>.<method>}
-    Distributed { inner: Box<ActionRef>, fanout: Option<FanOut>, aggregate: Aggregate }, // R4
+    WasmFunc  { export: String },                       // {wasm-func, <component-export-name>}
+    Plugin    { plugin_id: String, method: String },    // {plugin, <id>.<method>} (wasm or host-native, opaque to caller)
+    Distributed { inner: Box<ActionRef>, fanout: Option<u32>, target: Option<TargetSpec>, aggregate: AggregateRef }, // R4
 }
+// capability = wasm component's host-provided imports (orthogonal to plugin)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CapabilityDecl { pub interface: String, pub functions: Vec<String> }
 // StateNode / Transition encode nested + parallel regions, guards, entry/exit/run actions…
 ```
+
+> **Capability/plugin separation (prd D7/R3.5)**: `http`/`fs` are WASI/`shiroha:*` capabilities (not plugins); `shell`/`log` are framework-native `shiroha:*` capabilities. Plugins are purely an action/aggregator extension axis. Full task-creation-time capability authorization is a v0.10 feature; MVP keeps a minimal host-func channel.
 
 2. **Text adapters** are thin: each just calls the right serde backend.
 ```rust

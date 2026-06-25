@@ -25,7 +25,7 @@ Shiroha 由三层 + 一套 adapter / 框架插件体系组成：
 | D4 | 分布分发单元与聚合 | action 为单元 + fan-out/fan-in；节点为无状态动作执行器；聚合策略 all/any/quorum(n)/first-success |
 | D5 | 实例/任务模型 | 多实例引擎，task = 一个状态机实例；状态默认驻内存；持久化与崩溃恢复为可选能力 |
 | D6 | 部署拓扑 | 单编排进程（内嵌 L1+L2+L3）+ 无状态 worker |
-| D7 | 插件能力模型 | 能力声明式：插件声明提供 capability + 所需 host func；host 白名单注入；`{plugin, cap.method}` 调用；semver major 协商；沙箱=白名单+资源限额 |
+| D7 | 能力/插件分离模型 | **capability 与 plugin 正交、无交集**：capability = wasm 运行时权限范围（WASI worlds `wasi:io`/`clocks`/`filesystem`/`sockets`/`http` + 框架原生 `shiroha:*` interface，如 `shiroha:shell`/`shiroha:log`），wasm 组件与 wasm plugin 均声明所需 caps，task 创建时申请授权、host 按白名单注入 wasmtime Linker；plugin = action/聚合的扩展机制（`ActionRef::Plugin{plugin_id, method}` / `AggregateRef::Plugin{...}`），可 wasm 或 host-native，对调用方无感知。`http`/`fs` 等是 WASI/框架 caps 而非 plugin；`shell`/`log` 是框架原生 caps。semver major 协商用于 plugin；沙箱=fuel/epoch/StoreLimits/timeout |
 | D8 | 安全校验 MVP | token/api-key 认证 + 动作能力校验 + TLS 可选；RBAC/多租户为进阶 |
 | D9 | 传输层 | 抽象 `Transport` trait + 默认 tonic(gRPC) 实现；双向流承载分发与回流 |
 
@@ -45,11 +45,17 @@ Shiroha 由三层 + 一套 adapter / 框架插件体系组成：
   - `{plugin, <cap>.<method>}`——动作由**插件**提供；`http`/`shell`/`fs` 等是**框架内置插件**（用插件机制实现的示例），用户可加自定义插件。
   - `{distributed, inner, fanout, target, aggregate}`——正交包装，`inner` 为上面二选一。
 
-### R3 Action / Callback 类型与框架插件
-- R3.1 动作执行内容**二选一**：`wasm func`（机器自身组件命名导出，默认）或 `plugin`（插件调用）。
-- R3.2 框架内置插件（用插件机制实现，供定义直接调用，无需写代码）：`http`、`shell`、`fs`、`log` 等；用户可加自定义插件。**不再作为 IR 的平级 enum 变体**。
-- R3.3 框架插件机制见 D7：用 WASI/host func 封装能力的 wasm，文本/wasm 定义以 `{plugin, cap.method}` 调用。
-- R3.4 插件机制见 D7：能力声明 + 注册表 + 白名单注入 + semver major 协商 + 沙箱（白名单 + fuel/cycles + 内存上限 + 超时）。
+### R3 Action / Callback 类型与 Plugin 扩展
+- R3.1 动作执行内容**二选一**：`wasm func`（机器自身组件命名导出，默认）或 `plugin`（plugin 调用，`ActionRef::Plugin{plugin_id, method}`）。
+- R3.2 plugin 是 action/聚合的**扩展机制**，可 wasm 或 host-native，对调用方无感知（用户只写 `{plugin_id, method}`，不关心背后实现与所用 caps）。**plugin 不是 capability**：`http`/`fs` 等不再伪装成 plugin，而是 WASI/框架 caps（见 R3.5）。
+- R3.3 框架自带可选 host-native plugin（如 `shell`/`log` 的 action 包装），用户可加自定义 plugin（wasm 或 host-native）。wasm plugin 受其声明的 WASI/框架 caps 约束；host-native plugin 信任由部署期建立（签名/配置白名单）。
+- R3.4 plugin semver major 协商 + 注册表；沙箱（fuel/epoch/StoreLimits/timeout）适用于 wasm plugin。
+
+### R3.5 Capability（权限轴，正交于 plugin）
+- R3.5.1 capability = wasm 组件 `import` 的所有 host 提供物，统一为两类：**WASI 标准 worlds**（`wasi:io`/`wasi:clocks`/`wasi:filesystem`/`wasi:sockets`/`wasi:http`）+ **框架原生 interface**（`shiroha:shell`/`shiroha:log` 等 WASI 表达不了的）。
+- R3.5.2 wasm 组件声明所需 caps；task 创建时申请授权（声明→申请→白名单注入→未授权拒绝实例化）；wasm plugin 同样声明所需 caps，task 授权合集 = 机器组件 caps ∪ 所调用 wasm plugin caps。
+- R3.5.3 host 用 wasmtime `Linker` 按 task 授权白名单注入；未声明/未授权槽位不注册 → 实例化失败 = 自然能力协商。
+- R3.5.4 **完整 capability + task 创建授权为未来版本目标（v0.10，非 MVP）**。MVP（v0.2/v0.4）保留最小 host-func 通道直接接线让示例能跑；IR 契约（`SmIr` 的 `CapabilityDecl`）在 v0.1 一次定对，避免破坏 G2 冻结点。
 
 ### R4 分布调度器
 - R4.1 分发单元 = 标注 `distributed` 的 action（可带 fan-out 分片 + 目标约束）。
@@ -83,7 +89,7 @@ Shiroha 由三层 + 一套 adapter / 框架插件体系组成：
 - [ ] AC1 三层边界与职责划分明确，每层对外契约定义完成。
 - [ ] AC2 adapter↔core 的统一 IR（`SmIr`）契约定义完成（serde-derived，文本与 CM 两路收敛）。
 - [ ] AC3 WASM CM adapter「读结构而非运行引擎」语义精确定义：`define()`→IR + 命名导出按名动态调用 + host-func 插件通道。
-- [ ] AC4 框架插件机制（能力声明 + 白名单注入 + semver + 沙箱）与文本定义 `{plugin, cap.method}` 调用契约定义完成。
+- [ ] AC4 **capability/plugin 分离模型**：capability（WASI worlds + 框架原生 `shiroha:*` interface，task 创建授权）与 plugin（action/聚合扩展，`{plugin_id, method}`，wasm 或 host-native）正交无交集，IR `CapabilityDecl` + `ActionRef::Plugin` 契约定义完成；MVP 执行边界（v0.2/v0.4 最小 host-func 通道）与 v0.10 完整授权 feature 划分明确。
 - [ ] AC5 分布调度器分发单元（distributed action）、聚合策略、节点无状态假设、失败回流定义完成。
 - [ ] AC6 控制器嵌入形态、任务管理、OpenTelemetry 集成（per-task span + 跨 worker 传播）、安全校验范围定义完成。
 - [ ] AC7 关键技术选型（R6.1–R6.6）有评估结论与选定理由（见 research/）。
@@ -96,6 +102,7 @@ Shiroha 由三层 + 一套 adapter / 框架插件体系组成：
 - 业务领域状态机示例库。
 - RBAC / 多租户隔离 / 多副本 HA（进阶，非 MVP）。
 - 文本 adapter（JSON/YAML/TOML）延后到 v0.7，非 MVP 首要。
+- 完整 WASI/框架 caps + task 创建授权（v0.10），非 MVP。
 
 ## Version Roadmap（多版本分步实现）
 
@@ -103,15 +110,16 @@ Shiroha 由三层 + 一套 adapter / 框架插件体系组成：
 
 | 版本 | 交付物 | 依赖 |
 |---|---|---|
-| v0.1 | 引擎内核（ir+core，纯逻辑，mock 动作） | — |
-| v0.2 | WASM adapter + 最小 host-func 通道 + runner | v0.1 |
+| v0.1 | 引擎内核（ir+core，纯逻辑，mock 动作）；`SmIr` 含 `CapabilityDecl` + `ActionRef::Plugin{plugin_id, method}` 一次定对 | — |
+| v0.2 | WASM adapter + 最小 host-func 通道（直接接线，无完整授权）+ runner | v0.1 |
 | v0.3 | 控制器+多实例+持久化 | v0.1, v0.2 |
-| v0.4 | 框架插件完整化（能力声明+白名单+semver+注册表+聚合器接口） | v0.2 |
+| v0.4 | plugin 完整化（wasm plugin 加载 + host-native plugin 注册表 + semver + 资源限额沙箱；capability 授权从本版剥离至 v0.10）+ 聚合器接口 | v0.2 |
 | v0.5 | 分布调度器 + 无状态 worker（transport+tonic+scheduler+wasm 聚合器） | v0.2, v0.4 |
 | v0.6 | OpenTelemetry（OTel export + 跨 worker trace 传播） | v0.3, v0.5 |
 | v0.7 | 文本 adapter 回归（JSON/YAML/TOML） | v0.1 |
 | v0.8 | 安全 + facade + 生产化（auth+TLS+编排 bin+Web boundary） | v0.3–v0.7 |
 | v0.9 | 持久化增强 + 多副本 HA（进阶，基于 v0.3 基础） | v0.5, v0.8 |
+| v0.10 | 完整 WASI caps + 框架原生 caps + task 创建授权（声明→申请→白名单注入→拒绝未授权）+ 能力校验完整化（未来版本，非 MVP） | v0.2, v0.4 |
 
 ## OpenTelemetry 定位
 

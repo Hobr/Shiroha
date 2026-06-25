@@ -24,8 +24,8 @@
 **(b) Per-action named exports with typed args/returns** ✅
 Each action is just another WIT `export func`. `bindgen!` generates one typed method per export; or at runtime `instance.get_func(&mut store, "<action-name>")` → `.typed::<Input, Output>()` for dynamic per-action dispatch by name (needed since action names are data, not statically known). Both static (bindgen) and dynamic (`Func`/`TypedFunc` by name) paths are supported.
 
-**(c) Host funcs via Linker for plugin capabilities (capability whitelist injection)** ✅
-`wasmtime::component::Linker` + `LinkerInstance::func_wrap[_async]` register host funcs under `(interface, name)`. The host builds one `Linker` per capability-whitelist policy and instantiates the component against it — this is precisely the "inject host funcs by whitelist" plugin channel. Imports declared in WIT become required host-func slots the host must fill (or instantiation fails) → natural capability negotiation surface. `Resource<T>` / `ResourceTable` available for handle-style capabilities.
+**(c) Host funcs via Linker for capabilities (WASI worlds + framework-native interfaces; capability whitelist injection)** ✅
+`wasmtime::component::Linker` + `LinkerInstance::func_wrap[_async]` register host funcs under `(interface, name)`. The host builds one `Linker` per capability-whitelist policy and instantiates the component against it. Imports declared in WIT become required host-func slots the host must fill (or instantiation fails) → natural capability negotiation surface. `Resource<T>` / `ResourceTable` available for handle-style capabilities. **Capability model (revised, see prd D7/R3.5)**: capabilities = all host-provided imports the wasm component declares = standard WASI worlds (`wasi:io`/`clocks`/`filesystem`/`sockets`/`http`) + framework-native interfaces (`shiroha:shell`/`shiroha:log` for things WASI can't express). `http`/`fs` are WASI/`shiroha:*` capabilities, **not plugins**. Plugins (`ActionRef::Plugin{plugin_id, method}`) are a separate action-layer extension axis (wasm or host-native), orthogonal to capabilities. Full task-creation-time capability authorization is a v0.10 feature; MVP (v0.2/v0.4) keeps a minimal directly-wired host-func channel.
 
 **(d) Sandbox: fuel/cycles + memory cap + timeout/epoch** ✅ (best-in-class)
 - `Config::consume_fuel(true)` + `Store::set_fuel` / `Store::fuel_async_yield_interval` — deterministic per-op cost budget.
@@ -64,8 +64,9 @@ Enable features: `component-model` (on by default), `async` (on by default), `co
 ```rust
 // WIT world:
 //   world shiroha-machine {
-//     import host: interface { /* host-func capabilities: http.get, fs.read, ... */ }
-//     export define: func() -> machine-def;          // typed record
+//     import wasi:filesystem/preopens;   // WASI world (capability)
+//     import shiroha:log/emit;           // framework-native interface (capability)
+//     export define: func() -> machine-def;          // typed record (incl. capabilities declaration)
 //     export action-<name>: func(input: list<u8>) -> result<list<u8>, string>;  // per-action
 //   }
 wasmtime::component::bindgen!({
@@ -83,8 +84,8 @@ cfg.wasm_component_model(true)
 let engine = wasmtime::Engine::new(&cfg)?;
 
 let component = wasmtime::component::Component::from_file(&engine, "machine.wasm")?;
-let mut linker = shiroha_machine::Host::new_linker(&engine, &host_state)?; // whitelisted host funcs
-// (host_state implements only the capabilities this machine declared; others are not registered)
+let mut linker = shiroha_machine::Host::new_linker(&engine, &host_state)?; // whitelisted WASI + shiroha:* host funcs
+// (host_state implements only the capabilities this task is authorized for; others are not registered)
 let (mut store, instance) = shiroha_machine::ShirohaMachine::instantiate_async(
     &mut Store::new(&engine, store_data), &mut linker, &component).await?;
 
@@ -92,7 +93,7 @@ let machine_def = instance.call_define(&mut store).await?;   // -> typed Machine
 // pre-link per-action func refs by name for the engine:
 let act = store.get_func(&instance, "action-validate")
     .and_then(|f| f.typed::<Vec<u8>, Result<Vec<u8>, String>>(&store))?;
-// engine invokes `act.call_async(...)` when the action fires; host funcs inside = plugin channel
+// engine invokes `act.call_async(...)` when the action fires; WASI/shiroha:* host funcs inside = capability channel (plugin is a separate action-layer axis)
 ```
 
 ### Risks / Caveats
