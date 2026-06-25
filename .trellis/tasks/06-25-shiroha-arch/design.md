@@ -59,19 +59,28 @@ pub struct SmIr {
     pub transitions: Vec<Transition>, // guard / event / source / target / action-refs
     pub actions: Vec<ActionDecl>,     // 命名动作 -> ActionRef
     pub history: Vec<HistoryDecl>,    // 浅历史
+    pub capabilities: Vec<CapabilityDecl>, // 组件声明所需 caps (WASI worlds + shiroha:* interface)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ActionRef {
     WasmFunc    { export: String },                 // 动作在机器自身组件内(随 define() 打包的那份 wasm)
-    Plugin      { capability: String, method: String }, // 动作由插件提供(http/shell/fs=框架内置; 用户自定义)
+    Plugin      { plugin_id: String, method: String }, // 动作由 plugin 提供(wasm 或 host-native, 对调用方无感知)
     Distributed {
         inner: Box<ActionRef>,        // WasmFunc 或 Plugin,二选一
         fanout: Option<u32>,          // 不声明=单点分发(1 worker); N=N 片
         target: Option<TargetSpec>,    // 默认 Any(调度器自主负载均衡)
         aggregate: AggregateRef,       // 内置 Rust 原生 或 wasm 自定义
     },
+}
+
+// capability = wasm 组件 import 的所有 host 提供物 (正交于 plugin)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CapabilityDecl {
+    pub interface: String,   // "wasi:filesystem" / "wasi:http" / "shiroha:shell" ...
+    pub functions: Vec<String>, // 声明使用的函数子集 (如 ["read","write"])
 }
 
 pub enum TargetSpec { Any, Pool(String), Label(String, String), Explicit(Vec<String>) }
@@ -81,7 +90,7 @@ pub enum TargetSpec { Any, Pool(String), Label(String, String), Explicit(Vec<Str
 pub enum AggregateRef {
     Builtin   { strategy: BuiltinAggregate },   // Rust 原生,零开销
     WasmFunc  { export: String },                // 聚合器在机器自身组件内(有状态,CM resource 句柄)
-    Plugin    { capability: String, method: String }, // 聚合器由插件提供
+    Plugin    { plugin_id: String, method: String }, // 聚合器由 plugin 提供
 }
 pub enum BuiltinAggregate { All, Any, Quorum(u32), FirstSuccess }
 ```
@@ -89,32 +98,38 @@ pub enum BuiltinAggregate { All, Any, Quorum(u32), FirstSuccess }
 - `StateNode` 编码嵌套 + 正交区域（children: `Vec<Region>`，region 内含子状态）。
 - `SmIr` 不是 CM 类型：serde 派生不自动满足 `ComponentType`/`Lift`/`Lower`。WIT world 按 `SmIr` 形状设计，`bindgen!` 生成 `MachineDef`，再以机械的 `From<MachineDef> for SmIr` 收敛（仅 ABI 类型映射，无语义翻译）。这让 `shiroha-adapter-text` 不依赖 wasmtime。
 - 文本格式注意：TOML 不擅长深嵌套同质 map，`SmIr` 用 `[states.<id>]` 表形式保持 TOML 友好；TOML 最适合小型机定义。
-- **动作执行内容二选一**：`WasmFunc`（机器自身组件的导出）或 `Plugin`（插件调用）。`Shell`/`Http`/`Fs` 不再是 IR 平级变体，而是**框架内置插件**，经 `Plugin{capability:"shell", method:"exec"}` / `{capability:"http", method:"get"}` 引用；用户自定义插件同形。`Distributed` 正交包装 `WasmFunc`/`Plugin` 之一。
-- **聚合策略可扩展**：`Builtin` 4 种 Rust 原生（零开销）；`WasmFunc`/`Plugin` 自定义有状态聚合器（CM `resource` 句柄：`create`/`on-result`/`destroy`），受沙箱约束，复用插件通道。
+- **动作执行内容二选一**：`WasmFunc`（机器自身组件的导出）或 `Plugin`（`{plugin_id, method}`，wasm 或 host-native，对调用方无感知）。`http`/`fs` 等不再是 plugin，而是 **capability**（WASI worlds / 框架原生 interface），wasm 组件经 `import wasi:http`/`wasi:filesystem` 直接使用，host 按 task 授权白名单注入 wasmtime Linker。`shell`/`log` 是框架原生 caps（`shiroha:shell`/`shiroha:log`），由框架 host-native 实现。`Distributed` 正交包装 `WasmFunc`/`Plugin` 之一。
+- **capability 与 plugin 正交**：capability 约束「wasm 能做什么」（WASI worlds + `shiroha:*` interface），plugin 描述「action 代码从哪来」。wasm plugin 也声明所需 caps；task 授权合集 = 机器组件 caps ∪ 所调用 wasm plugin caps。
+- **聚合策略可扩展**：`Builtin` 4 种 Rust 原生（零开销）；`WasmFunc`/`Plugin` 自定义有状态聚合器（CM `resource` 句柄：`create`/`on-result`/`destroy`），受沙箱约束。
 - **分发目标控制**：`fanout` 控数量，`target` 控节点约束（`Any`/`Pool`/`Label`/`Explicit`），与 `required_capabilities` 两层过滤。
 
 ## 3. WASM Component Model Adapter 契约（AC3）
 
-WIT world（`shiroha-adapter-wasm/shiroha.wit`）：
+WIT world（`shiroha-adapter-wasm/shiroha.wit`）—— capability 走标准 WASI worlds + 框架原生 `shiroha:*` interface，plugin 不出现在 WIT 的 import 侧（plugin 是 action 层扩展，由 host 按 `ActionRef::Plugin` 解析后调用）：
 
 ```wit
 world shiroha-machine {
-  import host: interface {
-    // 插件能力通道：host 按白名单注入。仅声明此机所需 capability。
-    http-get: func(url: string) -> result<list<u8>, string>;
-    fs-read:  func(path: string) -> result<list<u8>, string>;
-    // ... 按 capability 扩展
-  }
-  export define: func() -> machine-def;          // typed record -> SmIr
+  // capability = wasm 组件 import 的所有 host 提供物 (正交于 plugin)
+  // 标准 WASI worlds (host 按 task 授权白名单注入; 未授权槽位不注册 -> 实例化失败):
+  import wasi:clocks/wall-clock;        // 例: 时钟
+  import wasi:filesystem/preopens;      // 例: 文件系统
+  import wasi:http/types;               // 例: http (wasi-http, 实验性, 按需)
+  // 框架原生 interface (WASI 表达不了的能力):
+  import shiroha:shell/process;         // 例: 进程执行
+  import shiroha:log/emit;              // 例: 日志
+
+  export define: func() -> machine-def;          // typed record -> SmIr (含 capabilities 声明)
   export action-<name>: func(input: list<u8>) -> result<list<u8>, string>;
 }
 ```
 
 **关键约束（research/01）**：`bindgen!` 是编译期从 WIT 生成，而每台机的 action 名是数据（运行期才知）。
-→ **策略**：`bindgen!` 只生成 `define()` + host 能力接口；**每动作按名动态解析** `instance.get_func(name).typed::<Vec<u8>, Result<Vec<u8>, String>>()`，对固定 canonical action ABI（`list<u8> -> result<list<u8>, string>`）。不要为每个 action 名 `bindgen!`。
+→ **策略**：`bindgen!` 只生成 `define()` + WASI/`shiroha:*` capability interface 的 host trait；**每动作按名动态解析** `instance.get_func(name).typed::<Vec<u8>, Result<Vec<u8>, String>>()`，对固定 canonical action ABI（`list<u8> -> result<list<u8>, string>`）。不要为每个 action 名 `bindgen!`。
 
-- `define()` 返回 `MachineDef`（typed record）→ `From<MachineDef> for SmIr` → 引擎。
-- host 用 `component::Linker` 按本机声明的 capability 白名单注入 host func（未声明的槽位不注册 → 实例化失败 = 自然能力协商）。
+- `define()` 返回 `MachineDef`（typed record，含 `capabilities` 字段）→ `From<MachineDef> for SmIr` → 引擎。
+- host 用 `component::Linker` 按 **task 授权白名单**注入 WASI/`shiroha:*` host func（未授权的 import 槽位不注册 → 实例化失败 = 自然能力协商）。
+- **MVP（v0.2/v0.4）**：保留最小 host-func 通道直接接线（wasmtime Linker 注入几个固定 host func 让示例能跑），不实现完整授权流程；`SmIr` 的 `CapabilityDecl` 契约一次定对。
+- **完整授权（v0.10，未来版本）**：task 创建时声明所需 caps → 申请授权 → host 按白名单注入 → 未授权拒绝实例化；wasm plugin 同样声明 caps，task 授权合集 = 机器组件 caps ∪ 所调用 wasm plugin caps。
 - 沙箱：`Config::consume_fuel(true)` + `epoch_interruption(true)` + `StoreLimits`（内存/table/instance 上限）+ `tokio::time::timeout` 包驱动 future；epoch 由独立 tokio interval task 驱动 `Engine::increment_epoch()`。
 - `Store` 是 `!Sync` → **每个 state-machine 实例一个 `Store<T>`**，`Engine` 跨实例共享。
 
@@ -203,9 +218,10 @@ shiroha/ (workspace virtual manifest + [workspace.dependencies] 统一版本)
 ## 8. 安全模型（D8, R5.5）
 
 - **认证**：控制器 API token / API-key（metadata 传递）；worker 共享 token（gRPC metadata），TLS 模式下可升 mTLS。
-- **动作能力校验**：状态机定义声明所用 capability；host 按策略允许/拒绝（白名单 Linker 注入；未声明槽位不注册 → 实例化失败）；worker 收到 `required_capabilities` 时先校验自身能否执行再执行。
+- **capability 授权（v0.10 完整，MVP 最小）**：wasm 组件声明所需 caps（WASI worlds + `shiroha:*` interface）；task 创建时申请授权，host 按白名单注入 wasmtime Linker（未授权 import 槽位不注册 → 实例化失败）；wasm plugin 同样声明 caps，task 授权合集 = 机器组件 caps ∪ 所调用 wasm plugin caps；worker 收到 `required_capabilities` 时先校验自身能否执行再执行。MVP（v0.2/v0.4）保留最小 host-func 通道直接接线，不实现完整授权流程。
+- **plugin 信任**：wasm plugin 受沙箱 + caps 约束（运行时授权）；host-native plugin 信任由部署期建立（签名/配置白名单），不经运行时 cap 授权。
 - **传输加密**：`shiroha-transport-grpc` 的 rustls features 按需开启（orchestrator↔worker、controller↔Web）。
-- **沙箱**：wasm 动作 + wasm 聚合器受 fuel + epoch + StoreLimits + timeout 约束（§3, §5）。
+- **沙箱**：wasm 动作 + wasm 聚合器 + wasm plugin 受 fuel + epoch + StoreLimits + timeout 约束（§3, §5）。
 - **进阶（非 MVP）**：RBAC、多租户隔离、多副本 HA。
 
 ## 8a. 持久化与崩溃恢复（per-task 可选，v0.3 起）
