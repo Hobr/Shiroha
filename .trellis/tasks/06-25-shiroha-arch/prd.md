@@ -94,6 +94,7 @@ Shiroha 由三层 + 一套 adapter / 框架插件体系组成：
 - [ ] AC6 控制器嵌入形态、任务管理、OpenTelemetry 集成（per-task span + 跨 worker 传播）、安全校验范围定义完成。
 - [ ] AC7 关键技术选型（R6.1–R6.6）有评估结论与选定理由（见 research/）。
 - [ ] AC8 拆分出可独立交付的 child task 列表，并标注依赖顺序（见 implement.md）。
+- [ ] AC9 统一术语表（`glossary.md`）建立：框架各抽象有中文名 + 英文名 + 代号 + 定义 + 所属层 + 边界 + 引入版本；prd/design/implement/research 用词与之一致；Phase 3.3 提升为仓库级 spec。
 
 ## Out of Scope
 
@@ -146,6 +147,7 @@ OTel **不是第 4 个功能层**，而是横切可观测性轴：埋点（`trac
 
 ## References
 
+- `glossary.md` — 统一术语表（开发与用户文档用词权威，Phase 3.3 提升到 spec）。
 - `research/index.md` — 技术选型结论表 + 6 条关键约束。
 - `research/01-wasm-runtime.md` … `06-workspace-layout.md` — 分项评估。
 - `design.md` — 技术设计（边界/契约/数据流/IR/Crate 布局）。

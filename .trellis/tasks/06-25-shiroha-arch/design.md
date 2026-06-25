@@ -1,6 +1,6 @@
 # Shiroha 设计（design.md）
 
-> 父任务 `.trellis/tasks/06-25-shiroha-arch` 的技术设计。产品决策见 `prd.md`（D1–D9），技术选型证据见 `research/01–06`。本文件给出边界、契约、数据流、IR、Crate 布局与风险。具体实现由 child task 承担。
+> 父任务 `.trellis/tasks/06-25-shiroha-arch` 的技术设计。产品决策见 `prd.md`（D1–D9），技术选型证据见 `research/01–06`。本文件给出边界、契约、数据流、IR、Crate 布局与风险。术语以 `glossary.md` 为权威。具体实现由 child task 承担。
 
 ## 1. 架构总览与分层边界
 
