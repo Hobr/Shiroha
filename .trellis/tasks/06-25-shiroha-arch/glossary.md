@@ -7,7 +7,7 @@
 ## 框架整体
 
 | 中文名 | 英文名 | 代号 | 定义 | 所属层 | 边界 | 引入 |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | Shiroha | Shiroha | `shiroha` | 本框架名；三层 + adapter/插件体系的 Rust 框架 | 全局 | 是框架名，不是 crate 名（facade crate 也叫 `shiroha`，按上下文区分） | v0.1 |
 | 编排进程 | orchestrator | `shiroha-orchestrator` | 单进程部署单元，内嵌 L1+L2+L3，与无状态 worker 通信 | 部署 | 是部署单元，不是逻辑层；单点（D6），多副本 HA 为 v0.9 进阶 | v0.8 |
 | 层 | layer | L1/L2/L3 | 逻辑分层，= crate 边界（design §1） | 全局 | 是逻辑层，不是部署单元；OTel 是横切轴不是第 4 层 | v0.1 |
@@ -15,7 +15,7 @@
 ## L1：状态机核心 + adapter
 
 | 中文名 | 英文名 | 代号 | 定义 | 所属层 | 边界 | 引入 |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | 状态机核心 | state machine core | `shiroha-core` | 纯引擎：层级+并行 statechart、RTC 转换、路径缓存、动作 future + 完成事件队列；不依赖 runtime/wasmtime/network | L1 | 仅依赖 `shiroha-ir`；不做 I/O，可独立单测 | v0.1 |
 | 统一 IR | canonical IR | `SmIr` | 引擎唯一消费的 serde-derived 类型，位于 `shiroha-ir`；文本与 WASM CM adapter 在引擎边界前收敛于此 | L1 | 是契约不是 CM 类型；serde 派生不满足 `ComponentType`，WIT world 按其形状设计 + `From<MachineDef>` 收敛 | v0.1 |
 | 状态 | state | `StateNode` | IR 中嵌套 + 正交区域的节点 | L1 | 含 children: `Vec<Region>` | v0.1 |
@@ -34,7 +34,7 @@
 ## L1：动作执行模型
 
 | 中文名 | 英文名 | 代号 | 定义 | 所属层 | 边界 | 引入 |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | 结构转换步 | structural transition step | — | 选转换、算 LCA、确定 exit/run/enter 顺序，同步 RTC 原子完成 | L1 | 不做中途突变；动作异步见下 | v0.1 |
 | 异步动作 | async action | — | 转换结构确定后触发的 entry/run/exit action，`async`，引擎不阻塞等待 | L1 | 完成抛 `done.<action>`/`error.<action>` 事件回流驱动后续转换（xstate-invoke 风格） | v0.1 |
 | 完成事件 | completion event | `done.*` / `error.*` | 动作完成（成功/失败）抛回实例事件队列的事件 | L1 | 是事件不是返回值；引擎管理 in-flight 动作与完成事件队列 | v0.1 |
@@ -42,7 +42,7 @@
 ## Capability（权限轴，正交于 plugin）
 
 | 中文名 | 英文名 | 代号 | 定义 | 所属层 | 边界 | 引入 |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | 能力 | capability | `CapabilityDecl` | wasm 组件 `import` 的所有 host 提供物，运行时权限范围；`SmIr` 内声明 | L1（横切） | 是「wasm 能做什么」，与 plugin 无交集；不是 action 代码来源 | v0.1（契约）/ v0.10（完整授权） |
 | WASI 能力 | WASI capability | `wasi:*` | 标准 WASI worlds：`wasi:io`/`wasi:clocks`/`wasi:filesystem`/`wasi:sockets`/`wasi:http` | L1（横切） | 是 capability 子集；`http`/`fs` 属此，不是 plugin | v0.10 |
 | 框架原生能力 | framework-native capability | `shiroha:*` | WASI 表达不了的能力，框架 host-native 实现的 interface：`shiroha:shell`/`shiroha:log` | L1（横切） | 是 capability 子集；与 WASI world 并列于 `CapabilityDecl`；不是 plugin | v0.10 |
@@ -53,7 +53,7 @@
 ## Plugin（扩展轴，正交于 capability）
 
 | 中文名 | 英文名 | 代号 | 定义 | 所属层 | 边界 | 引入 |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | 插件 | plugin | — | action/聚合的扩展机制，`ActionRef::Plugin`/`AggregateRef::Plugin` 调用 | L1（横切） | 是「action 代码从哪来」的扩展，与 capability 无交集 | v0.4 |
 | WASM 插件 | wasm plugin | — | plugin 的一种实现：wasm 组件，受声明的 WASI/`shiroha:*` caps 约束 + 沙箱 | L1（横切） | 是 plugin 子集；运行时按 caps 授权 | v0.4 |
 | 宿主原生插件 | host-native plugin | — | plugin 的一种实现：Rust crate 部署期链接，用于 WASI 表达不了的功能 | L1（横切） | 是 plugin 子集；信任由部署期建立（签名/配置白名单），不经运行时 cap 授权；不是 capability | v0.4 |
@@ -64,7 +64,7 @@
 ## L2：分布调度器
 
 | 中文名 | 英文名 | 代号 | 定义 | 所属层 | 边界 | 引入 |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | 分布调度器 | scheduler | `shiroha-scheduler` | 把 `distributed` action fan-out 到无状态 worker，聚合结果 | L2 | 不做工作流引擎；跨动作编排由状态机结构建模 | v0.5 |
 | 分发单元 | dispatch unit | — | 标注 `distributed` 的 action | L2 | 是 action，不是 task | v0.5 |
 | 分发扇出 | fan-out | `fanout` | 分发数量：`None`=单点 1 worker，`N`=N 片 | L2 | 是数量控制，与 target 正交 | v0.5 |
@@ -78,7 +78,7 @@
 ## L3：控制器 + 可观测性 + 持久化
 
 | 中文名 | 英文名 | 代号 | 定义 | 所属层 | 边界 | 引入 |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | 控制器 | controller | `shiroha-controller` | L3：task CRUD/pause/resume/query、多实例托管、auth、能力校验、内嵌 L1+L2 | L3 | 是嵌入编排进程的库，不是独立服务；非框架功能由宿主自实现 | v0.3 |
 | 任务 | task | `TaskId` | 一个状态机实例；多实例并发托管，每实例独立事件队列 | L3 | task = 实例，不是状态机定义 | v0.3 |
 | 多实例托管 | multi-instance hosting | — | 每 task 一个 `Store<T>`（wasm）+ 独立事件队列 + root `tracing::Span` | L3 | `Store` `!Sync` → `LocalSet` 或 `Arc<Mutex<Store>>` | v0.3 |
@@ -95,7 +95,7 @@
 ## 安全
 
 | 中文名 | 英文名 | 代号 | 定义 | 所属层 | 边界 | 引入 |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | 认证 | authentication | — | 控制器 API token/api-key；worker 共享 token，TLS 下可升 mTLS | L3 | 是身份校验，不是授权（后者见 capability authorization） | v0.8 |
 | 传输加密 | transport encryption | — | `shiroha-transport-grpc` rustls features 按需开启 | L2 | 是链路加密，不是身份认证 | v0.8 |
 | 沙箱 | sandbox | — | wasm 动作/聚合器/plugin 受 fuel + epoch + StoreLimits + timeout 约束 | L1/L2 | 是 wasm 运行时约束，不是 host-native plugin（后者部署期信任） | v0.2 |
@@ -106,7 +106,7 @@
 > 以下为路线图版本代号，不是框架抽象术语，仅用于 child task 规划引用。详见 `implement.md`。
 
 | 版本 | 交付物 | 引入的新术语 |
-|---|---|---|
+| --- | --- | --- |
 | v0.1 | 引擎内核 | `SmIr`/`StateNode`/`Transition`/`ActionDecl`/`ActionRef`/`HistoryDecl`/`CapabilityDecl`(契约) |
 | v0.2 | WASM 单机运行 | `shiroha-adapter-wasm`/`MachineDef`/沙箱 |
 | v0.3 | 控制器+多实例+持久化 | `shiroha-controller`/`TaskId`/`PersistencePolicy`/`EventStore`/event sourcing/snapshot |

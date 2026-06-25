@@ -254,7 +254,7 @@ pub enum WindowSpec   { Time(Duration), Events(u32) }
 ## 9. 技术选型结论（AC7）
 
 | 主题 | 选定 | 理由一行 | 备选 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | WASM 运行时+CM | `wasmtime` 46.x | 唯一满足全部 6 需求（typed bindgen! + Linker + fuel/epoch/StoreLimits + async + Apache-2.0） | `wasm_component_layer`（仅作未来非 wasmtime 后端） |
 | 异步运行时 | `tokio` | tonic 强制；wasmtime async 完美组合；驱动 epoch + OTLP | 无实际替代 |
 | 序列化/IR | `serde`+`serde_json`+`serde-saphyr`+`toml` | 统一 `SmIr`；⚠️ `serde_yaml`/`serde_yml` 已弃用，用 `serde-saphyr` | `noyalib`（YAML） |
@@ -265,7 +265,7 @@ pub enum WindowSpec   { Time(Duration), Events(u32) }
 ## 10. 关键风险与缓解
 
 | 风险 | 影响 | 缓解 |
-|---|---|---|
+| --- | --- | --- |
 | OTel 0.x 每次 minor 破坏 `tracing-opentelemetry` | 编译错误 | 隔离 `shiroha-otel`，pin 0.32 lockstep，集中升级 |
 | YAML crate 生态迁移中 | 选到弃用 crate | 用 `serde-saphyr`，YAML 隔离在 `YamlAdapter` 后，pin 前复核版本 |
 | `bindgen!` 编译期 vs action 名是数据 | 不能为每个 action 静态生成 | `define()`+host 用 bindgen!；action 按名动态 `typed::<In,Out>` 走固定 ABI |

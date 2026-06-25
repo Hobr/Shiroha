@@ -18,7 +18,7 @@ Shiroha 由三层 + 一套 adapter / 框架插件体系组成：
 ## Key Decisions（产品决策溯源，9 项均已确定）
 
 | # | 决策点 | 结论 |
-|---|---|---|
+| --- | --- | --- |
 | D1 | 状态机语义模型 | 层级 + 并行状态图（UML/SCXML 风格）：嵌套状态 + 正交/并行区域 + guard + entry/exit/run action + 浅历史；扁平化内部表示 + 转换路径缓存保性能 |
 | D2 | WASM CM adapter 暴露方式 | typed data 定义（`define() -> StateMachineDef`）+ 每动作命名导出；host 读定义建 IR、预链接动作引用、按名调用 |
 | D3 | 动作执行语义 | 异步动作 + 完成事件（xstate-invoke 风格）；结构转换同步 RTC 原子完成，动作异步，完成抛 `done.*`/`error.*` 回流 |
@@ -110,7 +110,7 @@ Shiroha 由三层 + 一套 adapter / 框架插件体系组成：
 详细见 `implement.md`。每个版本 = 一个 child task，**到点才创建并细规划**（不一次性建全部 child），让下一版本可基于上一版本测试结果微调。MVP 聚焦 WASM 路径。
 
 | 版本 | 交付物 | 依赖 |
-|---|---|---|
+| --- | --- | --- |
 | v0.1 | 引擎内核（ir+core，纯逻辑，mock 动作）；`SmIr` 含 `CapabilityDecl` + `ActionRef::Plugin{plugin_id, method}` 一次定对 | — |
 | v0.2 | WASM adapter + 最小 host-func 通道（直接接线，无完整授权）+ runner | v0.1 |
 | v0.3 | 控制器+多实例+持久化 | v0.1, v0.2 |
