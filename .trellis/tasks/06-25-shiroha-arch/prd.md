@@ -11,7 +11,7 @@ Shiroha 由三层 + 一套 adapter / 框架插件体系组成：
 1. **第一层：状态机核心 + adapter**
    - 状态机要求高性能 + 功能强大；通过不同 **解释 adapter** 接入状态机定义：文本 adapter（JSON/YAML/TOML）与 WASM Component Model adapter。
    - WASM CM adapter：组件把「状态机定义 + 动作实现」打包在一起；Rust 宿主是引擎，加载组件后读取 `define()` 导出的结构构建 IR，状态机引擎在 Rust 侧运行；触发动作时宿主按名调用组件导出函数；动作函数可 import host func 获取能力（= 框架插件通道）。
-   - `action` / `callback` 可选类型：`wasm func`（默认）、`shell`、`http` 等；简单能力以「框架插件」（wasm + WASI/host func）实现，文本定义可直接调用，无需写代码。
+   - `action` / `callback` 执行内容二选一：`wasm func`（动作在机器自身组件内，默认）或 `plugin`（插件调用）；`http`/`shell`/`fs` 等是**框架内置插件**（用 wasm + WASI/host func 实现），文本/wasm 定义可直接调用，无需写代码。
 2. **第二层：分布调度器**——把被指定分发的 action 发到无状态节点执行，返回聚合结果。
 3. **第三层：控制器**——可被 GUI/CLI/Web 引入，做任务管理 + OpenTelemetry + 简单安全校验；非框架功能由宿主自实现。
 
@@ -40,12 +40,15 @@ Shiroha 由三层 + 一套 adapter / 框架插件体系组成：
 ### R2 Adapter 体系
 - R2.1 文本 adapter（JSON/YAML/TOML）：**MVP 延后**，专注 WASM 作为首要定义来源；`SmIr` 仍保持 serde-derived 以便后期文本 adapter 零成本回归（v0.7）。
 - R2.2 WASM Component Model adapter见 D2：组件导出 `define() -> StateMachineDef`（CM typed record）+ 每动作命名导出；host 读定义建 IR 并预链接动作引用，按名调用；动作可 import host func（插件通道）。
-- R2.3 adapter 产出统一 IR；动作引用统一为 `{kind, ref}`：`{wasm-func, <export>}`（默认）/ `{shell, <cmd>}` / `{http, <spec>}` / `{plugin, <cap>.<method>}` / `{distributed, inner, fanout, aggregate}`。
+- R2.3 adapter 产出统一 IR；动作引用统一为 `{kind, ref}`，**执行内容二选一**：
+  - `{wasm-func, <export>}`（默认）——动作在**机器自身组件**内（随 `define()` 打包的那份 wasm）。
+  - `{plugin, <cap>.<method>}`——动作由**插件**提供；`http`/`shell`/`fs` 等是**框架内置插件**（用插件机制实现的示例），用户可加自定义插件。
+  - `{distributed, inner, fanout, target, aggregate}`——正交包装，`inner` 为上面二选一。
 
 ### R3 Action / Callback 类型与框架插件
-- R3.1 默认支持 `wasm func`（WASM 组件命名导出）。
-- R3.2 可选 `shell`、`http` 等（IR 动作引用 `kind` 维度）。
-- R3.3 框架插件见 D7：用 WASI/host func 封装能力的 wasm（如 http 插件），文本定义直接以 `{plugin, cap.method}` 调用。
+- R3.1 动作执行内容**二选一**：`wasm func`（机器自身组件命名导出，默认）或 `plugin`（插件调用）。
+- R3.2 框架内置插件（用插件机制实现，供定义直接调用，无需写代码）：`http`、`shell`、`fs`、`log` 等；用户可加自定义插件。**不再作为 IR 的平级 enum 变体**。
+- R3.3 框架插件机制见 D7：用 WASI/host func 封装能力的 wasm，文本/wasm 定义以 `{plugin, cap.method}` 调用。
 - R3.4 插件机制见 D7：能力声明 + 注册表 + 白名单注入 + semver major 协商 + 沙箱（白名单 + fuel/cycles + 内存上限 + 超时）。
 
 ### R4 分布调度器
