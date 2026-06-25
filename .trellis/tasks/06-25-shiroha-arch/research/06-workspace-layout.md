@@ -68,21 +68,50 @@ shiroha/                       (Cargo workspace root, virtual manifest)
 
 ### Dependency direction (DAG, no cycles)
 
-```
-shiroha-ir ───────────────────────────────────┐ (leaf: serde only)
-shiroha-core ──> shiroha-ir                    │
-shiroha-adapter ──> shiroha-ir                 │
-shiroha-adapter-text ──> shiroha-adapter, ir   │
-shiroha-adapter-wasm ──> shiroha-adapter, ir, wasmtime
-shiroha-plugin-sdk ──> shiroha-ir              │
-shiroha-transport ──> shiroha-ir (futures)     │
-shiroha-transport-grpc ──> shiroha-transport, tonic, prost
-shiroha-scheduler ──> shiroha-ir, shiroha-transport (tokio)
-shiroha-worker ──> shiroha-ir, plugin-sdk, wasmtime, transport-grpc
-shiroha-otel ──> opentelemetry*, tracing  (independent of engine layers)
-shiroha-controller ──> core, scheduler, adapter*, plugin-sdk, transport-grpc, otel, ir
-shiroha (facade) ──> shiroha-controller (+ default deps)
-bin/orchestrator, bin/worker ──> shiroha / shiroha-worker
+```mermaid
+graph TD
+  ir["shiroha-ir (leaf: serde only)"]
+  core["shiroha-core"]
+  adapter["shiroha-adapter"]
+  adapterText["shiroha-adapter-text"]
+  adapterWasm["shiroha-adapter-wasm"]
+  pluginSdk["shiroha-plugin-sdk"]
+  transport["shiroha-transport"]
+  transportGrpc["shiroha-transport-grpc"]
+  scheduler["shiroha-scheduler"]
+  worker["shiroha-worker"]
+  otel["shiroha-otel"]
+  controller["shiroha-controller"]
+  facade["shiroha (facade)"]
+  binOrch["bin/orchestrator"]
+  binWorker["bin/worker"]
+
+  core --> ir
+  adapter --> ir
+  adapterText --> adapter
+  adapterText --> ir
+  adapterWasm --> adapter
+  adapterWasm --> ir
+  pluginSdk --> ir
+  transport --> ir
+  transportGrpc --> transport
+  scheduler --> ir
+  scheduler --> transport
+  worker --> ir
+  worker --> pluginSdk
+  worker --> transportGrpc
+  otel --> otelDeps["opentelemetry*, tracing (independent of engine layers)"]
+  controller --> core
+  controller --> scheduler
+  controller --> adapter
+  controller --> adapterWasm
+  controller --> pluginSdk
+  controller --> transportGrpc
+  controller --> otel
+  controller --> ir
+  facade --> controller
+  binOrch --> facade
+  binWorker --> worker
 ```
 - **`shiroha-ir` is the universal leaf** — every layer depends on it, it depends on nothing but `serde`. This is the IR contract (AC2).
 - **`shiroha-core` depends only on `shiroha-ir`** — engine is pure logic, no async runtime / no wasmtime / no network. Honors "core depends on nothing upstream."
