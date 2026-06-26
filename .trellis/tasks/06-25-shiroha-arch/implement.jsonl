@@ -1,6 +1,0 @@
-
-{"file": ".trellis/tasks/06-25-shiroha-arch/research/index.md", "reason": "技术选型结论表+6条关键约束,实现前必读"}
-{"file": ".trellis/tasks/06-25-shiroha-arch/research/01-wasm-runtime.md", "reason": "wasmtime CM adapter 实现依据: bindgen!/动态调用/沙箱"}
-{"file": ".trellis/tasks/06-25-shiroha-arch/research/03-serialization-ir.md", "reason": "统一 SmIr 契约: 文本与 CM 两路收敛"}
-{"file": ".trellis/tasks/06-25-shiroha-arch/research/06-workspace-layout.md", "reason": "12-crate 工作区 DAG 与依赖不变量"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流思考指南,三层架构边界必读"}

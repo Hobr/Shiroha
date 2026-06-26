@@ -1,4 +1,0 @@
-
-{"file": ".trellis/tasks/06-25-shiroha-arch/research/index.md", "reason": "检查技术选型是否落地的一致性基准"}
-{"file": ".trellis/spec/backend/index.md", "reason": "后端规范索引(目录/错误处理/质量/日志)"}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "代码复用思考指南,检查重复/抽象"}
