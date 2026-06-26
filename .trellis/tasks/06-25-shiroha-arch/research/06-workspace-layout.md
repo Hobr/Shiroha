@@ -1,7 +1,7 @@
 # Research: Cargo Workspace Layout
 
 - **Query**: Recommend a Cargo workspace structure for the 3 layers + adapters + plugins + worker + controller, given the single-orchestrator + stateless-worker topology; justify the split and dependency direction (no circular deps; core depends on nothing upstream).
-- **Scope**: internal analysis (informed by the decided architecture) 
+- **Scope**: internal analysis (informed by the decided architecture)
 - **Date**: 2026-06-25
 
 ## Findings
