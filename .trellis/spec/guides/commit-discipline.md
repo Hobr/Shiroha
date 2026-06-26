@@ -19,7 +19,6 @@
 - `just fmt` runs:
   1. `cargo fmt` (Rust formatting),
   2. `pre-commit run --all-files` (hooks: lint, format, and repo-specific checks),
-  3. `typstyle -i .` (paper formatting, under `paper/`).
 - **Do not commit unformatted code.** Pre-commit hooks may reject the commit anyway, but running `just fmt` first keeps the working tree clean and avoids a failed-commit-reformat-recommit cycle.
 - If `just fmt` reports issues it cannot auto-fix, resolve them manually, re-run `just fmt`, then commit.
 
