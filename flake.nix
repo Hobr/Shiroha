@@ -50,6 +50,11 @@
             pre-commit
             protobuf
             just
+
+            typst
+            typstyle
+            tinymist
+            just-lsp
           ];
 
           env = {

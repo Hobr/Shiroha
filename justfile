@@ -37,7 +37,7 @@ install-dev:
 check:
     cargo check --workspace
 
-fmt:
+fmt: paper-fmt
     cargo fmt
     pre-commit run --all-files
 
@@ -49,6 +49,14 @@ coverage:
 
 doc:
     cargo doc --open --workspace
+
+[working-directory: "paper"]
+paper-fmt:
+    typstyle -i .
+
+[working-directory: "paper"]
+paper: paper-fmt
+    typst compile --root=. main.typ
 
 update:
     nix flake update
