@@ -304,14 +304,14 @@ let func = registry.action_func("http")?;
 ```rust
 impl PluginRegistry {
     pub fn new() -> Self;
-    
+
     // 查询 API（运行时）
     pub fn action_func(&self, name: &str) -> Option<Arc<dyn ActionFunc>>;
     pub fn middlewares(&self) -> &[Arc<dyn Middleware>];
     pub fn aggregation_strategy(&self, name: &str) -> Option<Arc<dyn AggregationStrategy>>;
     pub fn transport(&self, name: &str) -> Option<Arc<dyn Transport>>;
     pub fn adapter(&self, name: &str) -> Option<Arc<dyn Adapter>>;
-    
+
     // 注册 API（初始化阶段）
     pub fn register_action_func(&mut self, name: impl Into<String>, f: Arc<dyn ActionFunc>);
     pub fn register_middleware(&mut self, m: Arc<dyn Middleware>);
@@ -329,7 +329,7 @@ impl PluginRegistry {
 #[async_trait]
 pub trait ActionFunc: Send + Sync {
     /// Invoke an action with the given context.
-    /// 
+    ///
     /// Implementation receives:
     /// - `ctx.payload`: Configuration data (e.g., HTTP URL/method for HTTP func)
     /// - Action instance name can be embedded in payload or derived from ctx
@@ -370,7 +370,7 @@ impl ActionFunc for HttpActionFunc {
 #[async_trait]
 pub trait Middleware: Send + Sync {
     /// Wrap an action invocation with middleware logic.
-    /// 
+    ///
     /// v0.3.0: Trait 定义占位，链式调用逻辑推迟到第三层（可观测性）。
     async fn wrap_action(
         &self,
@@ -451,7 +451,7 @@ impl ActionInvoker for CompositeActionInvoker {
             }
         }
     }
-    
+
     async fn invoke_do(&self, action_ref: &ActionRef, ctx: ActionContext) -> anyhow::Result<ActionResult> {
         // 同上逻辑
         match &action_ref.kind {
