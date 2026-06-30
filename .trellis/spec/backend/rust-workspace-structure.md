@@ -430,7 +430,7 @@ pub struct State {
     pub exit: Option<ActionRef>,
     pub do_activity: Option<ActionRef>,
     pub history: HistoryConfig,
-    
+
     /// Reserved for future hierarchical concurrent regions.
     /// Always None in MVP; will be populated post-MVP.
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -8,7 +8,7 @@
 
 **Trigger**: Integrating WebAssembly Component Model components into the Shiroha runtime, defining WIT interfaces, or implementing host/guest bindings.
 
-**Applies to**: 
+**Applies to**:
 - Defining new WIT interfaces for framework capabilities
 - Implementing WASM adapters or invokers
 - Adding host-imported capabilities to guest components
@@ -30,12 +30,12 @@ interface types {
         wasm(string),
         plugin(string),
     }
-    
+
     record action-ref {
         name: string,
         kind: action-kind,
     }
-    
+
     record state {
         name: string,
         parent: option<string>,
@@ -48,10 +48,10 @@ interface types {
 
 interface actions {
     use action-types.{action-context, action-result};
-    
+
     /// Invoke a synchronous action.
     invoke: func(ctx: action-context) -> result<action-result, string>;
-    
+
     /// Invoke an async do-activity.
     invoke-do: func(ctx: action-context) -> result<action-result, string>;
 }
@@ -249,10 +249,10 @@ impl Adapter for WasmAdapter {
 fn test_wasm_adapter_from_bytes() {
     // Given: Valid WASM component bytes
     let component_bytes = include_bytes!("../../fixtures/simple.wasm");
-    
+
     // When: Create adapter from bytes
     let adapter = WasmAdapter::from_bytes(component_bytes);
-    
+
     // Then: Adapter created successfully
     assert!(adapter.is_ok());
 }
@@ -261,10 +261,10 @@ fn test_wasm_adapter_from_bytes() {
 async fn test_wasm_adapter_load_ir() {
     // Given: Adapter with valid component
     let adapter = WasmAdapter::from_file("examples/sm-example/target/wasm32-wasip2/release/shiroha_sm_example.wasm").unwrap();
-    
+
     // When: Load state machine definition
     let ir = adapter.load().await;
-    
+
     // Then: IR structure matches component definition
     assert!(ir.is_ok());
     let def = ir.unwrap();
@@ -289,10 +289,10 @@ async fn test_end_to_end_wasm_execution() {
     // Given: WASM component loaded as adapter
     let adapter = WasmAdapter::from_file("...").unwrap();
     let ir = adapter.load().await.unwrap();
-    
+
     // And: Action invoker for the component
     let invoker = WasmActionInvoker::new("...").unwrap();
-    
+
     // When: Invoke synchronous action
     let ctx = ActionContext {
         task_id: "test-task".into(),
@@ -300,7 +300,7 @@ async fn test_end_to_end_wasm_execution() {
         payload: None,
     };
     let result = invoker.invoke_sync("on_entry", ctx).await;
-    
+
     // Then: Action executed and result returned
     assert!(matches!(result, Ok(ActionResult::Ok)));
 }
@@ -496,7 +496,7 @@ pub struct State {
     pub exit: Option<ActionRef>,
     pub do_activity: Option<ActionRef>,
     pub history: HistoryConfig,
-    
+
     // Reserved for future hierarchical concurrent regions
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ortho: Option<OrthogonalRegion>,
@@ -575,7 +575,7 @@ Once Component Model async is verified stable:
 fn main() {
     // Watch WIT directory for changes
     println!("cargo:rerun-if-changed=../../wit");
-    
+
     // Note: No bindgen generation in build script.
     // We use inline wasmtime::component::bindgen! in source
     // once wasmtime 46.x macro requirements are clarified.
@@ -595,7 +595,7 @@ fn main() {
 fn main() {
     // Watch WIT directory (guest uses same contracts)
     println!("cargo:rerun-if-changed=../../wit");
-    
+
     // Guest-side bindgen will be added here post-MVP
 }
 ```
