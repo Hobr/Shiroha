@@ -44,12 +44,13 @@
 - [x] Engine 运行时核心可编译
 - [x] 所有质量门通过（fmt/test/clippy/deny）
 
-### v0.2.5 (优先)
-- [ ] 一个 wasm32-wasip2 组件能被 adapter 读取为状态机 IR
-- [ ] 从该 IR 能实例化一个 task，注入事件后正确迁移状态并**执行真实 WASM action**（非占位）
-- [ ] `WasmActionInvoker` 完整实现（`invoke_sync` 和 `invoke_do` 均可执行）
-- [ ] 简单示例 action 验证通过（如 log 输出或 counter 递增）
-- [ ] host import 可用（`host.log` 可被 WASM 组件调用）
+### v0.2.5 (已完成)
+- [x] 一个 wasm32-wasip2 组件能被 adapter 读取为状态机 IR
+- [x] 从该 IR 能实例化一个 task，注入事件后正确迁移状态并**执行真实 WASM action**（非占位）
+- [x] `WasmActionInvoker` 完整实现（`invoke_sync` 和 `invoke_do` 均可执行）
+- [x] 简单示例 action 验证通过（如 log 输出或 counter 递增）
+- [x] host import 可用（`host.log` 可被 WASM 组件调用）
+- [x] 集成测试通过（`cargo test --test integration`）— 验证 load → instantiate → execute 完整流程
 
 ### v0.3.0 (架构)
 - [ ] `PluginRegistry` + `Plugin` trait 可编译
