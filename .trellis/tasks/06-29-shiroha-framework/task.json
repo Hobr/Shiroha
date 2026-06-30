@@ -19,7 +19,8 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "06-29-layer1-statemachine-wasm-adapter"
+    "06-29-layer1-statemachine-wasm-adapter",
+    "06-30-v0.3.0-shirohad"
   ],
   "parent": null,
   "relatedFiles": [],

@@ -358,7 +358,7 @@
 
 ## 下一步
 
-当前位置：**v0.2.5 完成**  
+当前位置：**v0.2.5 完成**
 下一个目标：**v0.3.0 单机可执行**
 
 创建任务：`python3 ./.trellis/scripts/task.py create "v0.3.0: shirohad 单机守护进程" --slug v0.3.0-shirohad`
