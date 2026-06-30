@@ -1,6 +1,6 @@
 # v0.3.0: shirohad 单机守护进程 + sctl 占位
 
-> 父任务：`06-29-shiroha-framework`  
+> 父任务：`06-29-shiroha-framework`
 > 版本规划：`.trellis/docs/version-roadmap.md`
 
 ## Goal
@@ -103,10 +103,10 @@
   ```bash
   # 编译
   cargo build --release
-  
+
   # 编译 WASM component 示例
   cargo build --target wasm32-wasip2 -p shiroha-sm-example
-  
+
   # 运行 shirohad
   ./target/release/shirohad --component ./target/wasm32-wasip2/debug/shiroha_sm_example.wasm
   ```
@@ -159,34 +159,34 @@
 async fn main() -> anyhow::Result<()> {
     // 1. 解析 CLI 参数
     let args = Cli::parse();
-    
+
     // 2. 初始化 tracing
     tracing_subscriber::fmt()
         .with_max_level(args.log_level)
         .init();
-    
+
     // 3. 加载 WASM component
     let adapter = WasmAdapter::new()?;
     let def = adapter.load(&args.component).await?;
-    tracing::info!("Loaded component: {} states, {} transitions", 
+    tracing::info!("Loaded component: {} states, {} transitions",
         def.states.len(), def.transitions.len());
-    
+
     // 4. 创建 task
     let manager = TaskManager::new();
     let task = manager.create("default", def).await?;
-    tracing::info!("Created task: id={}, initial_state={}", 
+    tracing::info!("Created task: id={}, initial_state={}",
         task.id, task.current_state);
-    
+
     // 5. 守护进程主循环
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         tx.send(()).ok();
     });
-    
+
     rx.await.ok();
     tracing::info!("Shutting down...");
-    
+
     Ok(())
 }
 ```
