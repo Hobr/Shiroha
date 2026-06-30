@@ -29,13 +29,28 @@ WASM 一等公民原则：状态机定义 / action / callback 可写在 WASM 内
 
 ## Child Tasks
 
-- `06-29-layer1-statemachine-wasm-adapter` — 第一层 MVP：状态机核心 + WASM Component Model adapter。
+- ✅ `06-29-layer1-statemachine-wasm-adapter` — v0.2.x: 状态机核心 + WASM Component Model adapter（已完成）
+- [ ] v0.3.0 — shirohad 单机守护进程 + sctl 占位
+- [ ] v0.3.5 — 本地交互增强（REPL + Unix socket）
+- [ ] v0.4.0 — gRPC 控制面协议定义
+- [ ] v0.5.0 — 分布式架构基础（controller + node 分离）
+- [ ] v0.5.5 — 分布式增强（负载均衡 + 重试）
+- [ ] v0.6.0 — 持久化与恢复
+- [ ] v0.6.5 — 安全与治理（认证 + 授权 + 审计）
+- [ ] v0.7.0 — Plugin 架构
+- [ ] v0.7.5+ — 具体插件实现
+
+**详细规划**: 见 `.trellis/docs/version-roadmap.md`
 
 ## Acceptance Criteria（父任务，跨子任务集成层）
 
-- [ ] 三层接口契约可独立编译、各自可测。
-- [ ] 跨层 principles（adapter/plugin 分层、WASM 边界、capability hook）在各子任务 design.md 中一致体现。
-- [ ] 集成时一个端到端示例（定义→创建 task→执行→（未来）分发→控制）跑通（最终集成验收）。
+- [x] v0.2.x 完成：WASM Component Model 集成 + 端到端验证
+- [ ] v0.3.x 完成：单机可执行文件可用（shirohad + sctl）
+- [ ] v0.4.x 完成：gRPC 控制面协议定型
+- [ ] v0.5.x 完成：分布式调度基础可用（controller + node）
+- [ ] v0.6.x 完成：分布式可靠性（持久化 + 安全）
+- [ ] v0.7.x 完成：Plugin 扩展能力
+- [ ] 最终集成：端到端示例（定义 → 创建 task → 本地执行 → 分布式分发 → sctl 控制）跑通
 
 ## Out of Scope（父任务）
 
