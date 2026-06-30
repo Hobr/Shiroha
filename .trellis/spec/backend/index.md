@@ -19,6 +19,8 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
+| [Git Commit Conventions](./git-commit-conventions.md) | Commit cadence, message format, pre-commit gate | Active |
+| [Cargo Conventions](./cargo-conventions.md) | Package init via cargo init, latest-version dependency policy | Active |
 
 ---
 
