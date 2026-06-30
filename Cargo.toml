@@ -27,13 +27,13 @@ shiroha-plugin = { path = "crates/plugin" }
 shiroha-control = { path = "crates/control" }
 
 # 异步运行时
-tokio = { version = "1.52", features = ["full"] }
+tokio = { version = "1.52.3", features = ["full"] }
 tokio-util = { version = "0.7", features = ["time"] }
 async-trait = "0.1"
 
 # WASM 运行时
-wasmtime = { version = "46.0", features = ["trace-log"] }
-wasmtime-wasi = { version = "46.0", features = ["p3"] }
+wasmtime = { version = "46.0.1", features = ["trace-log", "component-model"] }
+wasmtime-wasi = { version = "46.0.1" }
 
 # CLI
 clap = { version = "4.6", features = ["derive", "env", "string", "unicode"] }
@@ -54,6 +54,9 @@ config = "0.15"
 # 错误处理
 thiserror = "2.0"
 anyhow = "1.0"
+
+# 日志
+tracing = "0.1"
 
 # 序列化
 serde = { version = "1.0", features = ["derive"] }
