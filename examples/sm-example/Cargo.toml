@@ -10,4 +10,5 @@ repository.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-# Placeholder - will use wit-bindgen once host-side bindgen is working
+wit-bindgen = "0.39.0"
+wit-bindgen-rt = { version = "0.39.0", features = ["bitflags"] }
