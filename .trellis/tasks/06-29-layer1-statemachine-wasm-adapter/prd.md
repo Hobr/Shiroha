@@ -19,8 +19,8 @@
 - R1 状态机核心（层级 HSM）：嵌套状态、entry/exit action、迁移、事件、guard、history（shallow/deep）；MVP 不含正交/并发区域，但 IR 预留正交扩展位。
 - R2 内部 IR：adapter 产出的统一中间表示，WASM adapter 与未来文件 adapter 共用；IR 需能表达嵌套状态树 + history。
 - R3 WASM Component Model adapter：组件实现类型化细粒度 WIT 接口（states / transitions / actions / initial / events 等多个导出），运行时分片查询组装内部 IR；action/callback 为组件内单独导出函数，按名引用。WIT 接口本身是第一类契约产物。
-- R4 action/callback 执行：区分两类——(a) 同步副作用 action（entry/exit/transition，fire-and-forget，快）；(b) 每状态至多一个 async do-activity（可 await、exit 时可取消、天然可分发，是第二层的分发单元）。支持 WASM 类型 action；框架插件 action（http/bash…）走 plugin 机制（MVP 至少一种）。迁移走 RTC（run-to-completion）。
-- R4.1 plugin 扩展点系统：plugin 是通用框架扩展点系统，一个插件可注册一项或多项能力面——`ActionFunc`（MVP 实现 http func）、`Middleware`、`AggregationStrategy`（第二层）、`Transport`（分布式协议 rpc/p2p/消息服务，第二层）、`Adapter`（扩展状态机定义来源）。MVP 实现 `PluginRegistry` + `Plugin` trait + `ActionFunc`（http func），其余能力面仅留 trait + registry 存取留口。
+- R4 action/callback 执行：区分两类——(a) 同步副作用 action（entry/exit/transition，fire-and-forget，快）；(b) 每状态至多一个 async do-activity（可 await、exit 时可取消、天然可分发，是第二层的分发单元）。支持 WASM 类型 action；框架插件 action（http/bash…）走 plugin 机制。迁移走 RTC（run-to-completion）。
+- R4.1 plugin 扩展点系统：plugin 是通用框架扩展点系统，一个插件可注册一项或多项能力面——`ActionFunc`、`Middleware`、`AggregationStrategy`（第二层）、`Transport`（分布式协议 rpc/p2p/消息服务，第二层）、`Adapter`（扩展状态机定义来源）。MVP 分阶段实现：v0.3.0 实现 `PluginRegistry` + `Plugin` trait + 五个能力面 trait 定义（全部留口），v0.3.5+ 实现具体插件（如 HTTP ActionFunc）。
 - R5 task 实例化：从定义创建一个可执行 task 实例（actor 风格：mailbox + 可寻址）并驱动事件。`TaskManager`（engine 内）持有 TaskHandle map，是 task 生命周期唯一控制入口。
 - R6 capability/授权：MVP 仅在 task 创建边界定义 `Authorizer`/capability trait 留口（默认 no-op 实现），不实现权限模型。
 - R7 持久化：MVP 不做（纯内存运行），但 task 状态设计为可序列化，未来可插拔持久化 plugin 做快照。
@@ -33,15 +33,40 @@
 - D2 action 模型 = 同步副作用 action + 每状态至多一个 async do-activity（可 await/cancel，第二层分发单元）；迁移走 RTC。
 - D3 WASM adapter 提取契约 = 声明式细粒度 WIT 接口（分片查询组装 IR）；WIT 接口即第一类契约。
 - D4 持久化 = MVP 不做（纯内存），task 状态可序列化，未来 plugin 快照。
-- D5 capability = MVP 仅在 task 创建边界留 `Authorizer` trait 接缝（默认 no-op），不写权限逻辑。host import 面即为未来 capability 面。
+- D6 优先级调整 = v0.2.5 优先实现完整 WASM action 执行（WasmActionInvoker 非占位），v0.3.0 实现 plugin 架构（全部能力面仅留口），v0.3.5+ 实现具体插件（HTTP func）。理由：WASM 是设计中的"一等公民"，应优先验证其可用性；plugin 架构可预留，具体实现可推迟。
 
 ## Acceptance Criteria
 
-- [ ] 一个 wasm32-wasip2 组件能被 adapter 读取为状态机 IR。
-- [ ] 从该 IR 能实例化一个 task，注入事件后正确迁移状态并执行 WASM action/callback。
-- [ ] guard 命中可阻止迁移；action 回调结果可影响后续迁移。
-- [ ] 状态机核心单元测试 + WASM adapter 集成测试通过（`just test`）。
-- [ ] capability hook 有显式留口（注释/类型标记），后续可接入。
+### v0.2.0 (已完成)
+- [x] WIT 接口定义完成（`wit/state-machine.wit`）
+- [x] WASM adapter 结构就位（占位实现）
+- [x] IR 类型系统完整
+- [x] Engine 运行时核心可编译
+- [x] 所有质量门通过（fmt/test/clippy/deny）
+
+### v0.2.5 (优先)
+- [ ] 一个 wasm32-wasip2 组件能被 adapter 读取为状态机 IR
+- [ ] 从该 IR 能实例化一个 task，注入事件后正确迁移状态并**执行真实 WASM action**（非占位）
+- [ ] `WasmActionInvoker` 完整实现（`invoke_sync` 和 `invoke_do` 均可执行）
+- [ ] 简单示例 action 验证通过（如 log 输出或 counter 递增）
+- [ ] host import 可用（`host.log` 可被 WASM 组件调用）
+
+### v0.3.0 (架构)
+- [ ] `PluginRegistry` + `Plugin` trait 可编译
+- [ ] 五个能力面 trait 定义完成（ActionFunc / Middleware / AggregationStrategy / Transport / Adapter）
+- [ ] `ActionInvoker` 接口修改完成（传递 `ActionRef`）
+- [ ] `CompositeActionInvoker` 路由正确（Wasm/Plugin 分支）
+- [ ] 单元测试通过（空 registry 查找、路由逻辑）
+
+### v0.3.5+ (具体插件)
+- [ ] HTTP ActionFunc 实现完成
+- [ ] HTTP action 经 registry 注册并被 invoker 路由调用
+- [ ] 配置从 payload 传递验证通过
+
+### 跨版本通用
+- [ ] guard 命中可阻止迁移；action 回调结果可影响后续迁移
+- [ ] 状态机核心单元测试 + WASM adapter 集成测试通过（`just test`）
+- [ ] capability hook 有显式留口（注释/类型标记），后续可接入
 
 ## Out of Scope
 

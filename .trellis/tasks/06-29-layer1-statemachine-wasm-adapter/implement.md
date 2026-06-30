@@ -10,7 +10,8 @@ MVP 拆为 4 个可独立验证的版本。原则：每版可独立编译/测试
 |---|---|---|---|
 | **v0.1.0** 状态机核心 | 交付可用的层级 HSM 引擎（纯 Rust，无 WASM） | 阶段 0 工程骨架 + 阶段 2 IR + 阶段 3 HSM 运行时；用 stub `ActionInvoker` 完整验证状态机语义（嵌套/entry-exit/history/guard/RTC/do-activity/Task actor） | 无外部运行时依赖 |
 | **v0.2.0** WASM Component Model adapter | WASM 成为一等公民：定义与 action 可在 WASM 内 | 阶段 1 WIT 接口 + 阶段 4 WASM adapter；含风险点验证（wasmtime async）；`examples/sm-example` 端到端跑通 | v0.1.0 |
-| **v0.3.0** plugin 扩展点系统 | 框架可扩展，能力面注册机制就位 | 阶段 5 plugin：`PluginRegistry` + 五能力面 trait + 内置 http action func + `ActionInvoker` 解析链 | v0.2.0 |
+| **v0.2.5** WASM action 执行 | WASM action 真正可用：完整 invoker 实现 + 端到端验证 | 阶段 4.5 WASM invoker 实现（替换占位）+ 简单示例 action + 集成测试 | v0.2.0 |
+| **v0.3.0** plugin 扩展点系统 | 框架可扩展，能力面注册机制就位 | 阶段 5 plugin：`PluginRegistry` + 五能力面 trait（全部留口）+ `ActionInvoker` 接口修改 + `CompositeActionInvoker` 路由 | v0.2.5 |
 | **v0.4.0** 守护进程、控制面与多形态集成 | 可运行三形态 shirohad + gRPC 控制面 + sctl + 质量门 | 阶段 6 `shirohad`（full/controller/node feature）+ `shiroha-control`（ShirohaControl + NodeExecutor）+ `sctl` gRPC client + `examples` 完善 + 阶段 7 质量门 | v0.3.0 |
 
 ### 版本边界与风险隔离
@@ -22,8 +23,8 @@ MVP 拆为 4 个可独立验证的版本。原则：每版可独立编译/测试
 ### 各版本验收形态
 
 - **v0.1.0**：`just check` + `cargo nextest run -p shiroha-engine` 通过；stub action 驱动完整 HSM 语义。
-- **v0.2.0**：`cargo build -p shiroha-sm-example --target wasm32-wasip2` + 端到端集成测试（加载组件→IR→task→事件→wasm action）通过。
-- **v0.3.0**：http action func 经 `PluginRegistry` 注册并被 `ActionInvoker` 路由调用；五能力面 trait 可编译。
+- **v0.2.5**：`cargo build -p shiroha-sm-example --target wasm32-wasip2` + 端到端集成测试（加载组件→IR→task→事件→**真实 wasm action 执行**）通过；`WasmActionInvoker` 完整实现（非占位）。
+- **v0.3.0**：`PluginRegistry` + 五能力面 trait 可编译；`CompositeActionInvoker` 可根据 `ActionKind` 正确路由；单元测试通过（空 registry 查找、路由逻辑）。
 - **v0.4.0**：`just build` + `just test` + `just fmt` + `cargo deny check` + `just coverage` 全通过；三形态 shirohad 各自可构建（`--features full/controller/node`）；sctl 经 gRPC 创建 task/发事件/查状态端到端跑通；full 形态本地 node 执行 do-activity 跑通；对照 `prd.md` Acceptance Criteria 逐项勾选。
 
 ---
@@ -61,21 +62,46 @@ MVP 拆为 4 个可独立验证的版本。原则：每版可独立编译/测试
 
 ## 阶段 4 — WASM adapter（`shiroha-wasm`，优先交付物）
 
-- [ ] 4.1 `WasmAdapter`：wasmtime `Component` 加载 → 实例化（链接 host-interface）→ 调 `definition.*` 组装 `StateMachineDef`。
-- [ ] 4.2 `WasmActionInvoker`：`invoke_sync` → 调 `actions.invoke(ctx)`；`invoke_do` → 调 `actions.invoke-do`（component-model async future，await + cancel）。
-- [ ] 4.3 host import：实现 `host-interface.log`（MVP 仅此）。
-- [ ] 4.4 **风险验证点（design §8）**：先跑通 wasmtime component-model async 的最小 do-activity 调用 + 取消；若不稳，落回退方案（do-activity 同步计算 + tokio 包裹可取消，长跑交 host plugin）。
-- [ ] 4.5 集成测试：用 `examples/sm-example` 验证 IR 组装正确。
-- [ ] 4.6 验证：`cargo nextest run -p shiroha-wasm`。
+### v0.2.0: WIT 接口 + 占位结构
 
-## 阶段 5 — plugin 扩展点系统（`shiroha-plugin`，MVP 一种 action func）
+- [x] 4.1 `WasmAdapter`：wasmtime `Component` 加载 → 实例化（链接 host-interface）→ 调 `definition.*` 组装 `StateMachineDef`。
+- [x] 4.2 `WasmActionInvoker`：`invoke_sync` → 调 `actions.invoke(ctx)`；`invoke_do` → 调 `actions.invoke-do`（component-model async future，await + cancel）。
+- [x] 4.3 host import：实现 `host-interface.log`（MVP 仅此）。
+- [x] 4.4 **风险验证点（design §8）**：先跑通 wasmtime component-model async 的最小 do-activity 调用 + 取消；若不稳，落回退方案（do-activity 同步计算 + tokio 包裹可取消，长跑交 host plugin）。
+- [x] 4.5 集成测试：用 `examples/sm-example` 验证 IR 组装正确。
+- [x] 4.6 验证：`cargo nextest run -p shiroha-wasm`。
 
-- [ ] 5.1 `Plugin` trait + `PluginRegistry`（typed 各能力面容器：ActionFunc / Middleware / AggregationStrategy / Transport / Adapter）。
-- [ ] 5.2 各能力面 trait 定义：`ActionFunc`（完整）、`Middleware`/`AggregationStrategy`/`Transport`/`Adapter`（仅 trait + registry 存取，无内置实现）。
-- [ ] 5.3 内置 http action func（基于 `reqwest`），作为 `ActionFunc` 能力面注册示例。
-- [ ] 5.4 `shirohad` 装配：构建 `PluginRegistry`，`ActionInvoker` 解析链按 `ActionRef.kind` 路由（Wasm → wasm invoker；Plugin → registry.action_func）。
-- [ ] 5.5 单元测试：http func mock + registry 注册/查询。
+### v0.2.5: 完整 WASM action 执行（新增阶段）
+
+- [ ] 4.7 实现 `WasmActionInvoker::invoke_sync` 完整逻辑（替换占位）：加载组件 → 调用 `actions.invoke(ctx)` → 返回 `ActionResult`。
+- [ ] 4.8 实现 `WasmActionInvoker::invoke_do` 完整逻辑（替换占位）：调用 `actions.invoke-do(ctx)` → tokio 可取消包裹 → 返回 `ActionResult`。
+- [ ] 4.9 `examples/sm-example` 实现简单 action（如 log 输出或 counter 递增），验证 host import 可用。
+- [ ] 4.10 端到端集成测试：加载组件 → 产 IR → 创建 task → 注入事件 → **真实执行 WASM action** → 验证结果。
+- [ ] 4.11 验证：`cargo nextest run -p shiroha-wasm` + 端到端测试通过。
+
+## 阶段 5 — plugin 扩展点系统（`shiroha-plugin`，架构留口）
+
+### v0.3.0: Plugin 架构就位（调整后范围）
+
+- [ ] 5.1 `Plugin` trait + `PluginRegistry` 结构定义（Arc 共享，不可变；typed 各能力面容器：ActionFunc / Middleware / AggregationStrategy / Transport / Adapter）。
+- [ ] 5.2 各能力面 trait 定义：**全部仅定义 trait + registry 存取，无内置实现**。
+  - [ ] 5.2.1 `ActionFunc` trait（`invoke(ctx) -> Result<ActionResult>`）
+  - [ ] 5.2.2 `Middleware` trait（占位签名，无链式调用实现）
+  - [ ] 5.2.3 `AggregationStrategy` trait
+  - [ ] 5.2.4 `Transport` trait
+  - [ ] 5.2.5 `Adapter` trait（复用 engine 已定义的 Adapter trait）
+- [ ] 5.3 修改 `ActionInvoker` trait 签名：传递 `ActionRef` 而非仅 name（破坏性变更，需同步修改 `WasmActionInvoker` 占位实现）。
+- [ ] 5.4 `CompositeActionInvoker` 实现：按 `ActionRef.kind` 路由（Wasm → wasm invoker；Plugin → registry.action_func）。
+- [ ] 5.5 单元测试：空 registry 查找返回 None；路由逻辑正确（Wasm/Plugin 分支）。
 - [ ] 5.6 验证：`cargo nextest run -p shiroha-plugin`。
+
+### v0.3.5+: HTTP ActionFunc 实现（推迟）
+
+- [ ] 5.7 内置 http action func（基于 `reqwest`），作为 `ActionFunc` 能力面注册示例。
+- [ ] 5.8 `HttpConfig` 结构定义（url / method / headers / body / timeout_secs）。
+- [ ] 5.9 错误处理：所有 HTTP 错误（网络/4xx/5xx）统一映射到 `ActionResult::Error`。
+- [ ] 5.10 `shirohad` 装配：构建 `PluginRegistry`，注册 HTTP func，传递给 `CompositeActionInvoker`。
+- [ ] 5.11 集成测试：HTTP action 经 registry 注册并被 invoker 路由调用。
 
 ## 阶段 6 — 守护进程、控制面与示例
 

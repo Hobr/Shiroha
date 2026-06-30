@@ -1,8 +1,24 @@
 //! Host interface implementation for WASM components.
 //!
-//! Note: This is a placeholder for v0.2.0 MVP.
-//! The full WASM Component Model integration will be completed after
-//! verifying wasmtime 46.x bindgen! macro requirements.
+//! Implements the host capabilities that WASM components can import.
 
-// Placeholder - actual host implementation will use wasmtime::component::bindgen!
-// to generate bindings from WIT files once macro issues are resolved.
+use crate::bindings::shiroha::sm::host::{Host, LogLevel};
+
+/// Host implementation providing logging capability to WASM components.
+pub struct HostImpl;
+
+impl Host for HostImpl {
+    fn log(&mut self, level: LogLevel, msg: String) {
+        match level {
+            LogLevel::Trace => tracing::trace!("[WASM] {}", msg),
+            LogLevel::Debug => tracing::debug!("[WASM] {}", msg),
+            LogLevel::Info => tracing::info!("[WASM] {}", msg),
+            LogLevel::Warn => tracing::warn!("[WASM] {}", msg),
+            LogLevel::Error => tracing::error!("[WASM] {}", msg),
+        }
+    }
+}
+
+// Implement empty Host traits for other interfaces that don't have functions
+impl crate::bindings::shiroha::sm::types::Host for HostImpl {}
+impl crate::bindings::shiroha::sm::action_types::Host for HostImpl {}

@@ -219,21 +219,46 @@ interface host-interface {
 
 ## 8. Plugin 扩展点系统（`shiroha-plugin` + `shiroha-engine`）
 
+> v0.3.0 重点：架构就位，接口留口。优先让 WASM action 真正跑起来（v0.2.5），plugin 具体实现（如 HTTP func）推迟到 v0.3.5+。
+
 Plugin 是通用框架扩展点系统：一个插件实现 `Plugin` trait，在 `register()` 中把自身能力按**能力面（extension point）**注册进 `PluginRegistry`。注册表按能力面 typed 存取，运行时按需查询。
 
-### 能力面（ExtensionPoint）
+### 8.1 能力面（ExtensionPoint）
 
-| 能力面 | 作用 | 所属层 | MVP |
+| 能力面 | 作用 | 所属层 | v0.3.0 状态 |
 |---|---|---|---|
-| `ActionFunc` | 提供 action 实现源（http func / bash func…），作为 `ActionInvoker` 的一种实现源 | 第一层 | ✅ 实现（http func） |
-| `Middleware` | 横切关注点（日志 / 监控 / 追踪 / 限流），包绕 action 调用或事件处理 | 第一/三层 | 留口 |
-| `AggregationStrategy` | 定义 do-activity 结果聚合策略（map/reduce/first-wins…） | 第二层 | 留口 |
-| `Transport` | 分布式协议（rpc / p2p / 消息服务…），作为第二层分发节点间通信与任务派发载体 | 第二层 | 留口 |
-| `Adapter` | 扩展状态机定义来源（用户可自定义 IR 适配器，如从 DB / 配置中心 / 远程 API 加载定义） | 第一层 | 留口（文件 adapter 走此面） |
+| `ActionFunc` | 提供 action 实现源（http / bash / custom…），作为 `ActionInvoker` 的一种实现源 | 第一层 | **仅 trait 定义** |
+| `Middleware` | 横切关注点（日志 / 监控 / 追踪 / 限流），包绕 action 调用或事件处理 | 第一/三层 | **仅 trait 定义** |
+| `AggregationStrategy` | 定义 do-activity 结果聚合策略（map/reduce/first-wins…） | 第二层 | **仅 trait 定义** |
+| `Transport` | 分布式协议（rpc / p2p / 消息服务…），作为第二层分发节点间通信与任务派发载体 | 第二层 | **仅 trait 定义** |
+| `Adapter` | 扩展状态机定义来源（用户可自定义 IR 适配器，如从 DB / 配置中心 / 远程 API 加载定义） | 第一层 | **仅 trait 定义** |
 
 > 能力面集合开放：未来可新增（如 `Serializer`/`Storage` 持久化后端等），不破坏已有插件。
 
-### PluginRegistry 形态（伪 Rust）
+### 8.2 两层语义设计（ActionFunc 示例）
+
+**Plugin 类型层**：`ActionRef { kind: Plugin("http"), name: "fetch_user" }`
+- `"http"` → plugin 类型名，映射到具体 `ActionFunc` 实现
+- `"fetch_user"` → action 实例名，传递给 `ActionFunc::invoke()`
+
+**实现侧解释**：
+- Registry 存储 `HashMap<String, Arc<dyn ActionFunc>>`，key = plugin 类型名（"http", "bash"）
+- `ActionFunc::invoke(ctx)` 内部根据 `ctx` 或其他途径（如 payload）解释 action 实例名
+- 配置可从 `ctx.payload` 动态传递（如 HTTP URL/method），无需预注册每个 action 实例
+
+**示例**：
+```rust
+// IR 定义
+ActionRef { kind: Plugin("http"), name: "fetch_user" }
+
+// 运行时
+let func = registry.action_func("http")?;  // 查找 "http" 类型的 ActionFunc
+let result = func.invoke(ctx).await;        // ctx.payload 包含 HTTP 配置 (URL/method/headers)
+```
+
+### 8.3 PluginRegistry 设计
+
+#### 基础结构
 
 ```rust
 pub trait Plugin: Send + Sync {
@@ -243,64 +268,251 @@ pub trait Plugin: Send + Sync {
 
 pub struct PluginRegistry {
     // 按能力面 typed 存取; 每个能力面一个独立 trait
-    action_funcs: HashMap<String, Box<dyn ActionFunc>>,
-    middlewares: Vec<Box<dyn Middleware>>,
-    aggregation_strategies: HashMap<String, Box<dyn AggregationStrategy>>,
-    transports: HashMap<String, Box<dyn Transport>>,
-    adapters: HashMap<String, Box<dyn Adapter>>,
-}
-
-impl PluginRegistry {
-    pub fn action_func(&self, name: &str) -> Option<&dyn ActionFunc>;
-    pub fn middlewares(&self) -> &[Box<dyn Middleware>];
-    pub fn aggregation_strategy(&self, name: &str) -> Option<&dyn AggregationStrategy>;
-    pub fn transport(&self, name: &str) -> Option<&dyn Transport>;
-    pub fn adapter(&self, name: &str) -> Option<&dyn Adapter>;
-    // 注册侧
-    pub fn register_action_func(&mut self, name: impl Into<String>, f: Box<dyn ActionFunc>);
-    pub fn register_middleware(&mut self, m: Box<dyn Middleware>);
-    // ...
+    action_funcs: HashMap<String, Arc<dyn ActionFunc>>,
+    middlewares: Vec<Arc<dyn Middleware>>,
+    aggregation_strategies: HashMap<String, Arc<dyn AggregationStrategy>>,
+    transports: HashMap<String, Arc<dyn Transport>>,
+    adapters: HashMap<String, Arc<dyn Adapter>>,
 }
 ```
 
-### 各能力面 trait 草图
+#### 线程安全与共享策略
+
+**v0.3.0 MVP 选择**：`Arc<PluginRegistry>`（不可变，无锁）
+
+```rust
+// 初始化阶段（可变）
+let mut registry = PluginRegistry::new();
+registry.register_action_func("http", Arc::new(HttpActionFunc::new()));
+registry.register_action_func("bash", Arc::new(BashActionFunc::new()));
+
+// Freeze 并共享（不可变）
+let registry = Arc::new(registry);
+
+// 运行时（只读访问，无锁）
+let func = registry.action_func("http")?;
+```
+
+**理由**：
+- MVP 不需要热更新（v0.3.0 范围外）
+- 简单高效，运行时零锁开销
+- 初始化流程清晰：构建 → freeze → 共享
+- 未来如需热更新，可演进为内部 `RwLock` 包裹各容器
+
+#### Registry API
+
+```rust
+impl PluginRegistry {
+    pub fn new() -> Self;
+    
+    // 查询 API（运行时）
+    pub fn action_func(&self, name: &str) -> Option<Arc<dyn ActionFunc>>;
+    pub fn middlewares(&self) -> &[Arc<dyn Middleware>];
+    pub fn aggregation_strategy(&self, name: &str) -> Option<Arc<dyn AggregationStrategy>>;
+    pub fn transport(&self, name: &str) -> Option<Arc<dyn Transport>>;
+    pub fn adapter(&self, name: &str) -> Option<Arc<dyn Adapter>>;
+    
+    // 注册 API（初始化阶段）
+    pub fn register_action_func(&mut self, name: impl Into<String>, f: Arc<dyn ActionFunc>);
+    pub fn register_middleware(&mut self, m: Arc<dyn Middleware>);
+    pub fn register_aggregation_strategy(&mut self, name: impl Into<String>, s: Arc<dyn AggregationStrategy>);
+    pub fn register_transport(&mut self, name: impl Into<String>, t: Arc<dyn Transport>);
+    pub fn register_adapter(&mut self, name: impl Into<String>, a: Arc<dyn Adapter>);
+}
+```
+
+### 8.4 能力面 trait 定义
+
+#### ActionFunc（v0.3.0 仅定义，无内置实现）
 
 ```rust
 #[async_trait]
 pub trait ActionFunc: Send + Sync {
-    async fn invoke(&self, ctx: ActionContext) -> Result<ActionResult>;
+    /// Invoke an action with the given context.
+    /// 
+    /// Implementation receives:
+    /// - `ctx.payload`: Configuration data (e.g., HTTP URL/method for HTTP func)
+    /// - Action instance name can be embedded in payload or derived from ctx
+    async fn invoke(&self, ctx: ActionContext) -> anyhow::Result<ActionResult>;
 }
-
-#[async_trait]
-pub trait Middleware: Send + Sync {
-    async fn wrap_action(&self, ctx: &ActionContext, next: &dyn Fn(ActionContext) -> BoxFuture<ActionResult>) -> Result<ActionResult>;
-}
-
-#[async_trait]
-pub trait AggregationStrategy: Send + Sync {  // 第二层
-    async fn aggregate(&self, results: Vec<ActionResult>) -> Result<ActionResult>;
-}
-
-#[async_trait]
-pub trait Transport: Send + Sync {  // 第二层: rpc/p2p/消息服务...
-    async fn dispatch(&self, task: &str, activity: &str, ctx: ActionContext) -> Result<ActionResult>;
-}
-
-// Adapter 复用 §5 的 Adapter trait; 插件可注册自定义 adapter
 ```
 
-### WASM 一等公民的延伸
+**配置传递策略**：
+- 从 `ctx.payload` 解析配置（如 HTTP 的 URL/method/headers）
+- 灵活：每次调用可有不同配置
+- 动态：配置可在状态机定义时嵌入
 
-- **聚合策略可用 WASM 定义**：`AggregationStrategy` 可由 WASM 组件实现并注册（对应原设计原则）。
-- **action 扩展可用 WASM 开发**：`ActionFunc` 可由 WASM 组件实现（区别于「状态机定义里的 WASM action/callback」——后者是定义的一部分，前者是框架能力扩展，两者层次不同但可共用 WASM 运行时）。
-- **Transport / Adapter 未来也可 WASM 化**：只要对应 trait 能由 WASM 实现并注册即可。
+**未来扩展（v0.3.5+）**：HTTP ActionFunc 实现
+```rust
+pub struct HttpActionFunc { /* reqwest client */ }
 
-### MVP 落地范围
+#[derive(Deserialize)]
+struct HttpConfig {
+    url: String,
+    method: HttpMethod,  // enum: GET/POST/PUT/DELETE
+    headers: Option<HashMap<String, String>>,
+    body: Option<Vec<u8>>,
+    timeout_secs: Option<u64>,
+}
 
-- `PluginRegistry` + `Plugin` trait 完整实现（typed 各能力面容器）。
-- `ActionFunc` trait + 内置 http func（基于 `reqwest`）。
-- `Middleware`/`AggregationStrategy`/`Transport`/`Adapter` 能力面：**trait 定义 + registry 存取实现**，但**不提供内置实现**（留口，可被外部注册）。
-- `shirohad` 装配时构建 `PluginRegistry`，把 WASM actionInvoker 与 plugin actionFunc 都纳入 `ActionInvoker` 解析链（按 `ActionRef.kind` 路由：Wasm → wasm invoker；Plugin → registry.action_func）。
+impl ActionFunc for HttpActionFunc {
+    async fn invoke(&self, ctx: ActionContext) -> Result<ActionResult> {
+        let config: HttpConfig = serde_json::from_slice(ctx.payload.as_ref().unwrap())?;
+        // 执行 HTTP 请求
+        // 所有错误（网络/4xx/5xx）统一映射到 ActionResult::Error
+    }
+}
+```
+
+#### Middleware（v0.3.0 仅定义，无链式调用实现）
+
+```rust
+#[async_trait]
+pub trait Middleware: Send + Sync {
+    /// Wrap an action invocation with middleware logic.
+    /// 
+    /// v0.3.0: Trait 定义占位，链式调用逻辑推迟到第三层（可观测性）。
+    async fn wrap_action(
+        &self,
+        ctx: &ActionContext,
+        next: /* 占位类型，未来定义为 BoxFuture chain */,
+    ) -> anyhow::Result<ActionResult>;
+}
+```
+
+**注**：v0.3.0 不实现 `MiddlewareChain` 洋葱调用逻辑，仅定义 trait 预留接口。
+
+#### 其他能力面（v0.3.0 仅定义）
+
+```rust
+#[async_trait]
+pub trait AggregationStrategy: Send + Sync {
+    /// Aggregate multiple action results (第二层：分布式聚合)。
+    async fn aggregate(&self, results: Vec<ActionResult>) -> anyhow::Result<ActionResult>;
+}
+
+#[async_trait]
+pub trait Transport: Send + Sync {
+    /// Dispatch a do-activity to remote node (第二层：分布式传输)。
+    async fn dispatch(&self, task: &str, activity: &str, ctx: ActionContext) -> anyhow::Result<ActionResult>;
+}
+
+// Adapter 复用 §5 的 Adapter trait（engine crate 已定义）
+// 插件可注册自定义 adapter（如文件 adapter: JSON/TOML）
+```
+
+### 8.5 ActionInvoker 集成
+
+#### 接口修改（传递 ActionRef）
+
+**当前签名（v0.2.0）**：
+```rust
+async fn invoke_sync(&self, name: &str, ctx: ActionContext) -> Result<ActionResult>;
+```
+
+**新签名（v0.3.0）**：
+```rust
+async fn invoke_sync(&self, action_ref: &ActionRef, ctx: ActionContext) -> Result<ActionResult>;
+async fn invoke_do(&self, action_ref: &ActionRef, ctx: ActionContext) -> Result<ActionResult>;
+```
+
+**理由**：
+- `ActionRef` 包含完整信息（`kind: Wasm | Plugin(name)`, `name`）
+- CompositeActionInvoker 根据 `kind` 路由到正确实现
+- 语义清晰，扩展友好
+
+#### CompositeActionInvoker（Wasm + Plugin 路由）
+
+```rust
+pub struct CompositeActionInvoker {
+    wasm_invoker: Arc<WasmActionInvoker>,
+    plugin_registry: Arc<PluginRegistry>,
+}
+
+impl CompositeActionInvoker {
+    pub fn new(wasm_invoker: Arc<WasmActionInvoker>, plugin_registry: Arc<PluginRegistry>) -> Self {
+        Self { wasm_invoker, plugin_registry }
+    }
+}
+
+#[async_trait]
+impl ActionInvoker for CompositeActionInvoker {
+    async fn invoke_sync(&self, action_ref: &ActionRef, ctx: ActionContext) -> anyhow::Result<ActionResult> {
+        match &action_ref.kind {
+            ActionKind::Wasm => {
+                // 路由到 WASM invoker
+                self.wasm_invoker.invoke_sync(action_ref, ctx).await
+            }
+            ActionKind::Plugin(plugin_type) => {
+                // 查找 plugin registry
+                let func = self.plugin_registry.action_func(plugin_type)
+                    .ok_or_else(|| anyhow!("Plugin not found: {}", plugin_type))?;
+                func.invoke(ctx).await
+            }
+        }
+    }
+    
+    async fn invoke_do(&self, action_ref: &ActionRef, ctx: ActionContext) -> anyhow::Result<ActionResult> {
+        // 同上逻辑
+        match &action_ref.kind {
+            ActionKind::Wasm => self.wasm_invoker.invoke_do(action_ref, ctx).await,
+            ActionKind::Plugin(plugin_type) => {
+                let func = self.plugin_registry.action_func(plugin_type)?;
+                func.invoke(ctx).await  // ActionFunc 不区分 sync/do，内部自行处理
+            }
+        }
+    }
+}
+```
+
+### 8.6 WASM 一等公民的延伸
+
+插件能力面未来可由 WASM 组件实现：
+- **ActionFunc**：WASM 组件导出 action func 并注册（区别于状态机定义中的 WASM action）
+- **AggregationStrategy**：WASM 定义分布式聚合策略
+- **Transport / Adapter**：只要 trait 能由 WASM 实现并注册即可
+
+> 层次区分：
+> - **状态机定义中的 WASM action**：`ActionRef { kind: Wasm, name: "on_entry" }` → 状态机结构的一部分
+> - **Plugin 形式的 WASM action**：`ActionRef { kind: Plugin("wasm_custom"), name: "..." }` → 框架能力扩展
+>
+> 两者可共用 WASM 运行时，但语义不同。
+
+### 8.7 v0.3.0 MVP 落地范围
+
+**实现内容**：
+- ✅ `PluginRegistry` 结构定义 + API（Arc 共享，不可变）
+- ✅ `Plugin` trait 定义
+- ✅ 五个能力面 trait 定义（ActionFunc / Middleware / AggregationStrategy / Transport / Adapter）
+- ✅ `ActionInvoker` 接口修改（传递 `ActionRef`）
+- ✅ `CompositeActionInvoker` 路由实现（Wasm + Plugin）
+- ✅ 单元测试：空 registry 查找、路由逻辑
+
+**不包含（推迟到后续版本）**：
+- ❌ HTTP ActionFunc 实现（→ v0.3.5 或 v0.4.0）
+- ❌ Middleware 链式调用逻辑（→ 第三层：可观测性）
+- ❌ 其他能力面的内置实现
+
+### 8.8 版本演进路径
+
+**v0.2.5（新增，优先）**：完整 WASM action 执行
+- 实现 `WasmActionInvoker`（替换当前占位）
+- 简单示例 WASM action（如 log 或 counter）
+- 端到端验证：state machine → WASM action → 结果验证
+
+**v0.3.0**：Plugin 架构就位
+- 本节（§8）设计内容全部落地
+- 架构可用，但无具体插件实现
+
+**v0.3.5 / v0.4.0**：首个具体插件
+- HTTP ActionFunc 实现（基于 `reqwest`）
+- 配置结构：`HttpConfig { url, method, headers, body, timeout_secs }`
+- 错误处理：所有 HTTP 错误统一映射到 `ActionResult::Error`
+
+**未来**：
+- Middleware 链式调用（可观测性层）
+- 更多内置 plugin（bash func, file adapter, 等）
+- WASM 形式的插件支持
 
 ## 9. 权衡与风险
 
