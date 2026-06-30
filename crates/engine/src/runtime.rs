@@ -344,19 +344,19 @@ impl Task {
             }
 
             // Record history for parent if configured
-            if let Some(parent) = &state.parent {
-                if let Some(parent_state) = self.tree.get_state(parent) {
-                    let mut config = self.config.write().await;
-                    match parent_state.history {
-                        HistoryConfig::Shallow => {
-                            config.history.record_shallow(parent, state_id);
-                        }
-                        HistoryConfig::Deep => {
-                            let path = self.tree.path_to_root(state_id);
-                            config.history.record_deep(parent, path);
-                        }
-                        HistoryConfig::None => {}
+            if let Some(parent) = &state.parent
+                && let Some(parent_state) = self.tree.get_state(parent)
+            {
+                let mut config = self.config.write().await;
+                match parent_state.history {
+                    HistoryConfig::Shallow => {
+                        config.history.record_shallow(parent, state_id);
                     }
+                    HistoryConfig::Deep => {
+                        let path = self.tree.path_to_root(state_id);
+                        config.history.record_deep(parent, path);
+                    }
+                    HistoryConfig::None => {}
                 }
             }
         }
