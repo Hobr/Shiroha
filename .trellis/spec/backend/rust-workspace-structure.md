@@ -402,7 +402,71 @@ resolver = "3"
 
 ---
 
-## 12. Extensibility
+## 12. Extension Point Placeholder Pattern
+
+### Pattern: Reserve Fields for Future Features Without Breaking Changes
+
+When designing types that will be serialized or part of public API, reserve fields for planned-but-not-yet-implemented features to avoid breaking changes in future versions.
+
+**Example**: Orthogonal regions placeholder in IR types
+
+```rust
+// File: crates/ir/src/types.rs
+
+/// Placeholder for future orthogonal region support.
+/// TODO: Define orthogonal region structure for future use.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct OrthogonalRegion {
+    // Empty for MVP; to be filled in post-MVP when implementing
+    // hierarchical concurrent regions (UML orthogonal states).
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct State {
+    pub id: StateId,
+    pub parent: Option<StateId>,
+    pub entry: Option<ActionRef>,
+    pub exit: Option<ActionRef>,
+    pub do_activity: Option<ActionRef>,
+    pub history: HistoryConfig,
+    
+    /// Reserved for future hierarchical concurrent regions.
+    /// Always None in MVP; will be populated post-MVP.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ortho: Option<OrthogonalRegion>,
+}
+```
+
+**Why this works**:
+- Field exists in type signature but is always `None` during MVP.
+- Future implementation fills the struct without changing `State` public API.
+- `#[serde(skip_serializing_if = "Option::is_none")]` keeps serialized format clean.
+- `#[allow(dead_code)]` on the placeholder struct silences unused warnings.
+- No breaking change when the feature is implemented later.
+
+**When to use**:
+- Feature is in design spec but deferred to later version (documented roadmap).
+- Adding field later would break serialization compatibility or public API.
+- Type is part of cross-crate contract or external API surface.
+- The placeholder documents future intent clearly.
+
+**When NOT to use**:
+- Feature is purely speculative (not in design or roadmap).
+- Field can be added later without breaking changes (e.g., internal private struct).
+- The type is purely internal implementation detail with no stability guarantee.
+
+**Comparison to other approaches**:
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Placeholder field (recommended)** | No breaking change later; documents intent; serialization-safe | Takes up small space even when unused |
+| **Add field later** | Cleaner initial code | Breaking change; requires migration; version bump |
+| **Feature flag** | Can be disabled | Complexity; still needs placeholder or breaking change |
+
+---
+
+## 13. Extensibility
 
 ### Adding a New Crate
 
@@ -431,4 +495,5 @@ When a crate grows too large (>2000 LoC):
 
 - [Cargo Conventions](./cargo-conventions.md) — Dependency management, initialization
 - [Git Commit Conventions](./git-commit-conventions.md) — Commit cadence for crate changes
+- [WASM Component Integration](./wasm-component-integration.md) — WIT contracts and type mapping patterns
 - [Code Reuse Thinking Guide](../guides/code-reuse-thinking-guide.md) — Avoid duplicating types across crates
