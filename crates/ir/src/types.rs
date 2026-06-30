@@ -164,8 +164,8 @@ pub struct ActionRef {
 /// The kind of action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActionKind {
-    Wasm,
-    Plugin,
+    Wasm(String),
+    Plugin(String),
 }
 
 /// Reference to a guard condition.

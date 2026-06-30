@@ -43,8 +43,8 @@ interface types {
 
     /// Transition definition.
     record transition {
-        from: string,
-        to: string,
+        %from: string,
+        %to: string,
         event: string,
         guard: option<guard-ref>,
         action: option<action-ref>,

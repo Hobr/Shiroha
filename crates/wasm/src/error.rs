@@ -12,6 +12,9 @@ pub enum WasmError {
     #[error("Failed to instantiate WASM component: {0}")]
     Instantiation(String),
 
+    #[error("Failed to link WASM component: {0}")]
+    Link(String),
+
     #[error("Failed to call WASM function: {0}")]
     FunctionCall(String),
 
