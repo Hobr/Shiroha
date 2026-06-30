@@ -1,5 +1,13 @@
 [workspace]
 members = [
+    "bin/sctl",
+    "bin/shirohad",
+    "crates/control",
+    "crates/engine",
+    "crates/ir",
+    "crates/plugin",
+    "crates/wasm",
+    "examples/sm-example",
 ]
 resolver = "3"
 
@@ -11,6 +19,13 @@ license = "GPL-3.0-only"
 repository = "https://github.com/Hobr/Shiroha"
 
 [workspace.dependencies]
+# Internal crates
+shiroha-ir = { path = "crates/ir" }
+shiroha-engine = { path = "crates/engine" }
+shiroha-wasm = { path = "crates/wasm" }
+shiroha-plugin = { path = "crates/plugin" }
+shiroha-control = { path = "crates/control" }
+
 # 异步运行时
 tokio = { version = "1.52", features = ["full"] }
 tokio-util = { version = "0.7", features = ["time"] }
@@ -39,6 +54,10 @@ config = "0.15"
 # 错误处理
 thiserror = "2.0"
 anyhow = "1.0"
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 # 构建
 shadow-rs = { version = "2.0", features = ["cargo_metadata"] }
