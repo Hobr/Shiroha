@@ -6,4 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+crate-type = ["cdylib"]
+
 [dependencies]
+# Placeholder - will use wit-bindgen once host-side bindgen is working
