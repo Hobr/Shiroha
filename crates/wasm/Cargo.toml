@@ -7,3 +7,26 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+shiroha-ir = { workspace = true }
+shiroha-engine = { workspace = true }
+
+# WASM runtime
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+
+# Async
+async-trait = { workspace = true }
+tokio = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+[build-dependencies]
+wasmtime = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

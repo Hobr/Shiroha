@@ -1,14 +1,17 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! # shiroha-wasm
+//!
+//! WASM Component Model adapter for state machine definitions.
+//! This crate provides the ability to load state machine definitions from
+//! WebAssembly components and execute actions within the WASM runtime.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod adapter;
+mod error;
+mod host;
+mod invoker;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use adapter::WasmAdapter;
+pub use error::{Result, WasmError};
+pub use invoker::WasmActionInvoker;
+
+// Re-export wasmtime types that users might need
+pub use wasmtime::{Config, Engine, Store};
