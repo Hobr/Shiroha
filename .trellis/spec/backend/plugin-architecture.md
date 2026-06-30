@@ -86,7 +86,7 @@ pub struct PluginRegistry {
 
 impl PluginRegistry {
     pub fn builder() -> RegistryBuilder { /* ... */ }
-    
+
     // 只读查找，无锁
     pub fn get_action(&self, plugin_type: &str) -> Option<Arc<dyn ActionFunc>> {
         self.actions.get(plugin_type).cloned()
