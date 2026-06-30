@@ -16,6 +16,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 |-------|-------------|--------|
 | [Rust Workspace Structure](./rust-workspace-structure.md) | Crate organization, dependency layers, workspace manifest, extension point placeholders | Active |
 | [WASM Component Integration](./wasm-component-integration.md) | WIT contracts, host/guest bindings, type mapping, async strategy | Active |
+| [Plugin Architecture](./plugin-architecture.md) | Two-layer ActionRef semantics, PluginRegistry pattern, extension points, ActionKind evolution | Active |
 | [HSM Implementation Pattern](./hsm-implementation-pattern.md) | Hierarchical state machine runtime, RTC loop, do-activity lifecycle | Active |
 | [Quality Guidelines](./quality-guidelines.md) | Quality gates, forbidden patterns, testing requirements, code review checklist | Active |
 | [Git Commit Conventions](./git-commit-conventions.md) | Commit cadence, message format, pre-commit gate | Active |
