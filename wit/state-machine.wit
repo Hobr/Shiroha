@@ -1,0 +1,127 @@
+package shiroha:sm@0.1.0;
+
+/// Core types for state machine definitions.
+interface types {
+    /// Kind of action implementation.
+    variant action-kind {
+        wasm(string),
+        plugin(string),
+    }
+
+    /// Kind of guard condition.
+    variant guard-kind {
+        always,
+        wasm(string),
+        plugin(string),
+    }
+
+    /// History configuration for a state.
+    enum history-kind {
+        none,
+        shallow,
+        deep,
+    }
+
+    /// Reference to an action.
+    record action-ref {
+        name: string,
+        kind: action-kind,
+    }
+
+    /// Reference to a guard condition.
+    type guard-ref = guard-kind;
+
+    /// State definition.
+    record state {
+        name: string,
+        parent: option<string>,
+        entry: option<action-ref>,
+        exit: option<action-ref>,
+        do-activity: option<action-ref>,
+        history: history-kind,
+    }
+
+    /// Transition definition.
+    record transition {
+        from: string,
+        to: string,
+        event: string,
+        guard: option<guard-ref>,
+        action: option<action-ref>,
+    }
+
+    /// Event definition.
+    record event-def {
+        name: string,
+    }
+}
+
+/// Declarative state machine definition interface.
+interface definition {
+    use types.{state, transition, event-def};
+
+    /// Get the initial state name.
+    initial: func() -> string;
+
+    /// Get all states.
+    states: func() -> list<state>;
+
+    /// Get all transitions.
+    transitions: func() -> list<transition>;
+
+    /// Get all events.
+    events: func() -> list<event-def>;
+}
+
+/// Action execution context and result types.
+interface action-types {
+    /// Context passed to action invocations.
+    record action-context {
+        task-id: string,
+        event: option<string>,
+        payload: option<list<u8>>,
+    }
+
+    /// Result of an action invocation.
+    variant action-result {
+        ok,
+        ok-value(list<u8>),
+        error(string),
+        signal(string),
+    }
+}
+
+/// Action execution interface.
+interface actions {
+    use action-types.{action-context, action-result};
+
+    /// Invoke a synchronous action.
+    invoke: func(ctx: action-context) -> result<action-result, string>;
+
+    /// Invoke an async do-activity.
+    /// Note: Component Model async (future) support requires wasmtime 46.x+ verification.
+    /// MVP implementation will use synchronous wrapper with tokio cancellable task.
+    invoke-do: func(ctx: action-context) -> result<action-result, string>;
+}
+
+/// Host capabilities interface (imported by guest).
+interface host {
+    /// Log level enumeration.
+    enum log-level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    /// Log a message (MVP: only logging capability).
+    log: func(level: log-level, msg: string);
+}
+
+/// Main world for state machine components.
+world state-machine {
+    export definition;
+    export actions;
+    import host;
+}
