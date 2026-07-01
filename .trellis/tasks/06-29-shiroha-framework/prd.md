@@ -29,9 +29,9 @@ WASM 一等公民原则：状态机定义 / action / callback 可写在 WASM 内
 
 ## Child Tasks
 
-- ✅ `06-29-layer1-statemachine-wasm-adapter` — v0.2.x: 状态机核心 + WASM Component Model adapter（已完成）
-- [ ] v0.3.0 — shirohad 单机守护进程 + sctl 占位
-- [ ] v0.3.5 — 本地交互增强（REPL + Unix socket）
+- ✅ `06-29-layer1-statemachine-wasm-adapter` — v0.2.x: 状态机核心 + WASM Component Model adapter（已完成，2026-06-30 归档）
+- ✅ `06-30-v0.3.0-shirohad` — v0.3.0: shirohad 单机守护进程 + sctl 占位（已完成，2026-06-30 归档）
+- ✅ `07-01-v0.3.5-local-interaction` — v0.3.5: 本地交互增强（REPL + Unix socket）（已完成，2026-07-01 归档）
 - [ ] v0.4.0 — gRPC 控制面协议定义
 - [ ] v0.5.0 — 分布式架构基础（controller + node 分离）
 - [ ] v0.5.5 — 分布式增强（负载均衡 + 重试）
@@ -45,7 +45,10 @@ WASM 一等公民原则：状态机定义 / action / callback 可写在 WASM 内
 ## Acceptance Criteria（父任务，跨子任务集成层）
 
 - [x] v0.2.x 完成：WASM Component Model 集成 + 端到端验证
-- [ ] v0.3.x 完成：单机可执行文件可用（shirohad + sctl）
+- [x] v0.3.x 完成：单机可执行文件可用（shirohad + sctl）
+  - [x] v0.3.0: shirohad 守护进程可加载 WASM component 并创建 task
+  - [x] v0.3.5: REPL 模式 + Unix socket 控制接口 + sctl 客户端可用
+  - [x] 集成验证：`shirohad` 加载示例 component，`sctl` 成功操作（list/status/send-event）
 - [ ] v0.4.x 完成：gRPC 控制面协议定型
 - [ ] v0.5.x 完成：分布式调度基础可用（controller + node）
 - [ ] v0.6.x 完成：分布式可靠性（持久化 + 安全）
