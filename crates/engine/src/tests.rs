@@ -74,7 +74,7 @@ async fn test_simple_transition() {
     let invoker = Arc::new(StubActionInvoker);
     let guard = Arc::new(StubGuardEvaluator);
 
-    let (task, handle) = Task::new("test-task".to_string(), def, invoker, guard);
+    let (task, handle) = Task::new("test-task".to_string(), def, invoker, guard, None);
     let task_handle = task.run();
 
     // Give time for initial state entry
@@ -146,7 +146,7 @@ async fn test_nested_states() {
     let invoker = Arc::new(StubActionInvoker);
     let guard = Arc::new(StubGuardEvaluator);
 
-    let (task, handle) = Task::new("test-task".to_string(), def, invoker, guard);
+    let (task, handle) = Task::new("test-task".to_string(), def, invoker, guard, None);
     let task_handle = task.run();
 
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -186,7 +186,7 @@ async fn test_task_manager() {
     let guard = Arc::new(StubGuardEvaluator);
 
     let handle = manager
-        .create_task("task1".to_string(), def, invoker, guard)
+        .create_task("task1".to_string(), def, invoker, guard, None)
         .await
         .unwrap();
 
