@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/rust-workspace-structure.md", "reason": "Crate dependency layers (ir ← engine ← control ← binaries); shiroha-control placement; workspace manifest contract for adding uuid/tokio-util"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Error handling conventions (thiserror for lib, anyhow for app); forbidden patterns (type duplication across crates); quality gate commands"}
+{"file": ".trellis/spec/backend/hsm-implementation-pattern.md", "reason": "RTC loop and do-activity lifecycle — engine changes (TaskHandle state, update_shared_state) must not break RTC semantics"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Feature spans 3+ layers (engine → control → shirohad/sctl); protocol types cross crate boundaries; data flow design"}
+{"file": ".trellis/docs/version-roadmap.md", "reason": "v0.3.5 scope boundaries — what is in/out (no gRPC, no remote, no dynamic task creation); forward path to v0.4.0 gRPC replacement"}
+{"file": ".trellis/tasks/07-01-v0.3.5-local-interaction/design.md", "reason": "Technical design: TaskHandle state query, control protocol, daemon structure, socket server, REPL, sctl rewrite"}
