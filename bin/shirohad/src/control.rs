@@ -93,21 +93,19 @@ async fn dispatch(
             let tasks = task_manager.list_tasks().await;
             Response::ok(serde_json::json!({"tasks": tasks}))
         }
-        Request::SendEvent { task_id, event } => {
-            match task_manager.get_task(&task_id).await {
-                Some(handle) => match handle.send(Event {
-                    name: event,
-                    payload: None,
-                }) {
-                    Ok(()) => {
-                        let state = handle.get_state().await;
-                        Response::ok(serde_json::json!({"new_state": state.current_state}))
-                    }
-                    Err(e) => Response::error(format!("Failed to send event: {}", e)),
-                },
-                None => Response::error(format!("Task not found: {}", task_id)),
-            }
-        }
+        Request::SendEvent { task_id, event } => match task_manager.get_task(&task_id).await {
+            Some(handle) => match handle.send(Event {
+                name: event,
+                payload: None,
+            }) {
+                Ok(()) => {
+                    let state = handle.get_state().await;
+                    Response::ok(serde_json::json!({"new_state": state.current_state}))
+                }
+                Err(e) => Response::error(format!("Failed to send event: {}", e)),
+            },
+            None => Response::error(format!("Task not found: {}", task_id)),
+        },
         Request::TaskStatus { task_id } => match task_manager.get_task(&task_id).await {
             Some(handle) => {
                 let state = handle.get_state().await;
