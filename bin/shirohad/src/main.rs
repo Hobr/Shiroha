@@ -1,7 +1,7 @@
 //! Shiroha daemon - single-machine state machine runtime.
 
-mod daemon;
 mod control;
+mod daemon;
 mod repl;
 
 use std::path::PathBuf;
@@ -14,8 +14,8 @@ use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 use tracing_subscriber::fmt::format::FmtSpan;
 
-use daemon::Daemon;
 use control::run_socket_server;
+use daemon::Daemon;
 use repl::run_repl;
 /// Shiroha daemon CLI arguments.
 #[derive(Parser, Debug)]

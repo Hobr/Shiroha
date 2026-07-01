@@ -63,14 +63,12 @@ async fn main() -> Result<()> {
     }
 
     // Connect to shirohad
-    let mut stream = UnixStream::connect(&cli.socket)
-        .await
-        .with_context(|| {
-            format!(
-                "Cannot connect to shirohad (is it running? socket: {})",
-                cli.socket.display()
-            )
-        })?;
+    let mut stream = UnixStream::connect(&cli.socket).await.with_context(|| {
+        format!(
+            "Cannot connect to shirohad (is it running? socket: {})",
+            cli.socket.display()
+        )
+    })?;
 
     // Build request
     let req = match &cli.command {
@@ -147,11 +145,11 @@ fn print_ok_response(command: &Commands, data: Option<serde_json::Value>) {
                 .get("current_state")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            let component = data
-                .get("component")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            println!("Task: {}, State: {}, Component: {}", task_id, state, component);
+            let component = data.get("component").and_then(|v| v.as_str()).unwrap_or("");
+            println!(
+                "Task: {}, State: {}, Component: {}",
+                task_id, state, component
+            );
         }
         _ => {}
     }

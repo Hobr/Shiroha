@@ -483,7 +483,13 @@ impl TaskManager {
         guard_evaluator: Arc<dyn GuardEvaluator>,
         component_path: Option<std::path::PathBuf>,
     ) -> anyhow::Result<TaskHandle> {
-        let (task, handle) = Task::new(id.clone(), def, action_invoker, guard_evaluator, component_path);
+        let (task, handle) = Task::new(
+            id.clone(),
+            def,
+            action_invoker,
+            guard_evaluator,
+            component_path,
+        );
 
         task.run();
 

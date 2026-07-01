@@ -19,7 +19,8 @@ pub struct Daemon {
     pub component_paths: Arc<RwLock<HashMap<String, PathBuf>>>,
     /// Unix socket path.
     pub socket_path: PathBuf,
-    /// Global cancellation token.
+    /// Global cancellation token (used for shutdown coordination).
+    #[allow(dead_code)]
     pub cancel_token: CancellationToken,
 }
 

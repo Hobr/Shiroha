@@ -33,11 +33,9 @@ pub async fn run_repl(
             line = reader.next_line() => {
                 match line? {
                     Some(input) => {
-                        if let Some(should_quit) = handle_repl_command(&input, &task_manager, &component_paths).await {
-                            if should_quit {
-                                cancel_token.cancel();
-                                break;
-                            }
+                        if let Some(true) = handle_repl_command(&input, &task_manager, &component_paths).await {
+                            cancel_token.cancel();
+                            break;
                         }
                     }
                     None => break, // EOF
@@ -55,7 +53,7 @@ async fn handle_repl_command(
     task_manager: &TaskManager,
     component_paths: &Arc<RwLock<HashMap<String, PathBuf>>>,
 ) -> Option<bool> {
-    let parts: Vec<&str> = input.trim().split_whitespace().collect();
+    let parts: Vec<&str> = input.split_whitespace().collect();
     match parts.first() {
         Some(&"status") => {
             let ids = task_manager.list_tasks().await;
