@@ -209,6 +209,7 @@ async fn test_instantiate_task() {
             def,
             action_invoker,
             guard_evaluator,
+            None,
         )
         .await
         .expect("Failed to create task");
@@ -252,6 +253,7 @@ async fn test_execute_action() {
             def,
             action_invoker.clone(),
             guard_evaluator,
+            None,
         )
         .await
         .expect("Failed to create task");
@@ -322,6 +324,7 @@ async fn test_wasm_host_log_capture() {
             def,
             action_invoker,
             guard_evaluator,
+            None,
         )
         .await
         .expect("Failed to create task");
