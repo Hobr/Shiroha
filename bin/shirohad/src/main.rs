@@ -1,17 +1,22 @@
 //! Shiroha daemon - single-machine state machine runtime.
 
+mod daemon;
+mod control;
+mod repl;
+
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use shiroha_engine::{ActionInvoker, Adapter, GuardEvaluator, TaskManager};
-use shiroha_wasm::{Engine, WasmActionInvoker, WasmAdapter};
 use tokio::signal;
-use tracing::{Level, error, info};
+use tokio_util::sync::CancellationToken;
+use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 use tracing_subscriber::fmt::format::FmtSpan;
 
+use daemon::Daemon;
+use control::run_socket_server;
+use repl::run_repl;
 /// Shiroha daemon CLI arguments.
 #[derive(Parser, Debug)]
 #[command(
@@ -20,9 +25,17 @@ use tracing_subscriber::fmt::format::FmtSpan;
     about = "Shiroha daemon - state machine runtime"
 )]
 struct Cli {
-    /// Path to WASM component
+    /// Path to WASM component (repeatable)
     #[arg(long)]
-    component: PathBuf,
+    component: Vec<PathBuf>,
+
+    /// Enable interactive REPL mode
+    #[arg(long, default_value_t = false)]
+    repl: bool,
+
+    /// Unix socket path
+    #[arg(long, default_value = "/tmp/shirohad.sock")]
+    socket: PathBuf,
 
     /// Log level (trace, debug, info, warn, error)
     #[arg(long, default_value = "info")]
@@ -51,20 +64,6 @@ impl std::str::FromStr for LogFormat {
     }
 }
 
-/// Placeholder guard evaluator (always returns true).
-struct NoopGuardEvaluator;
-
-#[async_trait::async_trait]
-impl GuardEvaluator for NoopGuardEvaluator {
-    async fn evaluate(
-        &self,
-        _guard: &str,
-        _ctx: &shiroha_engine::ActionContext,
-    ) -> anyhow::Result<bool> {
-        Ok(true)
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse CLI arguments
@@ -73,66 +72,55 @@ async fn main() -> Result<()> {
     // Initialize tracing
     init_tracing(&args)?;
 
-    info!("Starting Shiroha daemon");
-    info!("Component path: {}", args.component.display());
-
-    // Create WASM engine
-    let mut config = wasmtime::Config::new();
-    config.wasm_component_model(true);
-    let engine = Arc::new(Engine::new(&config)?);
-
-    // Load WASM component
-    info!("Loading component...");
-    let adapter = WasmAdapter::from_file(engine.clone(), &args.component)
-        .context("Failed to create WASM adapter")?;
-
-    let def = adapter
-        .load()
-        .await
-        .context("Failed to load state machine definition")?;
-
-    info!(
-        "Component loaded: {} states, {} transitions, {} events",
-        def.states.len(),
-        def.transitions.len(),
-        def.events.len()
-    );
-    info!("Initial state: {}", def.initial);
-
-    // Create action invoker
-    let action_invoker: Arc<dyn ActionInvoker> = Arc::new(WasmActionInvoker::from_file(
-        engine.clone(),
-        &args.component,
-    )?);
-
-    // Create guard evaluator
-    let guard_evaluator: Arc<dyn GuardEvaluator> = Arc::new(NoopGuardEvaluator);
-
-    // Create task manager
-    let task_manager = TaskManager::new();
-
-    // Create task with fixed ID "default"
-    let task_id = "default".to_string();
-    info!("Creating task: id={}", task_id);
-
-    let _handle = task_manager
-        .create_task(task_id.clone(), def, action_invoker, guard_evaluator)
-        .await
-        .context("Failed to create task")?;
-
-    info!("Task created successfully");
-    info!("Daemon running, press Ctrl-C to stop");
-
-    // Wait for shutdown signal
-    match signal::ctrl_c().await {
-        Ok(()) => {
-            info!("Received shutdown signal");
-        }
-        Err(err) => {
-            error!("Failed to listen for shutdown signal: {}", err);
-        }
+    // Validate arguments
+    if args.component.is_empty() {
+        anyhow::bail!("At least one --component required");
     }
 
+    info!("Starting Shiroha daemon");
+
+    // Create cancellation token
+    let cancel_token = CancellationToken::new();
+
+    // Create daemon
+    let daemon = Daemon::new(args.socket.clone(), cancel_token.clone());
+
+    // Load components
+    let count = daemon.load_components(&args.component).await?;
+    info!("{} task(s) created successfully", count);
+
+    // Start Unix socket server
+    let socket_handle = tokio::spawn(run_socket_server(
+        daemon.task_manager.clone(),
+        daemon.component_paths.clone(),
+        daemon.socket_path.clone(),
+        cancel_token.clone(),
+    ));
+
+    // Set up ctrl_c handler
+    let ctrl_token = cancel_token.clone();
+    tokio::spawn(async move {
+        if signal::ctrl_c().await.is_ok() {
+            info!("Received shutdown signal");
+            ctrl_token.cancel();
+        }
+    });
+
+    // Run daemon
+    if args.repl {
+        run_repl(
+            daemon.task_manager.clone(),
+            daemon.component_paths.clone(),
+            cancel_token.clone(),
+        )
+        .await?;
+    } else {
+        info!("Daemon running, press Ctrl-C to stop");
+        cancel_token.cancelled().await;
+    }
+
+    // Wait for socket server to stop
+    let _ = socket_handle.await;
     info!("Shutting down...");
 
     Ok(())

@@ -28,7 +28,7 @@ shiroha-control = { path = "crates/control" }
 
 # 异步运行时
 tokio = { version = "1.52.3", features = ["full"] }
-tokio-util = { version = "0.7", features = ["time"] }
+tokio-util = { version = "0.7", features = ["time", "rt"] }
 async-trait = "0.1"
 
 # WASM 运行时
@@ -62,6 +62,9 @@ tracing-subscriber = "0.3"
 # 序列化
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
 
 # 构建
 shadow-rs = { version = "2.0", features = ["cargo_metadata"] }
