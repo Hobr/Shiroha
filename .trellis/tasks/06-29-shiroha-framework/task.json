@@ -21,7 +21,8 @@
   "children": [
     "06-29-layer1-statemachine-wasm-adapter",
     "06-30-v0.3.0-shirohad",
-    "07-01-v0.3.5-local-interaction"
+    "07-01-v0.3.5-local-interaction",
+    "07-01-07-02-v0.4.0-grpc-control-plane"
   ],
   "parent": null,
   "relatedFiles": [],

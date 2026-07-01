@@ -1,7 +1,7 @@
 # v0.3.x 集成验证报告
 
-**验证日期**: 2026-07-01  
-**验证范围**: v0.2.x, v0.3.0, v0.3.5 跨版本集成验证  
+**验证日期**: 2026-07-01
+**验证范围**: v0.2.x, v0.3.0, v0.3.5 跨版本集成验证
 **验证结果**: ✅ 通过
 
 ## 验证环境
@@ -236,5 +236,5 @@ Task: shiroha_sm_example-<uuid>, State: Processing, Component: ...
 
 ---
 
-**验证人**: Claude Code (Trellis workflow)  
+**验证人**: Claude Code (Trellis workflow)
 **验证完成时间**: 2026-07-01 22:41 GMT+8
