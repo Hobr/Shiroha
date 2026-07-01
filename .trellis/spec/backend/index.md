@@ -18,6 +18,8 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [WASM Component Integration](./wasm-component-integration.md) | WIT contracts, host/guest bindings, type mapping, async strategy | Active |
 | [Plugin Architecture](./plugin-architecture.md) | Two-layer ActionRef semantics, PluginRegistry pattern, extension points, ActionKind evolution | Active |
 | [HSM Implementation Pattern](./hsm-implementation-pattern.md) | Hierarchical state machine runtime, RTC loop, do-activity lifecycle | Active |
+| [Daemon Architecture](./daemon-architecture.md) | Multi-component management, control interface, concurrency model, shutdown coordination | Active |
+| [Async Patterns](./async-patterns.md) | Tokio runtime guidelines, state access patterns, graceful shutdown | Active |
 | [Quality Guidelines](./quality-guidelines.md) | Quality gates, forbidden patterns, testing requirements, code review checklist | Active |
 | [Git Commit Conventions](./git-commit-conventions.md) | Commit cadence, message format, pre-commit gate | Active |
 | [Cargo Conventions](./cargo-conventions.md) | Package init via cargo init, latest-version dependency policy | Active |
