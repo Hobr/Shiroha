@@ -135,6 +135,7 @@ pub struct Task {
     guard_evaluator: Arc<dyn GuardEvaluator>,
     receiver: mpsc::UnboundedReceiver<Event>,
     do_activity_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
+    state: Arc<RwLock<TaskState>>,
 }
 
 impl Task {
@@ -144,6 +145,7 @@ impl Task {
         def: StateMachineDef,
         action_invoker: Arc<dyn ActionInvoker>,
         guard_evaluator: Arc<dyn GuardEvaluator>,
+        component_path: Option<std::path::PathBuf>,
     ) -> (Self, TaskHandle) {
         let (sender, receiver) = mpsc::unbounded_channel();
 
@@ -151,6 +153,12 @@ impl Task {
         let config = Arc::new(RwLock::new(Configuration {
             current_state: def.initial.clone(),
             history: HistoryStore::default(),
+        }));
+
+        let state = Arc::new(RwLock::new(TaskState {
+            task_id: id.clone(),
+            current_state: def.initial.clone(),
+            active_do_activity: None,
         }));
 
         let task = Self {
@@ -162,9 +170,10 @@ impl Task {
             guard_evaluator,
             receiver,
             do_activity_handle: Arc::new(RwLock::new(None)),
+            state: state.clone(),
         };
 
-        let handle = TaskHandle::new(id, sender);
+        let handle = TaskHandle::new(id, sender, state, component_path);
 
         (task, handle)
     }
@@ -175,12 +184,28 @@ impl Task {
             // Enter initial state
             let initial_state = self.def.initial.clone();
             self.enter_state(&initial_state).await;
+            self.update_shared_state().await;
 
             // RTC event loop
             while let Some(event) = self.receiver.recv().await {
                 self.process_event(event).await;
+                self.update_shared_state().await;
             }
         })
+    }
+
+    /// Update the shared state after transitions.
+    async fn update_shared_state(&self) {
+        let mut state = self.state.write().await;
+        let config = self.config.read().await;
+        let do_activity = self.do_activity_handle.read().await;
+
+        state.current_state = config.current_state.clone();
+        state.active_do_activity = if do_activity.is_some() {
+            Some("active".to_string())
+        } else {
+            None
+        };
     }
 
     /// Get current task state.
@@ -437,6 +462,7 @@ impl Task {
 }
 
 /// Task manager for controlling task lifecycle.
+#[derive(Clone)]
 pub struct TaskManager {
     tasks: Arc<RwLock<HashMap<TaskId, TaskHandle>>>,
 }
@@ -455,8 +481,9 @@ impl TaskManager {
         def: StateMachineDef,
         action_invoker: Arc<dyn ActionInvoker>,
         guard_evaluator: Arc<dyn GuardEvaluator>,
+        component_path: Option<std::path::PathBuf>,
     ) -> anyhow::Result<TaskHandle> {
-        let (task, handle) = Task::new(id.clone(), def, action_invoker, guard_evaluator);
+        let (task, handle) = Task::new(id.clone(), def, action_invoker, guard_evaluator, component_path);
 
         task.run();
 
