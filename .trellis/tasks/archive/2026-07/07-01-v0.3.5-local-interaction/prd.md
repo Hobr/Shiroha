@@ -1,6 +1,6 @@
 # v0.3.5: 本地交互增强 (REPL + Unix socket)
 
-> 父任务：`06-29-shiroha-framework`  
+> 父任务：`06-29-shiroha-framework`
 > 版本规划：`.trellis/docs/version-roadmap.md`
 
 ## Goal
@@ -262,7 +262,7 @@ async fn handle_connection(
 ) -> Result<()> {
     let reader = BufReader::new(stream);
     let mut lines = reader.lines();
-    
+
     while let Some(line) = lines.next_line().await? {
         let req: Request = serde_json::from_str(&line)?;
         let resp = match req.command.as_str() {
@@ -275,7 +275,7 @@ async fn handle_connection(
                 error: Some(format!("Unknown command: {}", req.command)),
             },
         };
-        
+
         let resp_line = serde_json::to_string(&resp)?;
         // write resp_line + "\n" to stream
     }
@@ -290,12 +290,12 @@ async fn handle_connection(
 async fn repl_loop(manager: Arc<Mutex<TaskManager>>) -> Result<()> {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
-    
+
     println!("Shiroha REPL. Type 'help' for commands.");
     loop {
         print!("> ");
         std::io::stdout().flush()?;
-        
+
         if let Some(line) = reader.next_line().await? {
             let parts: Vec<&str> = line.trim().split_whitespace().collect();
             match parts.first() {
@@ -321,13 +321,11 @@ async fn repl_loop(manager: Arc<Mutex<TaskManager>>) -> Result<()> {
 
 ## Risks
 
-- **Medium**: TaskManager API 可能需扩展（当前设计为单 task）
-  - 需添加：`list_tasks()`, `get_task()`, `send_event(task_id, event)`
-  - 风险：可能需重构 TaskManager 内部结构
+- ~~**Medium**: TaskManager API 可能需扩展（当前设计为单 task）~~ — **已缓解**：代码库探索确认 TaskManager 原生支持多 task（`Arc<RwLock<HashMap<TaskId, TaskHandle>>>`，已有 `create_task` / `get_task` / `list_tasks`）
+- **Medium**: TaskHandle 无法查询状态（Task 被 `run()` 消费，handle 只有 sender）— 已在 `design.md` 中解决：共享 `Arc<RwLock<TaskState>>`
 - **Low**: Unix socket 协议设计（JSON 标准格式）
 - **Low**: 多客户端并发（tokio UnixListener 标准用法）
-- **Medium**: REPL 与守护进程共存（异步 stdin 读取可能复杂）
-  - 缓解：使用 tokio::spawn + channel 隔离
+- **Low**: REPL 与守护进程共存 — 使用 `tokio::io::stdin()` + `CancellationToken` 隔离
 
 ## Success Metrics
 
@@ -339,20 +337,13 @@ async fn repl_loop(manager: Arc<Mutex<TaskManager>>) -> Result<()> {
 
 ## Notes
 
-这是一个**中等复杂度任务**：
-- 需要设计 Unix socket 协议（JSON 格式）
-- 需要扩展 TaskManager API（多 task 管理）
-- 需要实现 REPL 循环（异步 stdin）
+任务复杂度：中等。`design.md` + `implement.md` 已完成规划。
 
-建议添加 `design.md`：
-- Unix socket 协议详细规范
-- TaskManager API 扩展设计
-- REPL 与守护进程共存架构
-- 并发控制策略（Arc + Mutex vs channel）
-
-实现策略：
-1. 先扩展 TaskManager API（支持多 task）
+实现策略（详见 `implement.md`）：
+1. 扩展 TaskManager API（支持多 task）— 已确认 TaskManager 原生支持多 task，仅需 TaskHandle 增加状态查询
 2. 实现 Unix socket server（最小协议）
 3. 实现 sctl 客户端（3 个命令）
 4. 实现 REPL 模式
 5. 集成测试 + 手动验证
+
+技术设计详见 `design.md`。

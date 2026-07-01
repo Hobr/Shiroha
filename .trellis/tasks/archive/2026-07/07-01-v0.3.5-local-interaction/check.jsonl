@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Code review checklist: compilation, formatting, clippy, tests, deny; error handling (thiserror vs anyhow); test coverage requirements"}
+{"file": ".trellis/spec/backend/rust-workspace-structure.md", "reason": "Verify dependency direction follows layers (ir ← engine ← control ← binaries); no circular deps; workspace dependency inheritance used"}
+{"file": ".trellis/spec/backend/cargo-conventions.md", "reason": "Dependency management: latest-version policy for uuid; workspace = true usage; Cargo.lock committed"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check Request/Response types not duplicated across shirohad and sctl (should be in shiroha-control); shared state pattern not duplicated"}
+{"file": ".trellis/spec/backend/git-commit-conventions.md", "reason": "Commit message format and cadence for multi-crate changes"}
