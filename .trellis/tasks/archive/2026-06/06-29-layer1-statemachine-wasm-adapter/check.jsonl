@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "check 阶段验证: IR/trait/action 签名是否在单一 crate 定义且未被他处复制重定义; 是否存在跨 crate 的重复契约逻辑(如各 adapter 各自定义 action 调用). 该指南的 commit 前检查清单直接适用."}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "check 阶段验证跨层边界: WIT 边界(host↔guest)输入/输出/错误是否定义完整; IR 是否是 adapter 产出的唯一契约且 engine 不直接耦合 wasmtime; 事件/RTC 边界是否有数据丢失. 该指南的跨层实现后检查清单(round-trip/边界错误处理)直接适用."}
-{"file": ".trellis/spec/backend/git-commit-conventions.md", "reason": "check 阶段验证: 每个 commit 是否对应单一功能模块; message 是否符合 <module>: <brief> 格式; 是否有 --no-verify 跳过钩子; 每次提交前是否运行了 just fmt + just test."}
-{"file": ".trellis/spec/backend/cargo-conventions.md", "reason": "check 阶段验证: 新建 crate 是否用 cargo init 初始化; 依赖是否使用最新稳定版; 共享依赖是否统一放 [workspace.dependencies] 而非各 crate 各自 pin 版本."}

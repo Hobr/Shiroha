@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务核心是跨层边界: adapter(WASM)↔engine(IR)↔plugin↔host. 该指南的『定义每个边界的输入/输出/错误契约』『单一 owner 解码 payload』直接对应 IR 作为跨 adapter 共享契约、WIT 作为 host↔guest 边界契约、统一 action 签名. 防止每个 adapter 各自重定义 IR 或 action 调用契约."}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "IR 被 WASM adapter 与未来文件 adapter 共用; action 统一签名; trait 接缝(Adapter/ActionInvoker/Plugin/Authorizer)是单一注册点. 该指南『相同逻辑出现 3+ 次则抽象』『单一真相源』指导 IR/trait 不被各 crate 复制重定义."}
-{"file": ".trellis/spec/backend/git-commit-conventions.md", "reason": "实现阶段每完成一个功能模块必须 git commit 一次, message 格式 <module>: <brief>; commit 前必须 just fmt + just test. 实现期严格遵守."}
-{"file": ".trellis/spec/backend/cargo-conventions.md", "reason": "新建 cargo 包必须用 cargo init 初始化(非手写 Cargo.toml); 引入依赖时用最新稳定版; 共享依赖放 [workspace.dependencies]. 实现期 crate 创建与依赖管理严格遵守."}

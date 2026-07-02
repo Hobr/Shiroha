@@ -3,7 +3,7 @@ build_cmd := "cargo build"
 
 package-sctl := "-p sctl"
 package-shirohad := "-p shirohad"
-package-example := "-p shiroha-sm-example"
+package-example := "-p example"
 
 target-plugin := "--target wasm32-wasip2"
 
