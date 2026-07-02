@@ -2,19 +2,6 @@
 
 > A *WebAssembly*-extensible workflow orchestration engine built around *Finite-State Machines*.
 
-## Quick Start
-
-```bash
-# Build the project
-cargo build --release
-
-# Build the example WASM component
-cargo build --target wasm32-wasip2 -p shiroha-sm-example
-
-# Run the daemon with the example component
-./target/release/shirohad --component ./target/wasm32-wasip2/debug/shiroha_sm_example.wasm
-```
-
 ## Dev Setup
 
 ```bash

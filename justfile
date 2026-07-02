@@ -3,6 +3,7 @@ build_cmd := "cargo build"
 
 package-sctl := "-p sctl"
 package-shirohad := "-p shirohad"
+package-example := "-p shiroha-sm-example"
 
 target-plugin := "--target wasm32-wasip2"
 
@@ -27,8 +28,14 @@ build-shirohad:
 release-shirohad:
     {{build_cmd}} {{package-shirohad}} --release
 
-build: build-sctl build-shirohad
-release: release-sctl release-shirohad
+build-example:
+    {{build_cmd}} {{package-example}} {{target-plugin}}
+
+release-example:
+    {{build_cmd}} {{package-example}} {{target-plugin}} --release
+
+build: build-sctl build-shirohad build-example
+release: release-sctl release-shirohad release-example
 
 install-dev:
     cargo binstall cargo-deny cargo-nextest cargo-update cargo-llvm-cov -y --force
