@@ -12,7 +12,7 @@ repository = "https://github.com/Hobr/Shiroha"
 
 [workspace.dependencies]
 # 异步运行时
-tokio = { version = "1.52.3", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 tokio-util = { version = "0.7", features = ["time", "rt"] }
 async-trait = "0.1"
 
