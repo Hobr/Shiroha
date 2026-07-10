@@ -24,7 +24,7 @@
             else if builtins.pathExists ./rust-toolchain then
               rust.fromRustupToolchainFile ./rust-toolchain
             else
-              rust.stable."1.96.1".default.override {
+              rust.stable."1.97.0".default.override {
                 extensions = [
                   "rust-src"
                   "rustfmt"
