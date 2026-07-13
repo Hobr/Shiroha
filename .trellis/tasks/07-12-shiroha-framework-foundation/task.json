@@ -3,7 +3,7 @@
   "name": "shiroha-framework-foundation",
   "title": "Shiroha framework foundation and v0.1 architecture",
   "description": "Plan and implement the v0.1 local FSM runtime, WASM Component adapter, Rust guest SDK, safety limits, tests, benchmarks, and examples.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

@@ -20,6 +20,9 @@ dispatch, WASI capabilities, authorization, and the controller/node roadmap.
 - The project starts at `0.1.0`; `1.0.0` is the production-ready target.
 - v0.1 is core-first: local Host execution, the WASM Component adapter, the
   canonical WIT contract, a Rust guest SDK, tests, benchmarks, and examples.
+- The official v0.1 Rust guest target is `wasm32-wasip2`, but the Host contract
+  is target-neutral: it accepts any final Component implementing the canonical
+  Shiroha world and satisfying the active import policy.
 - Distributed scheduling, Controller/Node services, role-specific Cargo
   features, and `sctl` remain required pre-v1 milestones but are not v0.1
   deliverables.
@@ -162,9 +165,27 @@ payloads as opaque bytes and does not implement JSON-specific patch semantics.
 Future codecs or machine/plugin-specific typed WIT interfaces are optional
 extensions to, not replacements for, the core ABI.
 
-v0.1 provides no WASI imports. Components execute only against the canonical
-Shiroha-defined interface. WASI support must later enter through explicit task
-authorization and capability policy rather than ambient Host authority.
+The official Rust guest SDK and example target `wasm32-wasip2`, which emits a
+Component directly. Ordinary Rust `std` builds for this target declare standard
+WASI 0.2 imports even when guest business code does not call WASI explicitly.
+The v0.1 Host therefore registers Wasmtime's standard WASI interfaces and uses
+a minimally configured default context that does not explicitly inherit Host
+directories, environment variables, command-line arguments, or networking.
+Unsupported non-WASI imports and unsupported WASI interfaces still fail during
+preparation with a structured error. The Host must not ignore missing imports
+or replace them with trap stubs.
+
+The runtime does not require artifacts to have been produced by a specific
+compiler target. A Component built through `wasm32-unknown-unknown`, another
+language, or another compatible toolchain may run if its final interface
+implements the canonical Shiroha world and all declared imports can be
+satisfied by the active Host profile.
+
+Per-task WASI grants, configurable capability profiles, and task-creation
+authorization remain pre-v1 work. The v0.1 baseline must keep import discovery
+and context construction behind explicit runtime boundaries so that the later
+policy layer can restrict or grant capabilities without changing Core FSM
+semantics.
 
 Pre-v1 WIT and IR may change incompatibly. The runtime must still wrap
 structural Component/interface mismatches in a clear load-time error when the
@@ -179,16 +200,17 @@ The repository must provide:
   definition/input/output types; and
 - one buildable Rust example Component reused as an end-to-end fixture.
 
-The no-WASI guest build pipeline must be proven before the SDK surface is
-committed. Official guest SDKs for other languages are deferred, although those
-languages may consume the WIT directly.
+The WASIp2 guest profile and its toolchain-generated WASI imports must be proven
+against the v0.1 Host linker before the SDK surface is committed. Official guest
+SDKs for other languages are deferred, although those languages may consume the
+WIT directly.
 
 ### R8. Runtime Safety
 
 Every guest call and run must have configurable, finite hard limits for:
 
-- instruction/fuel budget;
-- wall-clock deadline/interruption;
+- one enforced CPU/interruption budget: low-overhead epoch deadline by default,
+  or deterministic fuel budgeting when explicitly selected;
 - linear-memory growth and runtime resource counts;
 - payload size; and
 - run-to-completion microsteps.
@@ -196,6 +218,10 @@ Every guest call and run must have configurable, finite hard limits for:
 Limits must never become unlimited implicitly. Exhaustion returns a structured
 `ResourceLimitExceeded` runtime fault, aborts the current step, and preserves
 the last committed snapshot.
+
+v0.1 does not implement tenant quotas, distributed budget propagation, dynamic
+resource scheduling, or Controller administration for limits. Those production
+governance features are later milestones.
 
 ### R9. Host Library API And Concurrency
 
@@ -250,7 +276,7 @@ The architecture must leave clear boundaries for these later deliverables:
 - Cargo features `full`, `controller`, and `node` controlling role scope;
 - an `sctl` CLI that operates exclusively through the Controller API;
 - text definition adapters;
-- WASI plus task-creation authorization and capability policy; and
+- per-task WASI authorization and configurable capability policy; and
 - plugins for middleware, aggregation, action functions, and communication
   protocols.
 
@@ -259,11 +285,15 @@ public APIs that cannot yet be tested end to end.
 
 ## Acceptance Criteria
 
-- [ ] **AC1:** The canonical WIT, Rust guest SDK, no-WASI example Component, and
-      Host bindings build together using a documented reproducible pipeline.
+- [ ] **AC1:** The canonical WIT, Rust guest SDK, and official
+      `wasm32-wasip2` example Component build together using a documented
+      reproducible pipeline; inspection records its toolchain-generated imports,
+      and the baseline Wasmtime WASI linker instantiates it successfully.
 - [ ] **AC2:** Loading the example produces Host-owned IR and rejects malformed
       definitions, duplicate IDs, missing functions, invalid targets, and
-      incompatible Component shapes before execution.
+      incompatible Component shapes before execution. Separate negative tests
+      prove that unsupported WASI and non-WASI imports are rejected at load
+      time rather than ignored or replaced by trap stubs.
 - [ ] **AC3:** Startup and normal/self-transition tests prove the fixed callback
       order and atomic commit behavior.
 - [ ] **AC4:** Guard ordering, normal targets, action failure targets, terminal
@@ -279,8 +309,9 @@ public APIs that cannot yet be tested end to end.
 - [ ] **AC8:** JSON payload envelopes round-trip bytes, content type, and schema
       ID without Core interpretation or codec-specific patching.
 - [ ] **AC9:** Infinite loops, memory growth, oversized payloads, deadlines,
-      fuel exhaustion, and excessive microsteps are stopped and classified as
-      structured resource-limit faults.
+      optional fuel exhaustion, and excessive microsteps are stopped and
+      classified as structured resource-limit faults. Tests cover both the
+      default epoch mode and the optional deterministic fuel mode.
 - [ ] **AC10:** The adapter and execution traits have Core-only tests proving
       that a future non-WASM adapter/executor can use the same IR without a
       Wasmtime dependency.
@@ -290,13 +321,15 @@ public APIs that cannot yet be tested end to end.
       guest, compilation, and instantiation paths; the v0.1 baseline and
       regression threshold are recorded before release.
 - [ ] **AC13:** Documentation states the v0.1 scope, pre-v1 Host/Component
-      same-release requirement, deferred WASI/plugin/distributed features, and
-      the route from v0.1 to v1.0.
+      same-release requirement, baseline WASI behavior, deferred capability
+      policy/plugin/distributed features, and the route from v0.1 to v1.0.
 
 ## Out Of Scope For v0.1
 
 - JSON/TOML definition adapter implementation.
-- WASI imports or capability enforcement.
+- Per-task WASI authorization, configurable capability grants, and full
+  capability-policy enforcement. The minimal v0.1 WASI Host profile is in
+  scope only to support ordinary `wasm32-wasip2` Rust Components.
 - Official non-Rust guest SDKs.
 - Separately deployed action/callback Components.
 - Dynamic plugin loading, marketplaces, or hot reload.

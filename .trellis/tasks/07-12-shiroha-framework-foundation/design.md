@@ -12,9 +12,10 @@ This design covers the v0.1 local runtime only:
 - deterministic event processing, atomic commit, limits, tracing, tests, and
   benchmarks.
 
-Controller, Node, scheduler, `sctl`, WASI, text adapters, and dynamic plugins
-are future consumers of the boundaries defined here, not placeholder v0.1
-services.
+Controller, Node, scheduler, `sctl`, configurable WASI capability policy, text
+adapters, and dynamic plugins are future consumers of the boundaries defined
+here, not placeholder v0.1 services. A minimal Wasmtime WASI profile is part of
+v0.1 so ordinary Rust `wasm32-wasip2` Components can be instantiated.
 
 ## 2. Design Principles
 
@@ -26,7 +27,9 @@ services.
 4. **Committed state is explicit.** Guest memory is disposable and is never the
    task snapshot.
 5. **One deterministic order.** v0.1 avoids configurable lifecycle variants.
-6. **No ambient authority.** The v0.1 Component world has no WASI imports.
+6. **Minimal baseline authority.** The v0.1 Host satisfies standard WASI imports
+   emitted by the Rust toolchain, but its default context does not explicitly
+   inherit Host directories, environment, arguments, or networking.
 7. **Measure the hot path.** Preparation is explicit so event dispatch never
    recompiles/revalidates an artifact.
 
@@ -44,15 +47,16 @@ crates/
     examples/
       local-runner.rs          # Host library usage example, not a CLI product
 components/
-  example-machine/             # standalone no-WASI Rust Component fixture
+  example-machine/             # WASIp2 Component using the baseline WASI profile
 spikes/
-  no-wasi-component/           # removed or folded into fixtures after Phase 0
-  no-wasi-host/                # minimal empty-linker validation spike
+  wasip2-import-profile/       # removed or folded into fixtures after Phase 0
+  empty-linker-host/           # minimal linker/import-policy validation spike
 ```
 
 `components/example-machine` should be excluded from normal Host workspace
 builds if target-specific generated bindings cannot compile for the Host. The
-no-WASI build spike decides whether it can safely remain a workspace member.
+WASIp2 import-profile spike records the standard imports produced by the pinned
+toolchain and proves that the minimal Host profile satisfies them.
 
 The `shiroha` facade is the primary user dependency. Lower-level crates remain
 public enough for advanced embedding but do not duplicate facade behavior.
@@ -309,10 +313,17 @@ duplicate, or kind-mismatched logical IDs before startup. The Rust guest SDK
 provides dispatcher helpers so component authors implement Rust functions or a
 trait map instead of hand-writing string matching.
 
+The official Rust SDK builds this world with `wasm32-wasip2`. The runtime does
+not encode that Rust target in its artifact contract; the final Component type
+and import set are authoritative.
+
 ## 8. Validation
 
 Loading performs all structural checks before a machine can start:
 
+- final artifact is a Component implementing the canonical Shiroha world;
+- every Component import is satisfied by the active Host profile (v0.1 links
+  supported standard WASI interfaces and rejects other imports);
 - machine, state, event, and function ID validity/limits;
 - unique state/function IDs;
 - the initial state exists and terminal-state invariants are valid;
@@ -383,24 +394,34 @@ Create one reusable Wasmtime `Engine` configured with:
 
 - Component Model support;
 - Wasmtime async support used by generated typed calls;
-- fuel consumption; and
-- epoch interruption.
+- epoch interruption for the default CPU-budget mode; or
+- fuel consumption for the explicitly selected deterministic CPU-budget mode.
+
+`ShirohaRuntime` selects one CPU-budget mode when it builds the Engine. The
+default Engine uses epoch interruption and does not enable fuel instrumentation.
+The optional fuel mode builds a fuel-enabled Engine for deterministic budgeting.
+v0.1 does not require both mechanisms to be active in one Engine.
 
 `WasmMachineLoader::prepare(bytes)`:
 
 1. compiles the Component once;
-2. creates a linker with no WASI interfaces;
-3. creates an `InstancePre` to resolve imports/type matching once;
-4. creates a limited temporary Store/instance;
-5. calls `definition.get-machine`;
-6. converts WIT values to Host IR and validates it; and
-7. returns `PreparedMachine` holding the validated IR and an executor factory
+2. inspects and records the final Component imports for diagnostics and future
+   capability-policy integration;
+3. creates a linker with Wasmtime's standard WASI interfaces, does not register
+   application-specific external interfaces, and never defines unknown imports
+   as trap stubs;
+4. creates an `InstancePre` to resolve imports/type matching once;
+5. creates a limited temporary Store/instance;
+6. calls `definition.get-machine`;
+7. converts WIT values to Host IR and validates it; and
+8. returns `PreparedMachine` holding the validated IR and an executor factory
    backed by the Component/`InstancePre`.
 
 ### 10.2 Per-Instance Store
 
 Each local machine owns one Wasmtime Store and instance. Store data contains:
 
+- the Wasmtime WASI context and resource table;
 - `StoreLimits`;
 - current invocation kind/function ID for diagnostics;
 - deadline/fuel metadata; and
@@ -415,18 +436,19 @@ Initial finite defaults, subject to calibration in the implementation spike:
 
 | Limit | Initial default |
 |---|---:|
-| Fuel per guest call | 10,000,000 units |
+| CPU budget mode | Epoch deadline |
 | Guest wall time per call | 1 second |
+| Optional deterministic fuel | 10,000,000 units |
 | Linear memory per Store | 64 MiB |
 | Payload envelope data | 1 MiB |
 | Internal events emitted per hook | 256 |
 | Run-to-completion microsteps | 1,024 |
 
-Use `StoreLimitsBuilder` for memory/table/instance limits, `Store::set_fuel` for
-deterministic CPU accounting, and epoch deadlines for coarse interruption. A
-Tokio deadline controls the public future, but dropping a timed-out future is
-not considered sufficient; epoch interruption must cause guest execution to
-trap.
+Use `StoreLimitsBuilder` for memory/table/instance limits. The default mode uses
+epoch deadlines for low-overhead interruption; deterministic mode uses
+`Store::set_fuel`. A Tokio deadline controls the public future, but dropping a
+timed-out future is not considered sufficient: the selected Wasmtime mechanism
+must stop guest execution.
 
 One process-level epoch ticker is owned by the WASM runtime and shuts down with
 it. Do not spawn one untracked ticker per machine or invocation.
@@ -465,7 +487,8 @@ Key types:
 - `ShirohaRuntime`: owns Wasmtime engine/ticker/global configuration;
 - `PreparedMachine`: immutable validated definition plus executor factory;
 - `MachineInstance`: Host snapshot, queue, and one guest executor;
-- `RuntimeLimits`/`LoadLimits`: finite, validated configuration;
+- `RuntimeLimits`/`LoadLimits`: finite, validated configuration, including an
+  epoch-default or deterministic-fuel CPU budget;
 - `RunReport`: start/end snapshot metadata, transition summaries, unhandled
   inputs, terminal/fault outcome, and counters; and
 - typed load/start/dispatch errors.
@@ -517,25 +540,33 @@ subscriber/exporter without changing Core instrumentation.
 
 ## 14. Build And Guest Tooling
 
-The first implementation checkpoint proves this no-WASI pipeline:
+The official Rust guest path uses the existing native Component target:
 
 1. generate Rust guest bindings from the canonical WIT with `wit-bindgen`;
-2. compile the example for `wasm32-unknown-unknown`;
-3. wrap it with `wasm-tools component new`;
-4. inspect/validate the Component; and
-5. instantiate it with no WASI linker entries.
+2. compile the example directly with `cargo build --target wasm32-wasip2`;
+3. inspect the final Component using `wasm-tools component wit`;
+4. record the standard WASI imports emitted by the pinned Rust toolchain and
+   reject unexpected application-specific imports; and
+5. instantiate it with the minimal v0.1 Wasmtime WASI linker/context.
 
-If `std` introduces unwanted imports, `shiroha-guest` and the fixture use
-`no_std + alloc`. Do not fall back to WASIp2 merely to make the fixture build;
-that would violate the approved v0.1 scope.
+The SDK may use ordinary Rust `std`. v0.1 does not promise that every WASI
+operation is authorized or useful: the default Host context provides no
+explicit filesystem preopens, inherited environment/arguments, or networking.
+CI validates the final artifact and the Host linker together rather than
+relying on a source-code convention.
 
 Expected infrastructure changes:
 
-- add `wasm32-unknown-unknown` to Rust/Nix targets;
-- install/pin `wasm-tools` in development tooling;
-- replace aspirational `justfile` package commands with commands matching
-  actual crates and the proven fixture build; and
-- remove or feature-gate v0.1 runtime reliance on `wasmtime-wasi`.
+- retain/pin `wasm32-wasip2` in Rust and Nix targets;
+- install/pin `wasm-tools` for validation and WIT inspection;
+- replace aspirational `justfile` package commands with commands matching the
+  actual guest and Host crates; and
+- include `wasmtime-wasi` only in the WASM adapter/runtime dependency graph.
+
+Alternative toolchains, including `wasm32-unknown-unknown` followed by
+componentization, are compatible when their final Component implements the
+same world and the Host can satisfy their imports, but they are not the official
+v0.1 Rust SDK build path.
 
 ## 15. Testing And Benchmarks
 
@@ -554,6 +585,10 @@ Expected infrastructure changes:
 ### WASM Integration Tests
 
 - valid example definition and full local run;
+- WASIp2 example's standard toolchain imports instantiate with the baseline
+  Wasmtime WASI linker/context;
+- Components declaring unsupported WASI or non-WASI imports fail during
+  preparation;
 - missing/duplicate logical functions;
 - guest-declared errors and action business failures;
 - guest trap;
@@ -605,8 +640,9 @@ Future Controller/Node work reuses:
 
 ## 18. Rollback Boundaries
 
-- The no-WASI build proof is a hard gate. If it fails, revise guest tooling
-  before implementing the adapter; do not weaken the runtime contract silently.
+- The WASIp2 linker proof is a hard gate. If the minimal Wasmtime WASI context
+  cannot satisfy the official example without explicitly inheriting broad Host
+  authority, return to design before expanding the default context.
 - `shiroha-core` must pass all tests using a mock executor before Wasmtime is
   integrated. If the Wasmtime layer forces IR changes, return to design review.
 - WIT is committed only after a minimal Host and guest round trip proves all

@@ -3,33 +3,37 @@
 ## Objective
 
 Implement the approved v0.1 local runtime described by `prd.md` and
-`design.md`. Do not implement Controller, Node, scheduler, `sctl`, WASI, text
-adapters, or dynamic plugins in this task.
+`design.md`. Do not implement Controller, Node, scheduler, `sctl`, configurable
+WASI capability policy, text adapters, or dynamic plugins in this task. A
+minimal Wasmtime WASI profile is included only to satisfy ordinary Rust
+`wasm32-wasip2` Components.
 
 The work remains one task because the deliverable is one integrated vertical
 slice: the WIT contract, guest fixture, Host IR, engine, and Wasmtime adapter
 must prove each other end to end. Each phase below is nevertheless an explicit
 review and rollback boundary.
 
-## Phase 0. Prove The No-WASI Component Toolchain
+## Phase 0. Prove The WASIp2 Baseline WASI Profile
 
 This is a hard gate before committing the full SDK or runtime interface.
 
-- [ ] Add a minimal temporary WIT world containing one exported function and no
+- [x] Add a minimal temporary WIT world containing one exported function and no
       imports.
-- [ ] Create isolated `spikes/no-wasi-component` and `spikes/no-wasi-host`
+- [x] Create isolated `spikes/wasip2-import-profile` and
+      `spikes/empty-linker-host`
       packages that do not depend on the final crate architecture.
-- [ ] Build the minimal Rust guest with `wit-bindgen` for
-      `wasm32-unknown-unknown`.
-- [ ] Wrap the core module with `wasm-tools component new`.
-- [ ] Inspect the generated Component and prove that its world contains no WASI
-      imports.
-- [ ] Instantiate and call it from a tiny Wasmtime 46 smoke test using a linker
-      with no WASI registrations.
-- [ ] Determine whether the guest SDK can use `std` on this target or must be
-      `no_std + alloc`; record the result in
+- [x] Build the minimal Rust guest directly with `wit-bindgen` and
+      `wasm32-wasip2`.
+- [x] Inspect the generated Component and record the standard WASI 0.2 imports
+      emitted by an ordinary Rust `std` build.
+- [ ] Instantiate and call it from a tiny Wasmtime 46 smoke test using the
+      minimal Wasmtime WASI linker and a context with no explicit Host preopens,
+      inherited environment/arguments, or networking.
+- [ ] Add a negative probe Component with one unsupported import and prove that
+      preparation rejects it rather than silently ignoring or stubbing it.
+- [x] Record the observed Rust `std` import behavior in
       `research/guest-component-build.md`.
-- [ ] Add/pin the proven target and tool commands in `rust-toolchain.toml`,
+- [ ] Pin the proven target and inspection commands in `rust-toolchain.toml`,
       `flake.nix`, and development tooling.
 
 Validation:
@@ -38,12 +42,13 @@ Validation:
 just build-example
 wasm-tools validate <component-path>
 wasm-tools component wit <component-path>
-cargo test --manifest-path spikes/no-wasi-host/Cargo.toml
+cargo test --manifest-path spikes/empty-linker-host/Cargo.toml
 ```
 
-Rollback point: if a no-WASI custom-interface Component cannot be produced with
-the pinned toolchain, stop and return to design review. Do not use WASIp2 or add
-WASI Host imports as an unreviewed workaround.
+Rollback point: if the ordinary WASIp2 example requires explicit inheritance of
+broad Host authority beyond the minimal default context, stop and return to
+design review. Do not add Host preopens/network grants or unknown-import trap
+stubs as an unreviewed workaround.
 
 After the proof passes, remove the temporary spike packages or fold their
 minimal code into the real fixture/adapter tests without keeping duplicate
@@ -60,8 +65,9 @@ implementations.
 - [ ] Add only direct dependencies used by each crate; avoid a facade crate that
       drags Wasmtime into `shiroha-core`.
 - [ ] Enable the Wasmtime features required by the proven async Component path,
-      fuel, epoch interruption, and typed bindings.
-- [ ] Keep `wasmtime-wasi` out of v0.1 crate dependency graphs.
+      selectable epoch/fuel CPU budgeting, and typed bindings.
+- [ ] Keep `wasmtime-wasi` isolated to the WASM adapter/runtime dependency
+      graph.
 - [ ] Reconcile the `rust-version = 1.95.0` declaration with the Rust 1.97.0
       development toolchain and document the chosen MSRV policy.
 - [ ] Replace nonexistent-package `justfile` recipes with commands that match
@@ -142,7 +148,7 @@ acceptance criterion passes with the mock executor.
 - [ ] Export fixed definition/guard/action/callback dispatcher functions.
 - [ ] Include a function catalog that permits complete Host validation.
 - [ ] Implement `shiroha-guest` helpers/builders and logical dispatcher support.
-- [ ] Keep the SDK usable in the no-WASI build mode proven in Phase 0.
+- [ ] Keep the SDK within the WASIp2 baseline WASI profile proven in Phase 0.
 - [ ] Implement the representative example machine with guards, callbacks,
       normal target, failure target, internal event, terminal completion, and
       context replacement.
@@ -164,17 +170,23 @@ the interface must cover every PRD behavior without Wasmtime-specific leakage.
 
 ## Phase 5. Implement The Wasmtime Adapter And Executor
 
-- [ ] Build the reusable Wasmtime Engine with Component Model, async calls,
-      fuel consumption, and epoch interruption.
+- [ ] Build the reusable Wasmtime Engine with Component Model, async calls, and
+      a runtime-selected CPU budget mode: epoch by default or deterministic
+      fuel when requested.
 - [ ] Implement a process-owned epoch ticker with deterministic shutdown.
-- [ ] Compile each artifact once and create an `InstancePre` with an empty
-      no-WASI linker.
+- [ ] Compile each artifact once and create an `InstancePre` with the baseline
+      Wasmtime WASI linker.
 - [ ] Load the definition through a limited temporary Store/instance.
+- [ ] Inspect and record Component imports before instantiation; satisfy
+      supported standard WASI imports and reject unsupported WASI or non-WASI
+      imports with `UnsupportedImport`.
+- [ ] Build a minimally configured WASI context and never use unknown-import
+      trap stubs in v0.1.
 - [ ] Convert WIT definitions to Host IR and run Core validation.
 - [ ] Implement the executor factory and one limited Store/instance per active
       machine.
 - [ ] Implement typed async guard/action/callback calls from generated bindings.
-- [ ] Reset fuel and epoch deadline for every guest call.
+- [ ] Reset the selected fuel or epoch deadline for every guest call.
 - [ ] Apply Store memory/table/instance limits and Host payload/event limits.
 - [ ] Ensure public Tokio deadlines trigger Wasmtime interruption rather than
       merely dropping a still-running guest future.
@@ -234,7 +246,7 @@ Host modules, or `shiroha-core` internals.
 - [ ] Verify required tracing spans/fields and that payload bytes are absent by
       default.
 - [ ] Update README with v0.1 scope, architecture, library example, guest build,
-      limits, no-WASI policy, and pre-v1 compatibility statement.
+      limits, baseline WASI profile, and pre-v1 compatibility statement.
 - [ ] Document the pre-v1 roadmap without presenting deferred Controller/Node
       APIs as implemented.
 - [ ] Replace placeholder backend Trellis specs with conventions actually
@@ -274,7 +286,10 @@ Final manual review:
 
 - [ ] Every PRD acceptance criterion has a named automated test, benchmark, or
       documented release check.
-- [ ] No WASI interface is registered or imported by the v0.1 example.
+- [ ] The v0.1 example's standard WASI imports are recorded and satisfied by a
+      minimally configured context.
+- [ ] Components with unsupported WASI or non-WASI imports fail during
+      preparation.
 - [ ] `shiroha-core` remains runtime-neutral.
 - [ ] No deferred Controller/Node/plugin API was added without an executable
       v0.1 consumer.
@@ -287,7 +302,7 @@ Final manual review:
 
 | Area | Likely files | Rollback trigger |
 |---|---|---|
-| Guest toolchain | `rust-toolchain.toml`, `flake.nix`, `justfile`, Component manifest | No-WASI proof fails |
+| Guest toolchain | `rust-toolchain.toml`, `flake.nix`, `justfile`, Component manifest | WASIp2 baseline linker proof fails |
 | Canonical ABI | `wit/shiroha-machine/world.wit`, guest bindings | Required types do not lower/lift or Host/guest diverge |
 | Core semantics | `shiroha-core` engine/IR | Mock tests cannot prove deterministic atomic behavior |
 | Wasmtime limits | adapter runtime/store code | Guest cannot be interrupted/bounded reliably |
