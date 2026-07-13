@@ -23,9 +23,9 @@
 2. The current `justfile` is aspirational and must be revised to match the
    core-first v0.1 scope; it is not evidence that controller/CLI crates already
    exist.
-3. The no-WASI decision conflicts with the current guest target and example
-   command. Guest build tooling needs an early proof before the main runtime is
-   implemented.
+3. The existing `wasm32-wasip2` target matches the selected official Rust guest
+   target, but the current example recipe is unproven. An early spike must show
+   that the final custom-world Component has zero WASI imports.
 4. `wasmtime-wasi` is not required by the v0.1 execution path even though it is
    declared as a workspace dependency.
 5. The implementation plan must reconcile the declared MSRV (`1.95.0`) with the

@@ -29,16 +29,18 @@
 
 ## Recommended Runtime Shape
 
-1. Build one Wasmtime `Engine` with Component Model, fuel consumption, epoch
-   interruption, and the required async feature enabled.
+1. Build one Wasmtime `Engine` with Component Model and the required async
+   feature enabled. Select epoch interruption by default or fuel consumption
+   for an explicitly requested deterministic CPU-budget mode; v0.1 does not
+   require both in one Engine.
 2. Compile and validate each Component once into a prepared machine artifact.
 3. Use a prepared linker/`InstancePre` so task instances do not redo import
    type-checking and name lookup.
 4. Create one `Store` per active local machine instance. Store data owns
    `StoreLimits`, invocation metadata, and resource-limit state.
-5. Reset fuel and epoch deadline for every guest call. Apply a Tokio deadline as
-   an outer safety/reporting boundary while relying on Wasmtime interruption to
-   stop guest code.
+5. Reset the selected epoch deadline or fuel budget for every guest call. Apply
+   a Tokio deadline as an outer safety/reporting boundary while relying on the
+   selected Wasmtime mechanism to stop guest code.
 6. Treat fuel exhaustion, epoch interruption, memory-limit failure, canonical
    ABI violations, and traps as structured runtime faults.
 7. Keep Component compilation and instantiation benchmarks separate from warm
