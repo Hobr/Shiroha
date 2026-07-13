@@ -38,7 +38,7 @@ build: build-sctl build-shirohad build-example
 release: release-sctl release-shirohad release-example
 
 install-dev:
-    cargo binstall cargo-deny cargo-nextest cargo-update cargo-llvm-cov -y --force
+    cargo binstall cargo-deny cargo-nextest cargo-update cargo-llvm-cov wasmtime-cli wasm-tools -y --force
     cargo deny fetch
 
 check:
