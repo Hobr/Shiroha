@@ -1,51 +1,51 @@
 # Logging Guidelines
 
-> How logging is done in this project.
-
----
+> Structured tracing without application payload disclosure.
 
 ## Overview
 
-<!--
-Document your project's logging conventions here.
+Libraries emit structured `tracing` spans/events and never install a subscriber
+or print operational diagnostics. The embedding application chooses formatting,
+export, and OpenTelemetry integration.
 
-Questions to answer:
-- What logging library do you use?
-- What are the log levels and when to use each?
-- What should be logged?
-- What should NOT be logged (PII, secrets)?
--->
+## Spans And Levels
 
-(To be filled by the team)
+| Name / level | Required use |
+|---|---|
+| `shiroha.prepare` | Component preparation; field `artifact_bytes` |
+| `shiroha.validate` | Definition validation; machine ID and state count |
+| `shiroha.start` | Initial machine entry; machine ID |
+| `shiroha.dispatch` | Public input run; machine/instance/state/sequence |
+| `shiroha.step` | One run-to-completion microstep |
+| `shiroha.guest.guard` | Guard call; function locator |
+| `shiroha.guest.action` | Action call; function locator |
+| `shiroha.guest.callback` | Callback call; function locator |
+| `info!` | Successful preparation and committed transitions |
+| `warn!` | Validation warnings and runtime step faults |
+| `debug!` | Unhandled inputs and low-level executor state |
 
----
+Do not emit `error!` merely because a library returns an error; the application
+decides whether the returned failure is operationally fatal.
 
-## Log Levels
+## Structured Fields
 
-<!-- When to use each level: debug, info, warn, error -->
+Use identifiers and bounded scalar metadata: machine ID, instance ID, state,
+sequence, transition index, function locator, import/state count, artifact
+length, fault kind, and executor-poisoned flag. Use `#[instrument(skip_all)]`
+and declare safe fields explicitly.
 
-(To be filled by the team)
+## What Not To Log
 
----
+Never record payload bytes, application context, guest error payloads, WASI
+environment values, credentials, or inherited process data. Do not derive a
+field by formatting a whole `HostInput`, snapshot, or hook input.
 
-## Structured Logging
+```rust
+// Wrong: context may contain secrets.
+debug!(?input, ?snapshot, "dispatch");
 
-<!-- Log format, required fields -->
+// Correct: bounded identifiers only.
+debug!(state = %snapshot.state, sequence = snapshot.sequence, "dispatch");
+```
 
-(To be filled by the team)
-
----
-
-## What to Log
-
-<!-- Important events to log -->
-
-(To be filled by the team)
-
----
-
-## What NOT to Log
-
-<!-- Sensitive data, PII, secrets -->
-
-(To be filled by the team)
+Tests and manual review must confirm payload data is absent from default spans.

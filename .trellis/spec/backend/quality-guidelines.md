@@ -108,7 +108,9 @@ paths require Criterion benchmarks and a recorded reference environment.
 - Can any fault path leak staged state/events or retain oversized guest data?
 - Does Core remain runtime/format/transport neutral?
 - Are standard WASI imports intentional and satisfied by the minimal context?
-- Are unsupported imports rejected before interface loading?
+- Are unknown interfaces inside an otherwise recognized WASI family, newer
+  unsupported Preview 2 patches, and non-WASI imports all rejected as
+  `UnsupportedImports` before interface loading?
 - Are error variants preserved through the facade?
 - Does `git diff --check` pass, and is the diff free of generated/unrelated
   files?
