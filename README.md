@@ -1,51 +1,50 @@
 # Shiroha
 
-Shiroha is a WebAssembly-extensible workflow runtime built around deterministic
-finite-state machines. The v0.1 line is a local Rust library: a WASM Component
-defines a machine and implements its guards, actions, and callbacks, while the
-Host owns execution order, committed state, event queues, validation, resource
-limits, and diagnostics.
+Shiroha 是一个可通过 WebAssembly 扩展、以确定性有限状态机为核心的工作流运行时。
+v0.1 系列以本地 Rust 库的形式提供：WASM Component 负责定义状态机并实现
+Guard、Action 与 Callback，Host 则负责执行顺序、已提交状态、事件队列、校验、
+资源限制和诊断。
 
-## v0.1 Scope
+## v0.1 范围
 
-Implemented in this repository:
+本仓库已经实现：
 
-- a flat event-driven FSM with one active state;
-- ordered guards and fixed exit → action → entry lifecycle semantics;
-- atomic Host-owned context/state commits and FIFO internal events;
-- normal and business-failure targets;
-- logical timeout/cancellation inputs and observable unhandled events;
-- a runtime-neutral Core with adapter and executor boundaries;
-- a Wasmtime Component Model adapter using typed WIT calls;
-- a canonical WIT package, Rust guest SDK, and WASIp2 example Component;
-- finite epoch/fuel, wall-time, memory, payload, event, and microstep limits;
-- structured `tracing` spans; and
-- async Rust facade APIs and a runnable example.
+- 仅包含一个活动状态的扁平事件驱动 FSM；
+- 按声明顺序求值的 Guard，以及固定的 exit -> action -> entry 生命周期语义；
+- 由 Host 持有的 Context/State 原子提交和 FIFO 内部事件队列；
+- 正常目标与业务失败目标；
+- 逻辑超时/取消输入，以及可观测的未处理事件；
+- 具有 Adapter 和 Executor 边界、与具体运行时无关的 Core；
+- 使用类型化 WIT 调用的 Wasmtime Component Model Adapter；
+- 规范 WIT 包、Rust Guest SDK 和 WASIp2 示例 Component；
+- 有限的 Epoch/Fuel、墙钟时间、内存、Payload、事件和微步限制；
+- 结构化 `tracing` Span；
+- 异步 Rust Facade API 和可运行示例。
 
-The Controller, stateless Nodes, distributed scheduler, `sctl`, text adapters,
-dynamic plugins, task authorization, and configurable capability policy are
-pre-v1 milestones, not v0.1 placeholder APIs.
+Controller、无状态 Node、分布式调度器、`sctl`、文本 Adapter、动态插件、Task
+授权和可配置的 Capability 策略均属于 v1 前里程碑，而不是 v0.1 中无法执行的占位
+API。
 
-## Architecture
+## 架构
 
 ```text
-Application
+应用程序
     ↓
-shiroha facade
-    ├── shiroha-core             Host IR, validation, FSM engine
-    └── shiroha-adapter-wasm     Wasmtime loader and guest executor
+shiroha Facade
+    ├── shiroha-core             Host IR、校验、FSM 引擎
+    └── shiroha-adapter-wasm     Wasmtime 加载器和 Guest Executor
             ↓
       WASM Component
-      ├── machine definition
-      ├── guards
-      ├── actions
-      └── callbacks
+      ├── 状态机定义
+      ├── Guard
+      ├── Action
+      └── Callback
 ```
 
-The guest never runs the state-machine loop. Guest memory may be reused for the
-warm path, but it is disposable and is not authoritative workflow state.
+Guest 从不运行状态机循环。运行时可以为热路径复用 Guest 内存，但这些内存可以随时
+丢弃，也不是工作流状态的权威来源。
 
-## Host Usage
+## Host 使用方式
 
 ```rust,no_run
 use shiroha::core::{HostInput, PayloadEnvelope};
@@ -71,71 +70,67 @@ println!("snapshot: {:?}", machine.snapshot());
 # }
 ```
 
-`LocalMachine::dispatch` requires `&mut self`, so one instance cannot process
-reentrant or concurrent events without an application-owned actor/mutex
-boundary.
+`LocalMachine::dispatch` 需要 `&mut self`，因此如果应用程序没有自行提供 Actor 或
+Mutex 边界，同一个实例就无法处理重入或并发事件。
 
-## Guest Components
+## Guest Component
 
-The official Rust guest target is `wasm32-wasip2`. The canonical contract is
-[`wit/shiroha-machine/world.wit`](wit/shiroha-machine/world.wit), and
-`shiroha-guest` provides generated types, a `MachineGuest` trait, helpers, and
-the `export_machine!` macro.
+官方 Rust Guest 目标是 `wasm32-wasip2`。规范合同位于
+[`wit/shiroha-machine/world.wit`](wit/shiroha-machine/world.wit)，
+`shiroha-guest` 提供生成类型、`MachineGuest` Trait、辅助函数和
+`export_machine!` 宏。
 
-Build and inspect the example:
+构建并检查示例：
 
 ```bash
 just build-example
 just validate-example
 ```
 
-The resulting artifact is
-`target/components/wasm32-wasip2/debug/example_machine.wasm`.
+生成产物位于
+`target/components/wasm32-wasip2/debug/example_machine.wasm`。
 
-### Baseline WASI Profile
+### 基线 WASI 配置
 
-Ordinary Rust `std` Components built for `wasm32-wasip2` declare standard WASI
-0.2 imports even when business code does not explicitly use WASI. v0.1 links
-those standard interfaces through `wasmtime-wasi`.
+使用 `wasm32-wasip2` 构建的普通 Rust `std` Component 即使没有显式使用 WASI，
+也会声明标准 WASI 0.2 Import。v0.1 通过 `wasmtime-wasi` 链接这些标准接口。
 
-Each Store starts from `WasiCtxBuilder::new()`:
+每个 Store 都从 `WasiCtxBuilder::new()` 开始构建：
 
-- stdin is closed and stdout/stderr are sinks;
-- no Host environment variables or arguments are inherited;
-- no filesystem directories are preopened; and
-- socket addresses and name lookup are denied by default.
+- stdin 关闭，stdout/stderr 指向 Sink；
+- 不继承 Host 环境变量或命令行参数；
+- 不预打开任何文件系统目录；
+- 默认拒绝套接字地址和名称解析。
 
-The allowlist mirrors the exact stable Preview 2 interfaces registered by the
-pinned Wasmtime 46.0.1 linker through version 0.2.12. Unknown interfaces inside
-a recognized WASI family, newer unsupported patches, and non-WASI imports are
-rejected before machine interface loading. Per-task grants and authorization
-will replace this fixed baseline with a configurable capability policy before
-v1.0.
+Allowlist 精确对应固定版本 Wasmtime 46.0.1 Linker 注册的稳定 Preview 2 接口，
+最高支持到 0.2.12。已识别 WASI 家族中的未知接口、尚未支持的新 Patch 版本以及
+非 WASI Import，都会在加载状态机接口前被拒绝。v1.0 前会以可配置 Capability
+策略替换这一固定基线，实现按 Task 授权和权限授予。
 
-## Finite Defaults
+## 有限默认值
 
-| Limit | v0.1 default |
+| 限制 | v0.1 默认值 |
 |---|---:|
-| CPU mode | Epoch interruption |
-| Epoch budget | 100 ticks at a 10 ms process ticker, capped by wall time |
-| Guest wall time per call | 1 second |
-| Deterministic fuel mode | Configurable, finite units |
-| Linear memory per Store | 64 MiB |
-| Payload data | 1 MiB |
-| Payload content type / schema ID | 4 KiB each |
-| Events emitted per hook | 256 |
-| Run-to-completion microsteps | 1,024 |
+| CPU 模式 | Epoch 中断 |
+| Epoch 预算 | 100 Tick，进程 Tick 间隔 10 ms，并受墙钟时间上限约束 |
+| 每次 Guest 调用的墙钟时间 | 1 秒 |
+| 确定性 Fuel 模式 | 可配置的有限单位 |
+| 每个 Store 的线性内存 | 64 MiB |
+| Payload 数据 | 1 MiB |
+| Payload Content Type / Schema ID | 各 4 KiB |
+| 每个 Hook 可发出的事件数 | 256 |
+| Run-to-completion 微步数 | 1,024 |
 
-Selecting fuel mode builds a fuel-enabled Wasmtime Engine; the default Engine
-uses epoch interruption. Limit exhaustion is reported as a structured runtime
-fault and staged state/context/events are discarded.
+选择 Fuel 模式时会构建启用 Fuel 的 Wasmtime Engine；默认 Engine 使用 Epoch
+中断。限制耗尽会报告为结构化 Runtime Fault，暂存的 State、Context 和 Event
+会被丢弃。
 
-The first measured warm-path reference and regression policy are recorded in
-[`docs/benchmarks/v0.1-baseline.md`](docs/benchmarks/v0.1-baseline.md).
+第一份热路径测量基线和回归策略记录在
+[`docs/benchmarks/v0.1-baseline.md`](docs/benchmarks/v0.1-baseline.md)。
 
-## Development
+## 开发
 
-The repository requires Rust 1.97.0 and installs the `wasm32-wasip2` target.
+本仓库要求 Rust 1.97.0，并安装 `wasm32-wasip2` Target。
 
 ```bash
 nix develop
@@ -146,22 +141,19 @@ just test
 just fmt
 ```
 
-`just install-dev` pins Wasmtime CLI 46.0.1 and wasm-tools 1.253.0 to match the
-validated Component pipeline.
+`just install-dev` 会固定安装 Wasmtime CLI 46.0.1 和 wasm-tools 1.253.0，
+确保它们与已验证的 Component 流程保持一致。
 
-## Compatibility And Roadmap
+## 兼容性与路线图
 
-v0.x Host IR and WIT may change incompatibly. Until v1.0, build the Host and
-Components from the same Shiroha release/revision; there is no automatic ABI or
-snapshot migration promise.
+v0.x Host IR 和 WIT 可能发生不兼容变更。在 v1.0 前，请使用同一 Shiroha
+Release/Revision 构建 Host 与 Component；项目不承诺自动进行 ABI 或 Snapshot
+迁移。
 
-Planned before v1.0:
+从已经完成的 v0.1.0 本地库到生产可用 v1.0.0 的能力门禁路线记录在
+[`ROADMAP.md`](ROADMAP.md)。下一版本 v0.2.0 将交付首个本地 `shirohad`
+可执行程序、最小 REST 控制循环和 `sctl`。后续 v1 前门禁将依次加入 HSM 语义、
+`redb` 持久化、框架级安全与 WASI Capability、无状态 Node、分布式调度与聚合、
+真实 Adapter/扩展、OpenTelemetry、按角色打包以及兼容性加固。
 
-1. text definition adapters and plugin registries;
-2. Controller-owned task state, APIs, security checks, and OpenTelemetry;
-3. stateless execution Nodes and distributed action scheduling/aggregation;
-4. Cargo roles `full`, `controller`, and `node` plus the `sctl` client; and
-5. task-creation authorization with configurable WASI capability grants.
-
-Multi-controller consensus/failover is intentionally deferred until after the
-production-ready v1.0 release.
+多 Controller 共识和故障转移明确推迟到生产可用 v1.0 发布之后。
