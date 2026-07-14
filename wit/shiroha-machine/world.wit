@@ -1,0 +1,136 @@
+package shiroha:machine;
+
+interface types {
+    record payload {
+        data: list<u8>,
+        content-type: string,
+        schema-id: option<string>,
+    }
+
+    enum terminal-kind {
+        completed,
+        failed,
+        cancelled,
+    }
+
+    enum function-role {
+        guard,
+        action,
+        callback,
+    }
+
+    record function-ref {
+        kind: string,
+        locator: string,
+    }
+
+    record function-declaration {
+        reference: function-ref,
+        role: function-role,
+    }
+
+    variant trigger {
+        event(string),
+        timeout(string),
+        cancel,
+    }
+
+    record transition-definition {
+        trigger: trigger,
+        guard: option<function-ref>,
+        action: option<function-ref>,
+        target: string,
+        failure-target: option<string>,
+    }
+
+    record state-definition {
+        id: string,
+        entry-callback: option<function-ref>,
+        exit-callback: option<function-ref>,
+        terminal: option<terminal-kind>,
+        transitions: list<transition-definition>,
+    }
+
+    record machine-definition {
+        id: string,
+        initial: string,
+        functions: list<function-declaration>,
+        states: list<state-definition>,
+    }
+
+    record event {
+        name: string,
+        payload: option<payload>,
+    }
+
+    record timeout-input {
+        key: string,
+        payload: option<payload>,
+    }
+
+    record cancel-input {
+        reason: option<payload>,
+    }
+
+    variant host-input {
+        start,
+        event(event),
+        timeout(timeout-input),
+        cancel(cancel-input),
+    }
+
+    record guard-input {
+        source-state: string,
+        context: payload,
+        input: host-input,
+    }
+
+    record hook-input {
+        source-state: string,
+        target-state: option<string>,
+        context: payload,
+        input: host-input,
+    }
+
+    record hook-effects {
+        replacement-context: option<payload>,
+        events: list<event>,
+    }
+
+    record business-failure {
+        code: string,
+        payload: option<payload>,
+        effects: hook-effects,
+    }
+
+    variant action-outcome {
+        succeeded(hook-effects),
+        failed(business-failure),
+    }
+
+    record guest-error {
+        code: string,
+        message: string,
+        payload: option<payload>,
+    }
+}
+
+interface definition {
+    use types.{guest-error, machine-definition};
+
+    get-machine: func() -> result<machine-definition, guest-error>;
+}
+
+interface functions {
+    use types.{action-outcome, guard-input, guest-error, hook-effects, hook-input};
+
+    evaluate-guard: func(id: string, input: guard-input) -> result<bool, guest-error>;
+    invoke-callback: func(id: string, input: hook-input) -> result<hook-effects, guest-error>;
+    invoke-action: func(id: string, input: hook-input) -> result<action-outcome, guest-error>;
+}
+
+world machine-component {
+    export types;
+    export definition;
+    export functions;
+}
