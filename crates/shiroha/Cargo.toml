@@ -1,0 +1,19 @@
+[package]
+name = "shiroha"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shiroha-adapter-wasm = { path = "../shiroha-adapter-wasm" }
+shiroha-core = { path = "../shiroha-core" }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+tracing-subscriber.workspace = true
