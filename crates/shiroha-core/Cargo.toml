@@ -1,0 +1,21 @@
+[package]
+name = "shiroha-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tokio.workspace = true
+
+[[bench]]
+name = "core_engine"
+harness = false
