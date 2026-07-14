@@ -25,7 +25,7 @@ repos:
       - id: cargo-deny
         name: cargo deny check
         description: Check cargo dependencies
-        entry: bash -c 'cargo deny check -d'
+        entry: bash -c 'cargo deny check'
         language: rust
         files: \.rs$
         args: []
@@ -41,7 +41,7 @@ repos:
       - id: cargo-clippy
         name: cargo clippy
         description: Lint rust sources
-        entry: bash -c 'cargo clippy --all-targets --all-features --tests --benches -- -D warnings'
+        entry: bash -c 'just clippy'
         language: rust
         files: \.rs$
         pass_filenames: false

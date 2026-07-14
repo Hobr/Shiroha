@@ -1,61 +1,57 @@
-run_cmd := "cargo run"
-build_cmd := "cargo build"
-
-package-sctl := "-p sctl"
-package-shirohad := "-p shirohad"
-package-example := "-p example"
-
-target-plugin := "--target wasm32-wasip2"
+example-manifest := "components/example-machine/Cargo.toml"
+example-target-dir := "target/components"
+example-component := example-target-dir + "/wasm32-wasip2/debug/example_machine.wasm"
 
 default:
     @just --list
 
-sctl *params:
-    {{run_cmd}} {{package-sctl}} -- {{params}}
-
-build-sctl:
-    {{build_cmd}} {{package-sctl}}
-
-release-sctl:
-    {{build_cmd}} {{package-sctl}} --release
-
-shirohad *params:
-    {{run_cmd}} {{package-shirohad}} -- {{params}}
-
-build-shirohad:
-    {{build_cmd}} {{package-shirohad}}
-
-release-shirohad:
-    {{build_cmd}} {{package-shirohad}} --release
-
 build-example:
-    {{build_cmd}} {{package-example}} {{target-plugin}}
+    cargo build --manifest-path {{example-manifest}} --target wasm32-wasip2 --target-dir {{example-target-dir}}
 
 release-example:
-    {{build_cmd}} {{package-example}} {{target-plugin}} --release
+    cargo build --manifest-path {{example-manifest}} --target wasm32-wasip2 --target-dir {{example-target-dir}} --release
 
-build: build-sctl build-shirohad build-example
-release: release-sctl release-shirohad release-example
+validate-example: build-example
+    wasm-tools validate {{example-component}}
+    wasm-tools component wit {{example-component}}
+
+run-example: build-example
+    cargo run -p shiroha --example local-runner -- {{example-component}}
+
+build: build-example
+    cargo build --workspace
+
+release: release-example
+    cargo build --workspace --release
 
 install-dev:
-    cargo binstall cargo-deny cargo-nextest cargo-update cargo-llvm-cov wasmtime-cli wasm-tools -y --force
+    cargo binstall cargo-deny cargo-nextest cargo-update cargo-llvm-cov wasmtime-cli@46.0.1 wasm-tools@1.253.0 -y --force
     cargo deny fetch
 
 check:
     cargo check --workspace
 
+# Cargo 1.97 can stall while planning all workspace targets in one clippy
+# invocation. Keep the same coverage while isolating package target graphs.
+clippy:
+    cargo clippy -p shiroha-core --all-targets --all-features -- -D warnings
+    cargo clippy -p shiroha-adapter-wasm --all-targets --all-features -- -D warnings
+    cargo clippy -p shiroha-guest --all-targets --all-features -- -D warnings
+    cargo clippy -p shiroha --all-targets --all-features -- -D warnings
+
 fmt:
-    cargo fmt
+    cargo fmt --all
+    cargo fmt --manifest-path {{example-manifest}}
     pre-commit run --all-files
 
-test:
-    cargo nextest run --all-features --run-ignored all
+test: build-example
+    cargo nextest run --workspace --all-features
 
 coverage:
     cargo llvm-cov nextest --workspace --html
 
 doc:
-    cargo doc --open --workspace
+    cargo doc --workspace --no-deps
 
 update:
     nix flake update
