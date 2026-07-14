@@ -1,37 +1,30 @@
 # Backend Development Guidelines
 
-> Best practices for backend development in this project.
-
----
+> Executable conventions for Shiroha's Rust runtime workspace.
 
 ## Overview
 
-This directory contains guidelines for backend development. Fill in each file with your project's specific conventions.
-
----
+Shiroha v0.1 is a Rust library workspace with a runtime-neutral state-machine
+Core, a typed Wasmtime Component adapter, a Rust guest SDK, and a public facade.
+These files document conventions established by the executable v0.1 code.
 
 ## Guidelines Index
 
 | Guide | Description | Status |
-|-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
-| [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
+|---|---|---|
+| [Runtime and Component Contract](./runtime-contract.md) | Cross-crate signatures, state semantics, validation, and WASM boundary | Active |
+| [Directory Structure](./directory-structure.md) | Workspace layers and dependency direction | Active |
+| [Persistence Boundary](./database-guidelines.md) | Explicit v0.1 non-persistence scope | Active |
+| [Error Handling](./error-handling.md) | Typed errors, rollback, and classification | Active |
+| [Quality Guidelines](./quality-guidelines.md) | Toolchain, formatting gates, module-scoped commits, tests, and forbidden patterns | Active |
+| [Logging Guidelines](./logging-guidelines.md) | Structured spans, fields, and sensitive data rules | Active |
 
----
+## Reading Order
 
-## How to Fill These Guidelines
-
-For each guideline file:
-
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
+Start with the runtime contract for any cross-layer change. Then read the
+structure and topic-specific file for the package being changed. Controller,
+Node, scheduler, CLI, persistence, plugin, and capability work must update these
+specs when those features gain executable implementations.
 
 ---
 
