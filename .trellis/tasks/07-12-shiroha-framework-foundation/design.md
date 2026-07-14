@@ -173,6 +173,7 @@ Transition ordering remains the declaration order even after indexing.
 
 ```rust
 pub struct MachineSnapshot {
+    pub machine_id: MachineId,
     pub instance_id: InstanceId,
     pub sequence: u64,
     pub state: StateId,
@@ -441,14 +442,15 @@ Initial finite defaults, subject to calibration in the implementation spike:
 | Optional deterministic fuel | 10,000,000 units |
 | Linear memory per Store | 64 MiB |
 | Payload envelope data | 1 MiB |
+| Payload content type / schema ID | 4 KiB each |
 | Internal events emitted per hook | 256 |
 | Run-to-completion microsteps | 1,024 |
 
-Use `StoreLimitsBuilder` for memory/table/instance limits. The default mode uses
-epoch deadlines for low-overhead interruption; deterministic mode uses
-`Store::set_fuel`. A Tokio deadline controls the public future, but dropping a
-timed-out future is not considered sufficient: the selected Wasmtime mechanism
-must stop guest execution.
+Use a typed `ResourceLimiter` for aggregate per-Store memory and
+table/instance limits. The default mode uses epoch deadlines for low-overhead
+interruption; deterministic mode uses `Store::set_fuel`. A Tokio deadline
+controls the public future, but dropping a timed-out future is not considered
+sufficient: the selected Wasmtime mechanism must stop guest execution.
 
 One process-level epoch ticker is owned by the WASM runtime and shuts down with
 it. Do not spawn one untracked ticker per machine or invocation.

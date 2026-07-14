@@ -13,6 +13,10 @@
 
 - Component Model execution is enabled through Wasmtime's Component APIs and
   typed host bindings can be generated from WIT.
+- `wasmtime_wasi::p2::add_to_linker_sync`/`add_to_linker_async` register the
+  standard WASI 0.2 interfaces. `WasiCtxBuilder::new()` starts with no inherited
+  environment/arguments, no filesystem preopens, closed/sink standard streams,
+  and network addresses denied by default, matching the v0.1 baseline profile.
 - `TypedFunc::call_async` is available with Wasmtime's `async` feature.
 - `InstancePre::instantiate_async` supports preparing import resolution before
   repeated instantiation; this fits the warm-path and recreate-anytime design.
