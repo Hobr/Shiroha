@@ -1,5 +1,7 @@
 # Shiroha
 
+> A *WebAssembly*-extensible workflow orchestration engine built around *Finite-State Machines*.
+
 Shiroha 是一个可通过 WebAssembly 扩展、以确定性有限状态机为核心的工作流运行时。
 v0.1 系列以本地 Rust 库的形式提供：WASM Component 负责定义状态机并实现
 Guard、Action 与 Callback，Host 则负责执行顺序、已提交状态、事件队列、校验、
@@ -110,7 +112,7 @@ Allowlist 精确对应固定版本 Wasmtime 46.0.1 Linker 注册的稳定 Previe
 ## 有限默认值
 
 | 限制 | v0.1 默认值 |
-|---|---:|
+| --- | --- |
 | CPU 模式 | Epoch 中断 |
 | Epoch 预算 | 100 Tick，进程 Tick 间隔 10 ms，并受墙钟时间上限约束 |
 | 每次 Guest 调用的墙钟时间 | 1 秒 |
@@ -128,22 +130,6 @@ Allowlist 精确对应固定版本 Wasmtime 46.0.1 Linker 注册的稳定 Previe
 第一份热路径测量基线和回归策略记录在
 [`docs/benchmarks/v0.1-baseline.md`](docs/benchmarks/v0.1-baseline.md)。
 
-## 开发
-
-本仓库要求 Rust 1.97.0，并安装 `wasm32-wasip2` Target。
-
-```bash
-nix develop
-just install-dev
-just check
-just build-example
-just test
-just fmt
-```
-
-`just install-dev` 会固定安装 Wasmtime CLI 46.0.1 和 wasm-tools 1.253.0，
-确保它们与已验证的 Component 流程保持一致。
-
 ## 兼容性与路线图
 
 v0.x Host IR 和 WIT 可能发生不兼容变更。在 v1.0 前，请使用同一 Shiroha
@@ -157,3 +143,45 @@ Release/Revision 构建 Host 与 Component；项目不承诺自动进行 ABI 或
 真实 Adapter/扩展、OpenTelemetry、按角色打包以及兼容性加固。
 
 多 Controller 共识和故障转移明确推迟到生产可用 v1.0 发布之后。
+
+## Dev Setup
+
+```bash
+# Environment(Nix)
+apt install -y direnv
+echo 'use flake' > .envrc
+direnv allow
+
+# Environment
+apt install -y rustup cargo-binstall protobuf-compiler pre-commit just
+
+# Dev Tools
+just install-dev
+
+# AI(Optional)
+npm install -g @mindfoldhq/trellis@latest @colbymchenry/codegraph
+trellis init -u <your-name>
+codegraph install
+codegraph init
+
+# Build
+just build
+
+# Release Build
+just release
+
+# Check
+just check
+
+# Format
+just fmt
+
+# Test
+just test
+
+# Coverage
+just coverage
+
+# Update
+just update
+```
