@@ -45,7 +45,7 @@ flowchart LR
 ```
 
 | 版本 | 状态 | 核心验证点 |
-|---|---|---|
+| --- | --- | --- |
 | v0.1.0 | 已完成 | 通过 Rust Facade 在本地运行受限的 WASM 定义 FSM |
 | v0.2.0 | 下一版本 | `sctl` 驱动由独立本地 `shirohad` 进程托管的工作流 |
 | v0.3.0 | 规划中 | 嵌套工作流通过 `redb` 在 Controller 重启后恢复 |
@@ -486,7 +486,7 @@ Controller 和无状态 Node 的首个稳定 Shiroha 合同。
 ## v1 生产就绪门禁
 
 | 门禁类别 | 必需证据 |
-|---|---|
+| --- | --- |
 | 正确性 | HSM Conformance、Host 原子性、确定性 Replay、恶意输入测试 |
 | 持久化 | 真实 `redb` Crash/Restart、Migration、备份/恢复、完整性、保留策略 |
 | 分布式 | Lease、Backpressure、至少一次投递、幂等性、Unknown Outcome、聚合 |
