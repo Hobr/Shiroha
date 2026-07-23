@@ -1,26 +1,12 @@
 [workspace]
 members = [
-    "crates/shiroha-core",
-    "crates/shiroha-adapter-wasm",
-    "crates/shiroha-guest",
-    "crates/shiroha",
-]
-default-members = [
-    "crates/shiroha-core",
-    "crates/shiroha-adapter-wasm",
-    "crates/shiroha-guest",
-    "crates/shiroha",
-]
-exclude = [
-    "components/example-machine",
-    "spikes",
 ]
 resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97.0"
+rust-version = "1.97.1"
 license = "GPL-3.0-only"
 repository = "https://github.com/Hobr/Shiroha"
 
@@ -68,9 +54,6 @@ uuid = { version = "1", features = ["v4"] }
 
 # Build metadata
 shadow-rs = { version = "2.0", features = ["cargo_metadata"] }
-
-# Benchmarks
-criterion = { version = "0.8", features = ["async_tokio"] }
 
 [profile.release]
 debug = false
